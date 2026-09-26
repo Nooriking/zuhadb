@@ -1,0 +1,217 @@
+// resources/js/pages/users/trash.tsx
+
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { useToast } from '@/hooks/use-toast';
+import AppLayout from '@/layouts/app-layout';
+import { type BreadcrumbItem } from '@/types';
+import { Head, Link, router } from '@inertiajs/react';
+import { ArrowLeft, Building2, RotateCcw, Shield, Trash2, Users, X } from 'lucide-react';
+import { useState } from 'react';
+
+interface User {
+    id: number;
+    name: string;
+    username: string;
+    email: string | null;
+    phone: string | null;
+    role: string;
+    status: 'active' | 'inactive' | 'blocked';
+    branch: { id: number; name: string; code: string } | null;
+}
+
+type RoleLabels = Record<string, string>;
+
+interface Props {
+    users: {
+        data: User[];
+        current_page: number;
+        last_page: number;
+        total: number;
+        from: number | null;
+        to: number | null;
+        links: { url: string | null; label: string; active: boolean }[];
+    };
+    roles: RoleLabels;
+}
+
+const breadcrumbs: BreadcrumbItem[] = [
+    { title: 'Dashboard', href: '/dashboard' },
+    { title: 'Users', href: '/users' },
+    { title: 'Trash', href: '/users/trash' },
+];
+
+export default function UsersTrash({ users, roles }: Props) {
+    const { toast } = useToast();
+    const [userToDelete, setUserToDelete] = useState<User | null>(null);
+
+    const handleRestore = (user: User) => {
+        router.post(
+            `/users/${user.id}/restore`,
+            {},
+            {
+                preserveScroll: true,
+                onSuccess: () => toast({ title: 'Restored', description: `User ${user.name} was restored.` }),
+                onError: () => toast({ title: 'Error', description: 'Failed to restore.', variant: 'destructive' }),
+            },
+        );
+    };
+
+    const confirmForceDelete = () => {
+        if (!userToDelete) return;
+
+        router.delete(`/users/${userToDelete.id}/force-delete`, {
+            preserveScroll: true,
+            onSuccess: () => {
+                toast({ title: 'Deleted', description: `User ${userToDelete.name} was permanently deleted.` });
+                setUserToDelete(null);
+            },
+            onError: () => {
+                toast({ title: 'Error', description: 'Failed to delete.', variant: 'destructive' });
+                setUserToDelete(null);
+            },
+        });
+    };
+
+    const getStatusBadge = (status: string) => {
+        const map = {
+            active: <Badge variant="success">Active</Badge>,
+            inactive: <Badge variant="secondary">Inactive</Badge>,
+            blocked: <Badge variant="destructive">Blocked</Badge>,
+        };
+        return map[status as keyof typeof map] || map.inactive;
+    };
+
+    const getRoleBadge = (role: string) => (
+        <Badge variant="outline" className="gap-1">
+            <Shield className="h-3 w-3" />
+            {roles[role] || role}
+        </Badge>
+    );
+
+    return (
+        <AppLayout breadcrumbs={breadcrumbs}>
+            <Head title="Trashed Users" />
+
+            <div className="flex flex-col gap-6 p-6">
+                {/* Header */}
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-3">
+                        <Trash2 className="text-destructive h-6 w-6" />
+                        <h1 className="text-2xl font-bold tracking-tight">Trashed Users</h1>
+                        <Badge variant="outline">{users.total} Users</Badge>
+                    </div>
+                    <Link href="/users">
+                        <Button variant="outline" className="gap-2">
+                            <ArrowLeft className="h-4 w-4" /> Back to Users
+                        </Button>
+                    </Link>
+                </div>
+
+                {/* Table */}
+                <div className="rounded-md border">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead className="w-16">#</TableHead>
+                                <TableHead>Name</TableHead>
+                                <TableHead>Username</TableHead>
+                                <TableHead>Role</TableHead>
+                                <TableHead>Branch</TableHead>
+                                <TableHead>Status</TableHead>
+                                <TableHead className="text-center">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {users.data.length === 0 ? (
+                                <TableRow>
+                                    <TableCell colSpan={7} className="text-muted-foreground h-24 text-center">
+                                        <div className="flex flex-col items-center gap-2">
+                                            <Users className="text-muted-foreground h-8 w-8" />
+                                            <p>Trash is empty.</p>
+                                        </div>
+                                    </TableCell>
+                                </TableRow>
+                            ) : (
+                                users.data.map((user, index) => (
+                                    <TableRow key={user.id}>
+                                        <TableCell>{users.from ? users.from + index : index + 1}</TableCell>
+                                        <TableCell>
+                                            <div className="font-medium">{user.name}</div>
+                                            <div className="text-muted-foreground text-xs">{user.email || '—'}</div>
+                                        </TableCell>
+                                        <TableCell>@{user.username}</TableCell>
+                                        <TableCell>{getRoleBadge(user.role)}</TableCell>
+                                        <TableCell>
+                                            {user.branch ? (
+                                                <Badge variant="outline" className="gap-1">
+                                                    <Building2 className="h-3 w-3" />
+                                                    {user.branch.name}
+                                                </Badge>
+                                            ) : (
+                                                <span className="text-muted-foreground text-sm">Not assigned</span>
+                                            )}
+                                        </TableCell>
+                                        <TableCell>{getStatusBadge(user.status)}</TableCell>
+                                        <TableCell>
+                                            <div className="flex items-center justify-center gap-1">
+                                                <Button variant="ghost" size="icon" title="Restore" onClick={() => handleRestore(user)}>
+                                                    <RotateCcw className="h-4 w-4 text-green-600" />
+                                                </Button>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    title="Delete Forever"
+                                                    className="text-destructive hover:text-destructive"
+                                                    onClick={() => setUserToDelete(user)}
+                                                >
+                                                    <Trash2 className="h-4 w-4" />
+                                                </Button>
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                ))
+                            )}
+                        </TableBody>
+                    </Table>
+                </div>
+            </div>
+
+            {/* Force Delete Confirmation Modal */}
+            {userToDelete && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setUserToDelete(null)}>
+                    <div className="bg-background w-full max-w-md rounded-lg border shadow-lg" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-start gap-4 p-6">
+                            <div className="bg-destructive/10 text-destructive flex h-10 w-10 shrink-0 items-center justify-center rounded-full">
+                                <Trash2 className="h-5 w-5" />
+                            </div>
+                            <div className="flex-1">
+                                <h3 className="text-lg font-semibold">Delete forever?</h3>
+                                <p className="text-muted-foreground mt-1 text-sm">
+                                    User <strong>{userToDelete.name}</strong> will be <strong>permanently deleted</strong>. This action cannot be
+                                    undone.
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setUserToDelete(null)}
+                                className="text-muted-foreground hover:text-foreground transition-colors"
+                            >
+                                <X className="h-5 w-5" />
+                            </button>
+                        </div>
+                        <div className="flex justify-end gap-2 border-t px-6 py-4">
+                            <Button variant="outline" onClick={() => setUserToDelete(null)}>
+                                Cancel
+                            </Button>
+                            <Button onClick={confirmForceDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                                Delete Forever
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </AppLayout>
+    );
+}
