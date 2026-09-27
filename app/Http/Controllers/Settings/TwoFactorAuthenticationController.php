@@ -50,7 +50,7 @@ class TwoFactorAuthenticationController extends Controller
     public function confirm(Request $request, TwoFactor $twoFactor): RedirectResponse
     {
         $request->validate([
-            'code' => ['required', 'string'],
+            'code' => ['required', 'string', 'digits:6'],
         ]);
 
         $user = $request->user();

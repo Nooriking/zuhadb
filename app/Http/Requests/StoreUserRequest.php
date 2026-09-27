@@ -2,13 +2,16 @@
 
 namespace App\Http\Requests;
 
+use App\Http\Requests\Concerns\SanitizesInput;
 use App\Models\User;
+use App\Support\Validation\SafeData;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
-use Illuminate\Validation\Rules\Password;
 
 class StoreUserRequest extends FormRequest
 {
+    use SanitizesInput;
+
     public function authorize(): bool
     {
         return $this->user()?->canCreateUsers() ?? false;
@@ -17,70 +20,55 @@ class StoreUserRequest extends FormRequest
     public function rules(): array
     {
         /** @var User $authUser */
-        $authUser       = $this->user();
+        $authUser = $this->user();
         $creatableRoles = $authUser->getCreatableRoles();
 
         return [
-            'branch_id'     => [
+            'branch_id' => [
                 Rule::requiredIf(fn () => $authUser->isBranchManager()),
                 'nullable',
+                'integer',
                 'exists:branches,id',
                 function ($attribute, $value, $fail) use ($authUser) {
-                    if (! $value) return;
+                    if (! $value) {
+                        return;
+                    }
 
                     if ($authUser->isBranchManager() && (int) $value !== (int) $authUser->branch_id) {
                         $fail('You can only assign users to your own branch.');
                     }
                 },
             ],
-            'name'          => ['required', 'string', 'max:255'],
-            'username'      => ['required', 'string', 'max:100', 'unique:users,username'],
-            'email'         => ['nullable', 'email', 'max:255', 'unique:users,email'],
-            'phone'         => ['nullable', 'string', 'max:50'],
-
-            // ⭐ پسورد قوی
-            'password'      => [
-                'required',
-                'confirmed',
-                Password::min(8)
-                    ->letters()      // حداقل یک حرف
-                    ->mixedCase()    // حداقل یک حرف بزرگ و کوچک
-                    ->numbers()      // حداقل یک عدد
-                    ->symbols(),     // حداقل یک کاراکتر خاص
-            ],
-
-            'role'          => [
-                'required',
-                Rule::in($creatableRoles),
-            ],
-            'employee_code' => ['nullable', 'string', 'max:50', 'unique:users,employee_code'],
-            'avatar'        => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
-            'status'        => ['required', 'in:active,inactive,blocked'],
+            'name' => SafeData::title(true),
+            'username' => array_merge(SafeData::username(true), ['unique:users,username']),
+            'email' => array_merge(SafeData::email(false), [Rule::unique('users', 'email')]),
+            'phone' => SafeData::phone(),
+            'password' => ['required', 'confirmed', SafeData::strongPassword()],
+            'role' => ['required', Rule::in($creatableRoles)],
+            'employee_code' => ['nullable', 'string', 'max:50', 'regex:/^[^<>]*$/u', 'unique:users,employee_code'],
+            'avatar' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
+            'status' => ['required', Rule::in(['active', 'inactive', 'blocked'])],
         ];
     }
 
     public function messages(): array
     {
         return [
-            'name.required'      => 'Full name is required.',
-            'username.required'  => 'Username is required.',
-            'username.unique'    => 'This username is already taken.',
-            'email.unique'       => 'This email is already registered.',
-            'password.required'  => 'Password is required.',
+            'name.required' => 'Full name is required.',
+            'username.required' => 'Username is required.',
+            'username.unique' => 'This username is already taken.',
+            'username.regex' => 'Username may only contain letters, numbers, dots, dashes and underscores.',
+            'email.unique' => 'This email is already registered.',
+            'password.required' => 'Password is required.',
             'password.confirmed' => 'Password confirmation does not match.',
-            'password.min'       => 'Password must be at least 8 characters.',
-            'password.letters'   => 'Password must contain at least one letter.',
-            'password.mixed'     => 'Password must contain at least one uppercase and one lowercase letter.',
-            'password.numbers'   => 'Password must contain at least one number.',
-            'password.symbols'   => 'Password must contain at least one special character.',
-            'role.required'      => 'Role is required.',
-            'role.in'            => 'You are not allowed to create a user with this role.',
-            'status.in'          => 'Status must be active, inactive, or blocked.',
+            'role.required' => 'Role is required.',
+            'role.in' => 'You are not allowed to create a user with this role.',
+            'status.in' => 'Status must be active, inactive, or blocked.',
             'branch_id.required' => 'Branch is required for your role.',
         ];
     }
 
-    protected function prepareForValidation(): void
+    protected function afterSanitize(): void
     {
         if ($this->user()?->isBranchManager()) {
             $this->merge([

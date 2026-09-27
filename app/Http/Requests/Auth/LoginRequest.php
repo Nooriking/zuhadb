@@ -4,10 +4,10 @@ namespace App\Http\Requests\Auth;
 
 use App\Models\User;
 use App\Services\ActivityLogger;
+use App\Services\LoginLockoutService;
 use Illuminate\Auth\Events\Lockout;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -24,8 +24,8 @@ class LoginRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'email' => ['required', 'string'],
-            'password' => ['required', 'string'],
+            'email' => ['required', 'string', 'max:191'],
+            'password' => ['required', 'string', 'max:255'],
         ];
     }
 
@@ -36,15 +36,24 @@ class LoginRequest extends FormRequest
      */
     public function authenticate(): User
     {
-        $this->ensureIsNotRateLimited();
+        $lockouts = app(LoginLockoutService::class);
+
+        $this->ensureIsNotRateLimited($lockouts);
 
         $login = trim((string) $this->input('email'));
         $password = (string) $this->input('password');
 
         $user = $this->findUserForLogin($login);
 
-        if (! $user || ! Hash::check($password, $user->password)) {
-            $this->hitRateLimits();
+        $passwordOk = $user
+            && filled($user->password)
+            && Hash::check($password, $user->password);
+
+        if (! $passwordOk) {
+            // Constant-ish delay reduces password timing / user-enumeration side channels.
+            usleep(random_int(120_000, 280_000));
+
+            $seconds = $lockouts->recordFailedAttempt($login, $this->ip());
 
             ActivityLogger::log(
                 action: 'login_failed',
@@ -57,22 +66,33 @@ class LoginRequest extends FormRequest
                 userId: $user?->id,
             );
 
+            if ($seconds > 0) {
+                $this->rememberLockout($seconds);
+                event(new Lockout($this));
+                $this->throwLockout($seconds);
+            }
+
             throw ValidationException::withMessages([
-                'email' => __('auth.failed'),
+                'credentials' => 'Sign-in failed. Check your details and try again.',
             ]);
         }
 
         if ($user->trash || $user->status !== 'active') {
-            $this->hitRateLimits();
+            usleep(random_int(120_000, 280_000));
+            $seconds = $lockouts->recordFailedAttempt($login, $this->ip());
+
+            if ($seconds > 0) {
+                $this->rememberLockout($seconds);
+                event(new Lockout($this));
+                $this->throwLockout($seconds);
+            }
 
             throw ValidationException::withMessages([
-                'email' => 'This account cannot sign in.',
+                'credentials' => 'Sign-in failed. Check your details and try again.',
             ]);
         }
 
-        RateLimiter::clear($this->throttleKey());
-        RateLimiter::clear($this->ipThrottleKey());
-
+        // Do not clear lockouts yet — wait until password + optional 2FA both succeed.
         return $user;
     }
 
@@ -80,26 +100,30 @@ class LoginRequest extends FormRequest
     {
         $loginLower = Str::lower($login);
 
-        if (filter_var($login, FILTER_VALIDATE_EMAIL)) {
-            return User::query()
-                ->whereRaw('LOWER(email) = ?', [$loginLower])
-                ->first();
-        }
-
         return User::query()
-            ->whereRaw('LOWER(username) = ?', [$loginLower])
+            ->where(function ($query) use ($loginLower) {
+                $query->whereRaw('LOWER(email) = ?', [$loginLower])
+                    ->orWhereRaw('LOWER(username) = ?', [$loginLower]);
+            })
             ->first();
     }
 
-    public function ensureIsNotRateLimited(): void
+    public function ensureIsNotRateLimited(?LoginLockoutService $lockouts = null): void
     {
-        $maxAttempts = max(1, (int) config('business.login_max_attempts', 5));
-        $ipMaxAttempts = max($maxAttempts, (int) config('business.login_ip_max_attempts', 20));
+        $lockouts ??= app(LoginLockoutService::class);
+        $login = trim((string) $this->input('email'));
 
-        $accountLocked = RateLimiter::tooManyAttempts($this->throttleKey(), $maxAttempts);
-        $ipLocked = RateLimiter::tooManyAttempts($this->ipThrottleKey(), $ipMaxAttempts);
+        $seconds = $lockouts->maxRemaining(
+            $lockouts->accountKey($login, $this->ip()),
+            $lockouts->identityKey($login),
+            $lockouts->ipKey($this->ip()),
+        );
 
-        if (! $accountLocked && ! $ipLocked) {
+        if ($seconds <= 0) {
+            $seconds = $lockouts->visibleLockSeconds($this->ip(), $login);
+        }
+
+        if ($seconds <= 0) {
             return;
         }
 
@@ -110,41 +134,30 @@ class LoginRequest extends FormRequest
             section: 'auth',
             description: 'Login locked after too many failed attempts',
             properties: [
-                'login' => trim((string) $this->input('email')),
+                'login' => $login,
                 'ip' => $this->ip(),
-                'account_locked' => $accountLocked,
-                'ip_locked' => $ipLocked,
+                'seconds' => $seconds,
             ],
         );
 
-        $seconds = max(
-            RateLimiter::availableIn($this->throttleKey()),
-            RateLimiter::availableIn($this->ipThrottleKey()),
-        );
+        $this->rememberLockout($seconds);
+        $lockouts->queueLockCookie($seconds);
+        $this->throwLockout($seconds);
+    }
+
+    protected function rememberLockout(int $seconds): void
+    {
+        $this->session()->put('login.lockout_until', now()->addSeconds($seconds)->timestamp);
+        app(LoginLockoutService::class)->queueLockCookie($seconds);
+    }
+
+    protected function throwLockout(int $seconds): never
+    {
+        $minutes = max(1, (int) ceil($seconds / 60));
 
         throw ValidationException::withMessages([
-            'email' => __('auth.throttle', [
-                'seconds' => $seconds,
-                'minutes' => max(1, (int) ceil($seconds / 60)),
-            ]),
-        ]);
-    }
-
-    protected function hitRateLimits(): void
-    {
-        $decay = max(60, (int) config('business.login_decay_seconds', 900));
-
-        RateLimiter::hit($this->throttleKey(), $decay);
-        RateLimiter::hit($this->ipThrottleKey(), $decay);
-    }
-
-    public function throttleKey(): string
-    {
-        return Str::transliterate(Str::lower($this->string('email')).'|'.$this->ip());
-    }
-
-    public function ipThrottleKey(): string
-    {
-        return 'login-ip:'.Str::transliterate((string) $this->ip());
+            'credentials' => "Too many failed sign-in attempts. Try again in {$minutes} minute(s).",
+            'lockout' => (string) $seconds,
+        ])->status(429);
     }
 }

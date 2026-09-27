@@ -1,4 +1,3 @@
-import InputError from '@/components/input-error';
 import TextLink from '@/components/text-link';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -6,8 +5,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import AuthLayout from '@/layouts/auth-layout';
 import { Head, useForm } from '@inertiajs/react';
-import { LoaderCircle, Lock, Mail, ShieldCheck, Eye, EyeOff } from 'lucide-react';
-import { FormEventHandler, useState } from 'react';
+import { Eye, EyeOff, LoaderCircle, Lock, Mail, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { FormEventHandler, useEffect, useMemo, useState } from 'react';
 
 interface LoginForm {
     email: string;
@@ -18,57 +17,100 @@ interface LoginForm {
 interface LoginProps {
     status?: string;
     canResetPassword: boolean;
-    googleEnabled?: boolean;
+    lockoutSeconds?: number | null;
 }
 
 const fieldClass =
     'h-11 border-[#D4AF37]/20 bg-[#0A0A0A] pl-10 text-white placeholder:text-neutral-600 focus-visible:border-[#D4AF37] focus-visible:ring-[#D4AF37]/25';
 
-function GoogleIcon({ className }: { className?: string }) {
-    return (
-        <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
-            <path
-                fill="#EA4335"
-                d="M12 10.2v3.6h5.1c-.2 1.2-.9 2.2-1.9 2.9l3.1 2.4c1.8-1.7 2.9-4.1 2.9-7 0-.7-.1-1.3-.2-1.9H12z"
-            />
-            <path
-                fill="#34A853"
-                d="M6.6 14.3l-.7.5-2.4 1.9C5.1 19.2 8.3 21 12 21c2.7 0 5-.9 6.7-2.4l-3.1-2.4c-.9.6-2 .9-3.6.9-2.8 0-5.1-1.9-6-4.4z"
-            />
-            <path
-                fill="#4A90E2"
-                d="M3.5 7.3C2.8 8.7 2.4 10.3 2.4 12s.4 3.3 1.1 4.7l3.1-2.4C6.2 13.5 6 12.8 6 12s.2-1.5.6-2.3L3.5 7.3z"
-            />
-            <path
-                fill="#FBBC05"
-                d="M12 5.5c1.5 0 2.8.5 3.9 1.5l2.9-2.9C16.9 2.4 14.7 1.5 12 1.5 8.3 1.5 5.1 3.3 3.5 7.3l3.1 2.4C7 7.4 9.3 5.5 12 5.5z"
-            />
-        </svg>
-    );
+function formatCountdown(totalSeconds: number): string {
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
-export default function Login({ status, canResetPassword, googleEnabled = false }: LoginProps) {
-    const { data, setData, post, processing, errors, reset } = useForm<LoginForm>({
+export default function Login({ status, canResetPassword, lockoutSeconds = null }: LoginProps) {
+    const { data, setData, post, processing, errors, reset, clearErrors } = useForm<LoginForm>({
         email: '',
         password: '',
         remember: false,
     });
     const [showPassword, setShowPassword] = useState(false);
+    const [lockSecondsLeft, setLockSecondsLeft] = useState(() =>
+        lockoutSeconds && lockoutSeconds > 0 ? lockoutSeconds : 0,
+    );
+
+    const serverLockSeconds = useMemo(() => {
+        const raw = (errors as Record<string, string>).lockout;
+        const fromError = raw ? parseInt(raw, 10) : 0;
+        const fromProp = lockoutSeconds && lockoutSeconds > 0 ? lockoutSeconds : 0;
+        const parsed = Number.isFinite(fromError) && fromError > 0 ? fromError : fromProp;
+        return parsed > 0 ? parsed : 0;
+    }, [errors, lockoutSeconds]);
+
+    useEffect(() => {
+        if (serverLockSeconds > 0) {
+            setLockSecondsLeft(serverLockSeconds);
+        }
+    }, [serverLockSeconds]);
+
+    useEffect(() => {
+        if (lockSecondsLeft <= 0) {
+            return;
+        }
+
+        const timer = window.setInterval(() => {
+            setLockSecondsLeft((prev) => (prev <= 1 ? 0 : prev - 1));
+        }, 1000);
+
+        return () => window.clearInterval(timer);
+    }, [lockSecondsLeft > 0]); // eslint-disable-line react-hooks/exhaustive-deps -- only restart when lock starts/ends
+
+    const isLocked = lockSecondsLeft > 0;
 
     const submit: FormEventHandler = (e) => {
         e.preventDefault();
+        if (isLocked || processing) return;
+
+        clearErrors();
         post(route('login'), {
-            onFinish: () => reset('password'),
+            onSuccess: () => {
+                reset('password');
+                setShowPassword(false);
+                setLockSecondsLeft(0);
+            },
         });
     };
 
     return (
-        <AuthLayout title="Sign in" description="Enter your credentials to open the ZUHA workspace.">
+        <AuthLayout title="Sign in" description="Enter your email/username and password to open the ZUHA workspace.">
             <Head title="Log in — ZUHA PERFUME" />
 
             {status && (
                 <div className="mb-5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-center text-sm text-emerald-300">
                     {status}
+                </div>
+            )}
+
+            {isLocked && (
+                <div className="mb-5 flex items-start gap-3 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-3 text-sm text-red-200">
+                    <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                    <div>
+                        <p className="font-semibold">Sign-in locked</p>
+                        <p className="text-red-200/90">
+                            Too many failed attempts. Wait {formatCountdown(lockSecondsLeft)} before trying again.
+                        </p>
+                    </div>
+                </div>
+            )}
+
+            {!isLocked && errors.credentials && (
+                <div className="mb-5 flex items-start gap-3 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-3 text-sm text-red-200">
+                    <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                    <div>
+                        <p className="font-semibold">Sign-in problem</p>
+                        <p className="text-red-200/90">{errors.credentials}</p>
+                    </div>
                 </div>
             )}
 
@@ -90,9 +132,9 @@ export default function Login({ status, canResetPassword, googleEnabled = false 
                             onChange={(e) => setData('email', e.target.value)}
                             placeholder="email@example.com or username"
                             className={fieldClass}
+                            disabled={isLocked || processing}
                         />
                     </div>
-                    <InputError message={errors.email} />
                 </div>
 
                 <div className="grid gap-2">
@@ -122,19 +164,20 @@ export default function Login({ status, canResetPassword, googleEnabled = false 
                             onChange={(e) => setData('password', e.target.value)}
                             placeholder="••••••••"
                             className={`${fieldClass} pr-10`}
+                            disabled={isLocked || processing}
                         />
                         <button
                             type="button"
                             tabIndex={-1}
                             onClick={() => setShowPassword((v) => !v)}
-                            className="absolute top-1/2 right-3 -translate-y-1/2 text-neutral-500 transition hover:text-[#D4AF37]"
+                            className="absolute top-1/2 right-3 -translate-y-1/2 text-neutral-500 transition hover:text-[#D4AF37] disabled:opacity-40"
                             title={showPassword ? 'Hide password' : 'Show password'}
                             aria-label={showPassword ? 'Hide password' : 'Show password'}
+                            disabled={isLocked}
                         >
                             {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                         </button>
                     </div>
-                    <InputError message={errors.password} />
                 </div>
 
                 <div className="flex items-center justify-between gap-3">
@@ -146,6 +189,7 @@ export default function Login({ status, canResetPassword, googleEnabled = false 
                             checked={data.remember}
                             onCheckedChange={(checked) => setData('remember', checked === true)}
                             className="border-[#D4AF37]/40 data-[state=checked]:border-[#D4AF37] data-[state=checked]:bg-[#D4AF37]"
+                            disabled={isLocked || processing}
                         />
                         <Label htmlFor="remember" className="text-neutral-300">
                             Remember me
@@ -159,40 +203,14 @@ export default function Login({ status, canResetPassword, googleEnabled = false 
 
                 <Button
                     type="submit"
-                    className="mt-1 h-11 w-full gap-2 bg-gradient-to-r from-[#D4AF37] to-[#B8860B] font-semibold text-black hover:from-[#E0BD4A] hover:to-[#C9961A]"
+                    className="mt-1 h-11 w-full gap-2 bg-gradient-to-r from-[#D4AF37] to-[#B8860B] font-semibold text-black hover:from-[#E0BD4A] hover:to-[#C9961A] disabled:opacity-60"
                     tabIndex={4}
-                    disabled={processing}
+                    disabled={processing || isLocked}
                 >
                     {processing && <LoaderCircle className="h-4 w-4 animate-spin" />}
-                    Continue
+                    {isLocked ? `Locked · ${formatCountdown(lockSecondsLeft)}` : 'Continue'}
                 </Button>
             </form>
-
-            <div className="my-5 flex items-center gap-3">
-                <div className="h-px flex-1 bg-[#D4AF37]/15" />
-                <span className="text-xs tracking-wide text-neutral-500 uppercase">or</span>
-                <div className="h-px flex-1 bg-[#D4AF37]/15" />
-            </div>
-
-            {googleEnabled ? (
-                <a
-                    href={route('google.redirect')}
-                    className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md border border-[#D4AF37]/25 bg-[#0A0A0A] text-sm font-medium text-white transition hover:border-[#D4AF37]/50 hover:bg-[#111]"
-                >
-                    <GoogleIcon className="h-4 w-4" />
-                    Continue with Google
-                </a>
-            ) : (
-                <button
-                    type="button"
-                    disabled
-                    className="inline-flex h-11 w-full cursor-not-allowed items-center justify-center gap-2 rounded-md border border-white/10 bg-[#0A0A0A] text-sm font-medium text-neutral-500"
-                    title="Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env"
-                >
-                    <GoogleIcon className="h-4 w-4 opacity-50" />
-                    Google sign-in is not available yet.
-                </button>
-            )}
         </AuthLayout>
     );
 }

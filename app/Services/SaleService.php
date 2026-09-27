@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Customer;
 use App\Models\Inventory;
+use App\Models\InvestmentProductAllocation;
 use App\Models\InvestorProfitEntry;
 use App\Models\ProductBatch;
 use App\Models\ProductVariant;
@@ -108,16 +109,25 @@ class SaleService
                     $take = (int) $part['qty'];
 
                     if ($batch->investor_id && (float) $batch->profit_per_unit_afn > 0) {
+                        $allocation = InvestmentProductAllocation::query()
+                            ->where('batch_id', $batch->id)
+                            ->where('status', 'active')
+                            ->where('remaining_quantity', '>', 0)
+                            ->orderBy('id')
+                            ->first();
+
                         InvestorProfitEntry::recordProfit(
                             investorId: $batch->investor_id,
-                            investmentId: null,
-                            productAllocationId: null,
+                            investmentId: $allocation?->investment_id,
+                            productAllocationId: $allocation?->id,
                             saleId: $sale->id,
                             saleItemId: $saleItem->id,
                             quantity: $take,
                             profitPerUnitAfn: (float) $batch->profit_per_unit_afn,
                             notes: "Profit from batch {$batch->batch_code}"
                         );
+
+                        $allocation?->recordSale($take);
 
                         $investorProfitForLine = round(
                             $investorProfitForLine + ((float) $batch->profit_per_unit_afn * $take),

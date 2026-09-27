@@ -48,6 +48,7 @@ test('add stock rejects a sale price below the purchase price', function () {
         'quantity' => 2,
         'purchase_price_afn' => 3000,
         'sale_price_afn' => 2000,
+        'funding_source' => 'office',
         'investor_id' => 'store',
         'purchase_date' => now()->toDateString(),
     ])->assertSessionHasErrors('sale_price_afn');
@@ -55,7 +56,7 @@ test('add stock rejects a sale price below the purchase price', function () {
     expect(ProductBatch::query()->where('variant_id', $variant->id)->count())->toBe(0);
 });
 
-test('add stock rejects investor profit when the dollar rate is missing', function () {
+test('add stock rejects investor capital when the dollar rate is missing', function () {
     $branch = Branch::factory()->create();
     $user = User::factory()->create([
         'role' => User::ROLE_ADMIN,
@@ -63,13 +64,20 @@ test('add stock rejects investor profit when the dollar rate is missing', functi
     ]);
     $variant = ProductVariant::factory()->create();
     $investor = Investor::factory()->create();
+    $investment = \App\Models\Investment::factory()->create([
+        'investor_id' => $investor->id,
+        'available_amount_afn' => 5000,
+        'capital_amount_afn' => 5000,
+    ]);
 
     $this->actingAs($user)->post('/products/receive', [
         'variant_id' => $variant->id,
         'quantity' => 1,
         'purchase_price_afn' => 1000,
         'sale_price_afn' => 1500,
+        'funding_source' => 'investor',
         'investor_id' => (string) $investor->id,
+        'investment_id' => $investment->id,
         'profit_per_unit' => 70,
         'exchange_rate' => 0,
         'purchase_date' => now()->toDateString(),
@@ -92,6 +100,7 @@ test('add stock for the shop increases inventory and stores the dollar profit as
         'quantity' => 3,
         'purchase_price_afn' => 1100,
         'sale_price_afn' => 1600,
+        'funding_source' => 'office',
         'investor_id' => 'store',
         'exchange_rate' => 70,
         'purchase_date' => now()->toDateString(),
@@ -108,6 +117,54 @@ test('add stock for the shop increases inventory and stores the dollar profit as
     $variant->refresh();
     expect((float) $variant->sale_price_afn)->toBe(1600.0)
         ->and((float) $variant->purchase_price_afn)->toBe(1100.0);
+});
+
+test('add stock with investor capital allocates investment and stores profit per unit', function () {
+    $branch = Branch::factory()->create();
+    $user = User::factory()->create([
+        'role' => User::ROLE_ADMIN,
+        'branch_id' => $branch->id,
+    ]);
+    $variant = ProductVariant::factory()->create([
+        'purchase_price_afn' => 1000,
+        'sale_price_afn' => 1400,
+    ]);
+    $investor = Investor::factory()->create();
+    $investment = \App\Models\Investment::factory()->create([
+        'investor_id' => $investor->id,
+        'capital_amount_afn' => 1000,
+        'available_amount_afn' => 1000,
+        'allocated_amount_afn' => 0,
+        'status' => 'active',
+    ]);
+
+    $this->actingAs($user)->post('/products/receive', [
+        'variant_id' => $variant->id,
+        'quantity' => 2,
+        'purchase_price_afn' => 700,
+        'sale_price_afn' => 1200,
+        'funding_source' => 'investor',
+        'investor_id' => (string) $investor->id,
+        'investment_id' => $investment->id,
+        'profit_per_unit' => 70,
+        'exchange_rate' => 70,
+        'purchase_date' => now()->toDateString(),
+    ])->assertRedirect();
+
+    $investment->refresh();
+    $batch = ProductBatch::query()->where('variant_id', $variant->id)->first();
+    $productAllocation = \App\Models\InvestmentProductAllocation::query()->where('batch_id', $batch->id)->first();
+    $purchaseAllocation = \App\Models\InvestmentPurchaseAllocation::query()->where('investment_id', $investment->id)->first();
+
+    expect((float) $investment->available_amount_afn)->toBe(980.0)
+        ->and((float) $investment->allocated_amount_afn)->toBe(20.0)
+        ->and($batch->investor_id)->toBe($investor->id)
+        ->and((float) $batch->profit_per_unit_afn)->toBe(1.0)
+        ->and($productAllocation)->not->toBeNull()
+        ->and((int) $productAllocation->funded_quantity)->toBe(2)
+        ->and((float) $productAllocation->profit_per_unit_afn)->toBe(1.0)
+        ->and($purchaseAllocation)->not->toBeNull()
+        ->and((float) $purchaseAllocation->allocated_amount_afn)->toBe(20.0);
 });
 
 test('a branch manager is locked to one branch and an admin is not', function () {

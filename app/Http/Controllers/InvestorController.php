@@ -97,7 +97,7 @@ class InvestorController extends Controller
         });
 
         return redirect()
-            ->route('investors.show', $investor->id)
+            ->route('investors.index')
             ->with('success', "Investor \"{$investor->full_name}\" was created successfully.");
     }
 

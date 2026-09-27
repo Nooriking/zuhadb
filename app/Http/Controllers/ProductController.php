@@ -198,6 +198,20 @@ class ProductController extends Controller
                 ->select('id', 'full_name as name')
                 ->orderBy('full_name')
                 ->get(),
+            'investments' => \App\Models\Investment::query()
+                ->withAvailableCapital()
+                ->with('investor:id,full_name')
+                ->orderByDesc('investment_date')
+                ->get()
+                ->map(fn (\App\Models\Investment $investment) => [
+                    'id' => $investment->id,
+                    'investment_number' => $investment->investment_number,
+                    'investor_id' => $investment->investor_id,
+                    'investor_name' => $investment->investor?->full_name,
+                    'available_amount_afn' => $investment->available_amount_afn,
+                    'capital_amount_afn' => $investment->capital_amount_afn,
+                    'status' => $investment->status,
+                ]),
             'suppliers' => \App\Models\Supplier::query()
                 ->select('id', 'name')
                 ->orderBy('name')
@@ -237,25 +251,15 @@ class ProductController extends Controller
         ]);
     }
 
-    public function receiveStore(Request $request): RedirectResponse
+    public function receiveStore(\App\Http\Requests\ReceiveStockRequest $request): RedirectResponse
     {
-        $this->authorize('create', Product::class);
+        $data = $request->validated();
 
-        $data = $request->validate([
-            'variant_id' => ['required', 'exists:product_variants,id'],
-            'quantity' => ['required', 'integer', 'min:1'],
-            'purchase_price_afn' => ['required', 'numeric', 'min:0'],
-            'sale_price_afn' => ['required', 'numeric', 'min:0'],
-            'investor_id' => ['nullable', 'string'],
-            'exchange_rate' => ['nullable', 'numeric', 'min:0'],
-            'profit_per_unit' => ['nullable', 'numeric', 'min:0'],
-            'purchase_date' => ['required', 'date'],
-            'invoice_number' => ['nullable', 'string', 'max:100'],
-            'notes' => ['nullable', 'string', 'max:1000'],
-            'paid_now' => ['nullable', 'numeric', 'min:0'],
-            'payment_status' => ['nullable', 'in:paid,unpaid,partial,credit'],
-            'supplier_id' => ['nullable', 'exists:suppliers,id'],
-        ]);
+        if (($data['funding_source'] ?? '') === 'office') {
+            $data['investor_id'] = null;
+            $data['investment_id'] = null;
+            $data['profit_per_unit'] = 0;
+        }
 
         $this->purchases->receiveStock($data, $request->user(), $this->getBranchId());
 

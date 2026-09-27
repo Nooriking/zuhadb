@@ -63,6 +63,50 @@ test('users can pass the two factor challenge with a recovery code', function ()
     expect($user->two_factor_recovery_codes)->toBe(['mnop-qrst-uvwx']);
 });
 
+test('invalid two factor code is rejected with a generic error', function () {
+    $secret = app(Google2FA::class)->generateSecretKey();
+
+    $user = User::factory()->create([
+        'two_factor_secret' => $secret,
+        'two_factor_recovery_codes' => ['abcd-efgh-ijkl'],
+        'two_factor_confirmed_at' => now(),
+    ]);
+
+    $this->withSession([
+        'login.id' => $user->id,
+        'login.remember' => false,
+    ])->from('/two-factor-challenge')->post('/two-factor-challenge', [
+        'code' => '000000',
+    ])->assertSessionHasErrors('code');
+
+    $this->assertGuest();
+    expect(session('login.id'))->toBe($user->id);
+});
+
+test('login accepts username or email for the same account', function () {
+    $user = User::factory()->create([
+        'username' => 'cashier01',
+        'email' => 'cashier01@zuha.test',
+        'password' => 'password',
+        'status' => 'active',
+    ]);
+
+    $this->post('/login', [
+        'email' => 'cashier01',
+        'password' => 'password',
+    ])->assertRedirect(route('dashboard', absolute: false));
+
+    $this->assertAuthenticatedAs($user);
+    $this->post('/logout');
+
+    $this->post('/login', [
+        'email' => 'cashier01@zuha.test',
+        'password' => 'password',
+    ])->assertRedirect(route('dashboard', absolute: false));
+
+    $this->assertAuthenticatedAs($user);
+});
+
 test('users can enable and confirm two factor authentication', function () {
     $user = User::factory()->create();
 

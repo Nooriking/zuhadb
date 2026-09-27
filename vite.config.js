@@ -9,7 +9,7 @@ export default defineConfig({
         laravel({
             input: ['resources/css/app.css', 'resources/js/app.tsx'],
             ssr: 'resources/js/ssr.jsx',
-            refresh: true,
+            refresh: ['resources/views/**', 'routes/**'],
         }),
         react(),
         tailwindcss(),
@@ -18,11 +18,18 @@ export default defineConfig({
         alias: {
             '@': path.resolve('resources/js'),
             'ziggy-js': path.resolve('vendor/tightenco/ziggy'),
-            'use-sync-external-store/shim/with-selector': path.resolve(
+            // recharts imports both of these; package is CJS-only
+            'use-sync-external-store/with-selector.js': path.resolve(
                 'resources/js/shims/use-sync-external-store-with-selector.js',
             ),
-            'use-sync-external-store-shim-cjs': path.resolve(
-                'node_modules/use-sync-external-store/shim/with-selector.js',
+            'use-sync-external-store/with-selector': path.resolve(
+                'resources/js/shims/use-sync-external-store-with-selector.js',
+            ),
+            'use-sync-external-store/shim/with-selector.js': path.resolve(
+                'resources/js/shims/use-sync-external-store-with-selector.js',
+            ),
+            'use-sync-external-store/shim/with-selector': path.resolve(
+                'resources/js/shims/use-sync-external-store-with-selector.js',
             ),
         },
     },
@@ -41,8 +48,15 @@ export default defineConfig({
         },
     },
     optimizeDeps: {
-        include: ['react', 'react-dom', '@inertiajs/react', 'axios', 'recharts'],
-        exclude: ['sweetalert2', 'use-sync-external-store'],
+        include: [
+            'react',
+            'react-dom',
+            '@inertiajs/react',
+            'axios',
+            'recharts',
+            'use-sync-external-store/with-selector',
+        ],
+        exclude: ['sweetalert2'],
     },
     build: {
         target: 'es2020',

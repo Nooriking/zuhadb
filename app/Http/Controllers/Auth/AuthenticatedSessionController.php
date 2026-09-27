@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
+use App\Services\LoginLockoutService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -18,11 +19,25 @@ class AuthenticatedSessionController extends Controller
      */
     public function create(Request $request): Response
     {
+        // Returning to login abandons any pending 2FA challenge.
+        $request->session()->forget(['login.id', 'login.remember']);
+
+        $lockouts = app(LoginLockoutService::class);
+        $lockoutSeconds = $lockouts->visibleLockSeconds($request->ip());
+
+        $sessionUntil = (int) $request->session()->get('login.lockout_until', 0);
+        if ($sessionUntil > time()) {
+            $lockoutSeconds = max($lockoutSeconds, $sessionUntil - time());
+        }
+
+        if ($lockoutSeconds > 0) {
+            $lockouts->queueLockCookie($lockoutSeconds);
+        }
+
         return Inertia::render('auth/login', [
             'canResetPassword' => Route::has('password.request'),
-            'googleEnabled' => filled(config('services.google.client_id'))
-                && filled(config('services.google.client_secret')),
             'status' => $request->session()->get('status'),
+            'lockoutSeconds' => $lockoutSeconds > 0 ? $lockoutSeconds : null,
         ]);
     }
 
@@ -33,21 +48,25 @@ class AuthenticatedSessionController extends Controller
     {
         $user = $request->authenticate();
 
-        if ($user->hasEnabledTwoFactor()) {
-            $request->session()->put([
-                'login.id' => $user->id,
-                'login.remember' => $request->boolean('remember'),
-            ]);
+        if (! $user->hasEnabledTwoFactor()) {
+            Auth::login($user, $request->boolean('remember'));
+            $request->session()->regenerate();
 
-            return redirect()->route('two-factor.login');
+            $lockouts = app(LoginLockoutService::class);
+            $lockouts->clearForLogin(trim((string) $request->input('email')), $request->ip());
+            $request->session()->forget('login.lockout_until');
+
+            $user->forceFill(['last_login_at' => now()])->save();
+
+            return redirect()->intended(route('dashboard', absolute: false));
         }
 
-        Auth::login($user, $request->boolean('remember'));
-        $request->session()->regenerate();
+        $request->session()->put([
+            'login.id' => $user->id,
+            'login.remember' => $request->boolean('remember'),
+        ]);
 
-        $user->forceFill(['last_login_at' => now()])->save();
-
-        return redirect()->intended(route('dashboard', absolute: false));
+        return redirect()->route('two-factor.login');
     }
 
     /**

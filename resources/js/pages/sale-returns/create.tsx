@@ -11,8 +11,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link, router } from '@inertiajs/react';
-import { AlertCircle, AlertTriangle, ArrowLeft, Package, RotateCcw, Save, ScanBarcode } from 'lucide-react';
+import { Head, router } from '@inertiajs/react';
+import { AlertCircle, AlertTriangle, FileSearch, Package, RotateCcw, Save, Search } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 /* ═══════════════════════════════════════════════════════
@@ -26,6 +26,8 @@ interface SaleOption {
     sale_date: string;
     customer_id: number | null;
     branch_id: number;
+    customer_name?: string | null;
+    customer_phone?: string | null;
 }
 
 interface SaleItemInfo {
@@ -58,7 +60,8 @@ interface Props {
     sales: SaleOption[];
     selectedSale: SelectedSaleInfo | null;
     saleItems: SaleItemInfo[];
-    scanBarcode?: string | null;
+    invoiceQuery?: string | null;
+    invoiceError?: string | null;
     errors?: Record<string, string>;
 }
 
@@ -85,9 +88,16 @@ const CONDITION_OPTIONS = [
  |  Component
  ═══════════════════════════════════════════════════════ */
 
-export default function SaleReturnsCreate({ sales, selectedSale, saleItems, scanBarcode = null, errors: initialErrors }: Props) {
+export default function SaleReturnsCreate({
+    sales,
+    selectedSale,
+    saleItems,
+    invoiceQuery = null,
+    invoiceError = null,
+    errors: initialErrors,
+}: Props) {
     const { toast } = useToast();
-    const barcodeInputRef = useRef<HTMLInputElement>(null);
+    const invoiceInputRef = useRef<HTMLInputElement>(null);
 
     const [form, setForm] = useState({
         sale_id: selectedSale ? String(selectedSale.id) : '',
@@ -96,107 +106,84 @@ export default function SaleReturnsCreate({ sales, selectedSale, saleItems, scan
         status: 'draft' as 'draft' | 'completed' | 'cancelled',
     });
 
-    const [barcode, setBarcode] = useState(scanBarcode || '');
-    const [barcodeLoading, setBarcodeLoading] = useState(false);
-    const [barcodeError, setBarcodeError] = useState('');
-    const [matchedSaleItemId, setMatchedSaleItemId] = useState<number | null>(null);
-
+    const [invoice, setInvoice] = useState(invoiceQuery || selectedSale?.invoice_number || '');
+    const [saleFilter, setSaleFilter] = useState('');
     const [items, setItems] = useState<Record<number, { quantity: string; condition: string; reason: string; expense_amount: string }>>({});
-
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
         setForm((prev) => ({ ...prev, sale_id: selectedSale ? String(selectedSale.id) : prev.sale_id }));
-    }, [selectedSale?.id]);
+        if (selectedSale?.invoice_number) {
+            setInvoice(selectedSale.invoice_number);
+        }
+    }, [selectedSale?.id, selectedSale?.invoice_number]);
 
     useEffect(() => {
         const next: Record<number, { quantity: string; condition: string; reason: string; expense_amount: string }> = {};
-        let matchedId: number | null = null;
-
         saleItems.forEach((item) => {
-            const isExact =
-                !!scanBarcode &&
-                !!item.barcode_snapshot &&
-                item.barcode_snapshot === scanBarcode &&
-                item.max_returnable > 0;
-
-            if (isExact && matchedId === null) {
-                matchedId = item.id;
-            }
-
             next[item.id] = {
-                quantity: isExact ? '1' : '',
+                quantity: '',
                 condition: 'good',
                 reason: '',
                 expense_amount: '',
             };
         });
-
-        if (matchedId === null && scanBarcode) {
-            const fallback = saleItems.find((item) => item.max_returnable > 0);
-            if (fallback) {
-                matchedId = fallback.id;
-                next[fallback.id] = { ...next[fallback.id], quantity: '1' };
-            }
-        }
-
         setItems(next);
-        setMatchedSaleItemId(matchedId);
-        if (scanBarcode) {
-            setBarcode(scanBarcode);
+    }, [saleItems]);
+
+    useEffect(() => {
+        if (invoiceError) {
+            toast({ title: 'Sale not found', description: invoiceError, variant: 'destructive' });
+            invoiceInputRef.current?.select();
         }
-    }, [saleItems, scanBarcode]);
+    }, [invoiceError]);
+
+    const filteredSales = useMemo(() => {
+        const term = saleFilter.trim().toLowerCase();
+        if (!term) return sales;
+
+        const digits = term.replace(/\D+/g, '');
+
+        return sales.filter((sale) => {
+            const invoice = (sale.invoice_number || '').toLowerCase();
+            const name = (sale.customer_name || '').toLowerCase();
+            const phone = (sale.customer_phone || '').toLowerCase();
+            const phoneDigits = phone.replace(/\D+/g, '');
+
+            return (
+                invoice.includes(term) ||
+                name.includes(term) ||
+                phone.includes(term) ||
+                (digits !== '' && phoneDigits.includes(digits))
+            );
+        });
+    }, [sales, saleFilter]);
 
     const handleSaleChange = (saleId: string) => {
         setForm({ ...form, sale_id: saleId });
-        setBarcodeError('');
-        setMatchedSaleItemId(null);
         router.get('/sale-returns/create', { sale_id: saleId }, { preserveState: false, preserveScroll: true });
     };
 
-    const lookupBarcode = async () => {
-        const code = barcode.trim();
-        if (!code || barcodeLoading) return;
-
-        setBarcodeLoading(true);
-        setBarcodeError('');
-
-        try {
-            const response = await fetch(`/sale-returns/lookup-barcode?barcode=${encodeURIComponent(code)}`, {
-                headers: { Accept: 'application/json' },
-            });
-            const data = await response.json();
-
-            if (!data.found) {
-                setBarcodeError(data.message || 'Barcode not found.');
-                toast({ title: 'Not found', description: data.message || 'Barcode not found.', variant: 'destructive' });
-                return;
-            }
-
-            toast({
-                title: 'Sale found',
-                description: `${data.invoice_number}${data.product ? ` · ${data.product}` : ''}`,
-            });
-
-            router.get(
-                '/sale-returns/create',
-                { sale_id: data.sale_id, barcode: data.barcode },
-                { preserveState: false, preserveScroll: true },
-            );
-        } catch {
-            setBarcodeError('Could not look up this barcode.');
-            toast({ title: 'Error', description: 'Could not look up this barcode.', variant: 'destructive' });
-        } finally {
-            setBarcodeLoading(false);
-            barcodeInputRef.current?.select();
+    const findByInvoice = () => {
+        const code = invoice.trim();
+        if (!code) {
+            toast({ title: 'Invoice required', description: 'Enter the invoice number from the receipt.', variant: 'destructive' });
+            invoiceInputRef.current?.focus();
+            return;
         }
+
+        router.get(
+            '/sale-returns/create',
+            { invoice: code },
+            { preserveState: false, preserveScroll: true },
+        );
     };
 
-    const handleBarcodeKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    const handleInvoiceKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
         if (event.key !== 'Enter') return;
         event.preventDefault();
-        void lookupBarcode();
+        findByInvoice();
     };
 
     const updateItem = (saleItemId: number, field: 'quantity' | 'condition' | 'reason' | 'expense_amount', value: string) => {
@@ -223,7 +210,6 @@ export default function SaleReturnsCreate({ sales, selectedSale, saleItems, scan
         });
 
         const previousDueAfn = selectedSale?.customer ? parseFloat(selectedSale.customer.current_due_afn || '0') : 0;
-
         const newDueAfn = Math.max(0, previousDueAfn - subtotalAfn);
         const refundAmountAfn = Math.max(0, subtotalAfn - previousDueAfn);
 
@@ -273,7 +259,6 @@ export default function SaleReturnsCreate({ sales, selectedSale, saleItems, scan
             <Head title="Create Sale Return" />
 
             <form onSubmit={handleSubmit} className="flex flex-col gap-6 p-6">
-                {/* ═══════════ Header ═══════════ */}
                 <div className="flex flex-wrap items-center gap-3">
                     <BackButton href="/sale-returns" label="Back" />
                     <div className="flex items-center gap-3">
@@ -282,72 +267,100 @@ export default function SaleReturnsCreate({ sales, selectedSale, saleItems, scan
                         </div>
                         <div>
                             <h1 className="text-2xl font-bold tracking-tight">Create Sale Return</h1>
-                            <p className="text-muted-foreground text-sm">Record a customer return</p>
+                            <p className="text-muted-foreground text-sm">Find the original invoice, then choose items to return</p>
                         </div>
                     </div>
                 </div>
 
-                {/* ═══════════ Step 1: Select Sale ═══════════ */}
                 <Card>
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
-                            <Package className="h-5 w-5" /> Step 1: Select Sale
+                            <Package className="h-5 w-5" /> Step 1: Find the sale
                         </CardTitle>
-                        <CardDescription>Select the original sale.</CardDescription>
+                        <CardDescription>
+                            Use the invoice number from the customer receipt. Product barcodes are not used here — a product can appear on many sales.
+                        </CardDescription>
                     </CardHeader>
-                    <CardContent className="space-y-4">
-                        <div className="space-y-2 rounded-lg border border-primary/40 bg-primary/5 p-4">
+                    <CardContent className="space-y-5">
+                        <div className="space-y-2 rounded-lg border bg-muted/20 p-4">
                             <Label className="flex items-center gap-2 text-base font-semibold">
-                                <ScanBarcode className="h-5 w-5" /> Scan barcode
+                                <FileSearch className="h-5 w-5" /> Invoice number
                             </Label>
                             <p className="text-muted-foreground text-sm">
-                                Scan or type the product barcode. The matching completed sale opens for return.
+                                Type or paste the invoice number, then press Enter or Find.
                             </p>
                             <div className="flex flex-col gap-2 sm:flex-row">
                                 <Input
-                                    ref={barcodeInputRef}
-                                    value={barcode}
-                                    onChange={(e) => {
-                                        setBarcode(e.target.value);
-                                        setBarcodeError('');
-                                    }}
-                                    onKeyDown={handleBarcodeKeyDown}
-                                    placeholder="Scan barcode..."
+                                    ref={invoiceInputRef}
+                                    value={invoice}
+                                    onChange={(e) => setInvoice(e.target.value)}
+                                    onKeyDown={handleInvoiceKeyDown}
+                                    placeholder="e.g. INV-2026-00041"
                                     autoFocus
                                     className="h-12 font-mono text-base"
                                 />
-                                <Button type="button" className="h-12 gap-2 sm:w-36" disabled={barcodeLoading || !barcode.trim()} onClick={() => void lookupBarcode()}>
-                                    {barcodeLoading ? 'Looking...' : 'Find sale'}
+                                <Button type="button" className="h-12 gap-2 sm:w-36" disabled={!invoice.trim()} onClick={findByInvoice}>
+                                    <Search className="h-4 w-4" />
+                                    Find
                                 </Button>
                             </div>
-                            {barcodeError && <p className="text-destructive text-sm">{barcodeError}</p>}
+                            {invoiceError && <p className="text-destructive text-sm">{invoiceError}</p>}
                         </div>
 
-                        <div className="space-y-2">
-                            <Label>
-                                Sale <span className="text-destructive">*</span>
-                            </Label>
-                            <Select value={form.sale_id} onValueChange={handleSaleChange}>
-                                <SelectTrigger className="max-w-md">
-                                    <SelectValue placeholder="Select sale..." />
-                                </SelectTrigger>
-                                <SelectContent className="max-h-[300px]">
-                                    {sales.map((sale) => (
-                                        <SelectItem key={sale.id} value={String(sale.id)}>
-                                            <div className="flex flex-col items-start">
-                                                <span className="font-mono text-sm">{sale.invoice_number}</span>
-                                                <span className="text-muted-foreground text-xs">
-                                                    {formatPrice(sale.total_afn)} AFN · {new Date(sale.sale_date).toLocaleDateString('en-US')}
-                                                </span>
-                                            </div>
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                        <div className="relative flex items-center gap-3 text-xs text-muted-foreground">
+                            <div className="h-px flex-1 bg-border" />
+                            <span>or pick from recent completed sales</span>
+                            <div className="h-px flex-1 bg-border" />
+                        </div>
+
+                        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+                            <div className="space-y-2">
+                                <Label>Filter list</Label>
+                                <div className="relative">
+                                    <Search className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
+                                    <Input
+                                        value={saleFilter}
+                                        onChange={(e) => setSaleFilter(e.target.value)}
+                                        placeholder="Invoice, customer, phone..."
+                                        className="pl-9"
+                                    />
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <Label>
+                                    Sale <span className="text-destructive">*</span>
+                                </Label>
+                                <Select value={form.sale_id} onValueChange={handleSaleChange}>
+                                    <SelectTrigger>
+                                        <SelectValue placeholder="Select sale..." />
+                                    </SelectTrigger>
+                                    <SelectContent className="max-h-[320px]">
+                                        {filteredSales.length === 0 ? (
+                                            <div className="text-muted-foreground px-3 py-6 text-center text-sm">No matching sales</div>
+                                        ) : (
+                                            filteredSales.map((sale) => (
+                                                <SelectItem key={sale.id} value={String(sale.id)}>
+                                                    <div className="flex flex-col items-start py-0.5">
+                                                        <span className="font-mono text-sm">{sale.invoice_number}</span>
+                                                        <span className="text-muted-foreground text-xs">
+                                                            {sale.customer_name || 'Walk-in'} · {formatPrice(sale.total_afn)} AFN ·{' '}
+                                                            {new Date(sale.sale_date).toLocaleDateString('en-US')}
+                                                        </span>
+                                                    </div>
+                                                </SelectItem>
+                                            ))
+                                        )}
+                                    </SelectContent>
+                                </Select>
+                            </div>
                         </div>
 
                         {selectedSale && (
-                            <div className="bg-muted/30 grid grid-cols-1 gap-4 rounded-lg border p-4 md:grid-cols-3">
+                            <div className="bg-muted/30 grid grid-cols-1 gap-4 rounded-lg border p-4 md:grid-cols-4">
+                                <div>
+                                    <p className="text-muted-foreground text-xs">Invoice</p>
+                                    <p className="font-mono font-medium">{selectedSale.invoice_number}</p>
+                                </div>
                                 <div>
                                     <p className="text-muted-foreground text-xs">Customer</p>
                                     <p className="font-medium">{selectedSale.customer?.name || 'Walk-in'}</p>
@@ -372,12 +385,11 @@ export default function SaleReturnsCreate({ sales, selectedSale, saleItems, scan
                     </CardContent>
                 </Card>
 
-                {/* ═══════════ Step 2: Items ═══════════ */}
                 {selectedSale && saleItems.length > 0 && (
                     <Card>
                         <CardHeader>
                             <CardTitle>Step 2: Select Items & Quantities</CardTitle>
-                            <CardDescription>Set the return quantity and item condition.</CardDescription>
+                            <CardDescription>Set the return quantity and item condition for lines on this invoice.</CardDescription>
                         </CardHeader>
                         <CardContent>
                             <div className="overflow-x-auto rounded-md border">
@@ -401,13 +413,9 @@ export default function SaleReturnsCreate({ sales, selectedSale, saleItems, scan
                                             const qty = parseFloat(entry.quantity || '0') || 0;
                                             const lineTotal = qty * item.sale_price_afn;
                                             const disabled = item.max_returnable <= 0;
-                                            const isMatched = matchedSaleItemId === item.id;
 
                                             return (
-                                                <tr
-                                                    key={item.id}
-                                                    className={`border-b ${disabled ? 'opacity-50' : ''} ${isMatched ? 'bg-primary/10' : ''}`}
-                                                >
+                                                <tr key={item.id} className={`border-b ${disabled ? 'opacity-50' : ''}`}>
                                                     <td className="p-3">
                                                         <div className="font-medium">
                                                             {item.brand_name && <span className="text-muted-foreground">{item.brand_name} — </span>}
@@ -418,9 +426,6 @@ export default function SaleReturnsCreate({ sales, selectedSale, saleItems, scan
                                                                 .filter(Boolean)
                                                                 .join(' · ')}
                                                         </div>
-                                                        {item.barcode_snapshot && (
-                                                            <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">{item.barcode_snapshot}</div>
-                                                        )}
                                                     </td>
                                                     <td className="p-3 font-mono text-xs">{item.batch_code || '—'}</td>
                                                     <td className="p-3 text-center font-mono">{item.quantity_sold}</td>
@@ -481,7 +486,6 @@ export default function SaleReturnsCreate({ sales, selectedSale, saleItems, scan
                     </Card>
                 )}
 
-                {/* ═══════════ Step 3: Info + Summary ═══════════ */}
                 {selectedSale && (
                     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                         <Card>
@@ -503,7 +507,7 @@ export default function SaleReturnsCreate({ sales, selectedSale, saleItems, scan
 
                                 <div className="space-y-2">
                                     <Label>Status</Label>
-                                    <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v as any })}>
+                                    <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v as typeof form.status })}>
                                         <SelectTrigger>
                                             <SelectValue />
                                         </SelectTrigger>
@@ -580,7 +584,8 @@ export default function SaleReturnsCreate({ sales, selectedSale, saleItems, scan
                                     <div className="flex items-start gap-2 rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
                                         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                                         <span>
-                                            The refund is larger than the customer due. Return {formatPrice(totals.refundAmountAfn)} AFN to the customer.
+                                            The refund is larger than the customer due. Return {formatPrice(totals.refundAmountAfn)} AFN to the
+                                            customer.
                                         </span>
                                     </div>
                                 )}
@@ -589,7 +594,6 @@ export default function SaleReturnsCreate({ sales, selectedSale, saleItems, scan
                     </div>
                 )}
 
-                {/* ═══════════ Errors ═══════════ */}
                 {Object.keys(errors).length > 0 && (
                     <div className="rounded-lg border-2 border-red-400 bg-red-50 p-4">
                         <div className="mb-2 flex items-center gap-2">
@@ -599,14 +603,14 @@ export default function SaleReturnsCreate({ sales, selectedSale, saleItems, scan
                         <div className="space-y-1 text-xs">
                             {Object.entries(errors).map(([key, value]) => (
                                 <div key={key} className="rounded bg-white/60 px-2 py-1">
-                                    <span className="font-mono font-semibold text-red-700">{key}:</span> <span className="text-red-600">{value}</span>
+                                    <span className="font-mono font-semibold text-red-700">{key}:</span>{' '}
+                                    <span className="text-red-600">{value}</span>
                                 </div>
                             ))}
                         </div>
                     </div>
                 )}
 
-                {/* ═══════════ Submit ═══════════ */}
                 {selectedSale && (
                     <div className="flex gap-2">
                         <Button type="submit" disabled={loading} size="lg" className="gap-2">

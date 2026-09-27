@@ -38,7 +38,8 @@ return [
     |--------------------------------------------------------------------------
     */
     'login_max_attempts' => (int) env('LOGIN_MAX_ATTEMPTS', 5),
-    'login_ip_max_attempts' => (int) env('LOGIN_IP_MAX_ATTEMPTS', 20),
+    'login_ip_max_attempts' => (int) env('LOGIN_IP_MAX_ATTEMPTS', 10),
+    'login_identity_max_attempts' => (int) env('LOGIN_IDENTITY_MAX_ATTEMPTS', 8),
     'login_decay_seconds' => (int) env('LOGIN_DECAY_SECONDS', 900),
 
     /*

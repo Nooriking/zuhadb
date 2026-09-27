@@ -43,7 +43,7 @@ test('login fails with wrong username', function () {
     $this->from('/login')->post('/login', [
         'email' => 'nobody',
         'password' => 'password',
-    ])->assertSessionHasErrors('email');
+    ])->assertSessionHasErrors('credentials');
 
     $this->assertGuest();
 });
@@ -54,7 +54,7 @@ test('login fails with wrong password', function () {
     $this->from('/login')->post('/login', [
         'email' => 'realuser',
         'password' => 'wrong',
-    ])->assertSessionHasErrors('email');
+    ])->assertSessionHasErrors('credentials');
 
     $this->assertGuest();
 });
@@ -70,7 +70,7 @@ test('inactive user cannot login', function () {
     $this->from('/login')->post('/login', [
         'email' => 'blocked',
         'password' => 'password',
-    ])->assertSessionHasErrors('email');
+    ])->assertSessionHasErrors('credentials');
 
     $this->assertGuest();
 });
@@ -210,6 +210,7 @@ test('receiving stock increases inventory batch transaction and price history', 
         'quantity' => 5,
         'purchase_price_afn' => 100,
         'sale_price_afn' => 150,
+        'funding_source' => 'office',
         'investor_id' => 'store',
         'exchange_rate' => 70,
         'purchase_date' => now()->toDateString(),
@@ -441,6 +442,7 @@ test('end to end purchase sale payment due zero profit path', function () {
         'quantity' => 4,
         'purchase_price_afn' => 1000,
         'sale_price_afn' => 2000,
+        'funding_source' => 'office',
         'investor_id' => 'store',
         'exchange_rate' => 70,
         'purchase_date' => now()->toDateString(),

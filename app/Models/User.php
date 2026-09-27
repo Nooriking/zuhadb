@@ -234,18 +234,12 @@ class User extends Authenticatable
         'name',
         'username',
         'email',
-        'google_id',
         'phone',
         'password',
-        'two_factor_secret',
-        'two_factor_recovery_codes',
-        'two_factor_confirmed_at',
         'role',
         'employee_code',
         'avatar',
-        'last_login_at',
         'status',
-        'trash',
         'user_id',
     ];
 

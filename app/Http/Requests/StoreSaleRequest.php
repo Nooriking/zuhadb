@@ -2,41 +2,43 @@
 
 namespace App\Http\Requests;
 
+use App\Http\Requests\Concerns\SanitizesInput;
 use App\Models\ProductVariant;
+use App\Support\Validation\SafeData;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class StoreSaleRequest extends FormRequest
 {
+    use SanitizesInput;
+
     public function authorize(): bool
     {
-        return true;
+        return $this->user()?->can('create', \App\Models\Sale::class) ?? false;
     }
 
     public function rules(): array
     {
         return [
-            /* ═══ Sale Header ═══ */
-            'branch_id'      => ['required', 'exists:branches,id'],
-            'customer_id'    => ['nullable', 'exists:customers,id'],
-            'sale_date'      => ['required', 'date'],
-            'payment_method' => ['nullable', 'in:cash,card,bank,mobile,credit,other'],
-            'due_date'       => ['nullable', 'date'],
-            'notes'          => ['nullable', 'string'],
-            'discount_afn'   => ['nullable', 'numeric', 'min:0'],
+            'branch_id' => ['required', 'integer', 'exists:branches,id'],
+            'customer_id' => ['nullable', 'integer', 'exists:customers,id'],
+            'sale_date' => ['required', 'date'],
+            'payment_method' => ['nullable', Rule::in(['cash', 'card', 'bank', 'mobile', 'credit', 'other'])],
+            'due_date' => ['nullable', 'date', 'after_or_equal:sale_date'],
+            'notes' => SafeData::plainText(SafeData::NOTES_MAX),
+            'discount_afn' => SafeData::money(false, 0),
 
-            /* ═══ Items ═══ */
-            'items'                     => ['required', 'array', 'min:1'],
-            'items.*.variant_id'        => ['required', 'exists:product_variants,id'],
-            'items.*.quantity'          => ['required', 'integer', 'min:1'],
-            'items.*.sale_price_afn'    => ['required', 'numeric', 'min:0'],
-            'items.*.discount_afn'      => ['nullable', 'numeric', 'min:0'],
+            'items' => ['required', 'array', 'min:1', 'max:200'],
+            'items.*.variant_id' => ['required', 'integer', 'exists:product_variants,id'],
+            'items.*.quantity' => SafeData::quantity(true, 1),
+            'items.*.sale_price_afn' => SafeData::money(true, 0),
+            'items.*.discount_afn' => SafeData::money(false, 0),
 
-            /* ═══ Payments ═══ */
-            'payments'                    => ['nullable', 'array'],
-            'payments.*.amount_afn'       => ['required_with:payments', 'numeric', 'min:0.01'],
-            'payments.*.payment_method'   => ['required_with:payments', 'in:cash,card,bank,mobile,credit,other'],
-            'payments.*.reference_number' => ['nullable', 'string', 'max:255'],
-            'payments.*.notes'            => ['nullable', 'string'],
+            'payments' => ['nullable', 'array', 'max:20'],
+            'payments.*.amount_afn' => SafeData::money(true, 0.01),
+            'payments.*.payment_method' => ['required_with:payments', Rule::in(['cash', 'card', 'bank', 'mobile', 'credit', 'other'])],
+            'payments.*.reference_number' => SafeData::plainText(100),
+            'payments.*.notes' => SafeData::plainText(500),
         ];
     }
 
@@ -59,10 +61,6 @@ class StoreSaleRequest extends FormRequest
                 $price = (float) ($item['sale_price_afn'] ?? 0);
                 $cost = (float) ($costs[$item['variant_id'] ?? null] ?? 0);
 
-                if ($price < 0) {
-                    $validator->errors()->add("items.{$index}.sale_price_afn", 'Sale price cannot be negative.');
-                }
-
                 if ($price < $cost) {
                     $validator->errors()->add("items.{$index}.sale_price_afn", 'Sale price cannot be less than the purchase price.');
                 }
@@ -73,24 +71,9 @@ class StoreSaleRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'branch_id.required'                => 'Please select a branch.',
-            'branch_id.exists'                  => 'Selected branch does not exist.',
-            'customer_id.exists'                => 'Selected customer does not exist.',
-            'sale_date.required'                => 'Sale date is required.',
-            'sale_date.date'                    => 'Sale date must be a valid date.',
-
-            'items.required'                    => 'At least one item is required.',
-            'items.min'                         => 'At least one item is required.',
-            'items.*.variant_id.required'       => 'Please select a product.',
-            'items.*.variant_id.exists'         => 'Selected product does not exist.',
-            'items.*.quantity.required'         => 'Quantity is required.',
-            'items.*.quantity.min'              => 'Quantity must be at least 1.',
-            'items.*.sale_price_afn.required'   => 'Sale price is required.',
-            'items.*.sale_price_afn.min'        => 'Sale price must be greater than or equal to 0.',
-
-            'payments.*.amount_afn.required_with'      => 'Amount is required for each payment.',
-            'payments.*.amount_afn.min'                => 'Payment amount must be greater than 0.',
-            'payments.*.payment_method.required_with'  => 'Payment method is required.',
+            'branch_id.required' => 'Please select a branch.',
+            'items.required' => 'At least one item is required.',
+            'items.max' => 'Too many line items on one sale.',
         ];
     }
 }

@@ -2,33 +2,40 @@
 
 namespace App\Http\Requests;
 
+use App\Http\Requests\Concerns\SanitizesInput;
 use App\Models\ProductVariant;
+use App\Support\Validation\SafeData;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class UpdateSaleRequest extends FormRequest
 {
+    use SanitizesInput;
+
     public function authorize(): bool
     {
-        return true;
+        $sale = $this->route('sale');
+
+        return $sale
+            ? ($this->user()?->can('update', $sale) ?? false)
+            : ($this->user() !== null);
     }
 
     public function rules(): array
     {
         return [
-            /* ═══ Sale Header ═══ */
-            'branch_id'      => ['required', 'exists:branches,id'],
-            'customer_id'    => ['nullable', 'exists:customers,id'],
-            'sale_date'      => ['required', 'date'],
-            'payment_method' => ['nullable', 'in:cash,card,bank,mobile,credit,other'],
-            'notes'          => ['nullable', 'string'],
-            'discount_afn'   => ['nullable', 'numeric', 'min:0'],
+            'branch_id' => ['required', 'integer', 'exists:branches,id'],
+            'customer_id' => ['nullable', 'integer', 'exists:customers,id'],
+            'sale_date' => ['required', 'date'],
+            'payment_method' => ['nullable', Rule::in(['cash', 'card', 'bank', 'mobile', 'credit', 'other'])],
+            'notes' => SafeData::plainText(SafeData::NOTES_MAX),
+            'discount_afn' => SafeData::money(false, 0),
 
-            /* ═══ Items ═══ */
-            'items'                     => ['required', 'array', 'min:1'],
-            'items.*.variant_id'        => ['required', 'exists:product_variants,id'],
-            'items.*.quantity'          => ['required', 'integer', 'min:1'],
-            'items.*.sale_price_afn'    => ['required', 'numeric', 'min:0'],
-            'items.*.discount_afn'      => ['nullable', 'numeric', 'min:0'],
+            'items' => ['required', 'array', 'min:1', 'max:200'],
+            'items.*.variant_id' => ['required', 'integer', 'exists:product_variants,id'],
+            'items.*.quantity' => SafeData::quantity(true, 1),
+            'items.*.sale_price_afn' => SafeData::money(true, 0),
+            'items.*.discount_afn' => SafeData::money(false, 0),
         ];
     }
 
@@ -44,34 +51,10 @@ class UpdateSaleRequest extends FormRequest
                 $price = (float) ($item['sale_price_afn'] ?? 0);
                 $cost = (float) ($costs[$item['variant_id'] ?? null] ?? 0);
 
-                if ($price < 0) {
-                    $validator->errors()->add("items.{$index}.sale_price_afn", 'Sale price cannot be negative.');
-                }
-
                 if ($price < $cost) {
                     $validator->errors()->add("items.{$index}.sale_price_afn", 'Sale price cannot be less than the purchase price.');
                 }
             }
         });
-    }
-
-    public function messages(): array
-    {
-        return [
-            'branch_id.required'              => 'Please select a branch.',
-            'branch_id.exists'                => 'Selected branch does not exist.',
-            'customer_id.exists'              => 'Selected customer does not exist.',
-            'sale_date.required'              => 'Sale date is required.',
-            'sale_date.date'                  => 'Sale date must be a valid date.',
-
-            'items.required'                  => 'At least one item is required.',
-            'items.min'                       => 'At least one item is required.',
-            'items.*.variant_id.required'     => 'Please select a product.',
-            'items.*.variant_id.exists'       => 'Selected product does not exist.',
-            'items.*.quantity.required'       => 'Quantity is required.',
-            'items.*.quantity.min'            => 'Quantity must be at least 1.',
-            'items.*.sale_price_afn.required' => 'Sale price is required.',
-            'items.*.sale_price_afn.min'      => 'Sale price must be greater than or equal to 0.',
-        ];
     }
 }

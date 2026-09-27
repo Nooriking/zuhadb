@@ -4,6 +4,8 @@ namespace App\Services;
 
 use App\Models\Expense;
 use App\Models\Inventory;
+use App\Models\Investment;
+use App\Models\InvestmentProductAllocation;
 use App\Models\Product;
 use App\Models\ProductBatch;
 use App\Models\ProductPriceHistory;
@@ -30,18 +32,35 @@ class PurchaseService
             $exchangeRate = (float) ($data['exchange_rate'] ?? 0);
             $profitAfn = (float) ($data['profit_per_unit'] ?? 0);
 
+            $fundingSource = $data['funding_source'] ?? null;
             $investorId = $data['investor_id'] ?? null;
-            if (empty($investorId) || $investorId === 'store' || $investorId === 'none') {
+            $investmentId = ! empty($data['investment_id']) ? (int) $data['investment_id'] : null;
+
+            if ($fundingSource === 'office' || empty($investorId) || $investorId === 'store' || $investorId === 'none') {
                 $investorId = null;
+                $investmentId = null;
+                $profitAfn = 0;
             }
 
-            if ($investorId && $profitAfn > 0 && $exchangeRate <= 0) {
+            if ($investorId && ! $investmentId) {
                 throw ValidationException::withMessages([
-                    'exchange_rate' => 'Enter the USD to AFN rate so investor profit is saved in dollars.',
+                    'investment_id' => 'Select which investment capital pays for this stock.',
                 ]);
             }
 
-            if ($purchasePrice < 0 || $salePrice < 0 || $profitAfn < 0) {
+            if ($investorId && $exchangeRate <= 0) {
+                throw ValidationException::withMessages([
+                    'exchange_rate' => 'Enter the USD to AFN rate so capital and investor profit are saved in dollars.',
+                ]);
+            }
+
+            if ($investorId && $profitAfn < 0) {
+                throw ValidationException::withMessages([
+                    'profit_per_unit' => 'Investor profit cannot be negative.',
+                ]);
+            }
+
+            if ($purchasePrice < 0 || $salePrice < 0) {
                 throw ValidationException::withMessages([
                     'sale_price_afn' => 'Prices cannot be negative.',
                 ]);
@@ -53,6 +72,34 @@ class PurchaseService
                 ]);
             }
 
+            $totalCostAfn = round($purchasePrice * $qty, 2);
+            $totalCostUsd = $exchangeRate > 0 ? round($totalCostAfn / $exchangeRate, 2) : 0.0;
+            $profitUsd = $this->profitAfnToUsd($profitAfn, $exchangeRate, $investorId);
+
+            $investment = null;
+            if ($investmentId) {
+                $investment = Investment::query()->lockForUpdate()->findOrFail($investmentId);
+
+                if ((int) $investment->investor_id !== (int) $investorId) {
+                    throw ValidationException::withMessages([
+                        'investment_id' => 'That investment does not belong to the selected investor.',
+                    ]);
+                }
+
+                if (! $investment->hasAvailableCapital()) {
+                    throw ValidationException::withMessages([
+                        'investment_id' => 'This investment has no available capital left.',
+                    ]);
+                }
+
+                $available = (float) $investment->available_amount_afn;
+                if ($totalCostUsd > $available + 0.01) {
+                    throw ValidationException::withMessages([
+                        'investment_id' => "Available capital is {$available} USD, but this stock costs {$totalCostUsd} USD.",
+                    ]);
+                }
+            }
+
             $oldPurchase = (float) $variant->purchase_price_afn;
             $oldSale = (float) $variant->sale_price_afn;
 
@@ -61,8 +108,6 @@ class PurchaseService
                 'sale_price_afn' => $salePrice,
                 'user_id' => $actor->id,
             ]);
-
-            $profitUsd = $this->profitAfnToUsd($profitAfn, $exchangeRate, $investorId);
 
             $purchaseRow = Product::create([
                 'name' => $product->name,
@@ -80,9 +125,9 @@ class PurchaseService
                 'exchange_rate' => $exchangeRate > 0 ? $exchangeRate : null,
                 'quantity' => $qty,
                 'remaining_quantity' => $qty,
-                'purchase_price_afn' => $purchasePrice * $qty,
+                'purchase_price_afn' => $totalCostAfn,
                 'profit_per_unit' => $profitAfn,
-                'line_total' => $purchasePrice * $qty,
+                'line_total' => $totalCostAfn,
                 'line_profit' => $profitAfn * $qty,
                 'notes' => $data['notes'] ?? null,
                 'payment_status' => ! empty($data['supplier_id']) ? 'unpaid' : 'paid',
@@ -90,7 +135,7 @@ class PurchaseService
 
             $this->applyPaidNow($purchaseRow, (float) ($data['paid_now'] ?? 0), $actor->id);
 
-            $this->createProductBatch(
+            $batch = $this->createProductBatch(
                 branchId: $branchId,
                 variantId: $variant->id,
                 purchaseRowId: $purchaseRow->id,
@@ -101,6 +146,30 @@ class PurchaseService
                 receivedDate: $data['purchase_date'],
                 userId: $actor->id,
             );
+
+            if ($investment) {
+                $purchaseAllocation = $investment->allocateToPurchase(
+                    $purchaseRow->id,
+                    $totalCostUsd,
+                    "Add stock · batch {$batch->batch_code}"
+                );
+
+                InvestmentProductAllocation::create([
+                    'investment_id' => $investment->id,
+                    'batch_id' => $batch->id,
+                    'variant_id' => $variant->id,
+                    'funded_quantity' => $qty,
+                    'sold_quantity' => 0,
+                    'remaining_quantity' => $qty,
+                    'cost_per_unit_afn' => $exchangeRate > 0 ? round($purchasePrice / $exchangeRate, 2) : 0,
+                    'profit_per_unit_afn' => $profitUsd,
+                    'capital_recovered_afn' => 0,
+                    'profit_earned_afn' => 0,
+                    'status' => 'active',
+                ]);
+
+                unset($purchaseAllocation);
+            }
 
             $this->recordPriceChange(
                 $variant,
@@ -134,6 +203,10 @@ class PurchaseService
                     'purchase_price_afn' => $purchasePrice,
                     'sale_price_afn' => $salePrice,
                     'branch_id' => $branchId,
+                    'funding_source' => $investorId ? 'investor' : 'office',
+                    'investment_id' => $investment?->id,
+                    'total_cost_usd' => $totalCostUsd,
+                    'profit_per_unit_usd' => $profitUsd,
                 ],
                 userId: $actor->id,
             );

@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\StoreExpenseRequest;
+use App\Http\Requests\UpdateExpenseRequest;
 use App\Models\Branch;
 use App\Models\Expense;
 use Illuminate\Http\RedirectResponse;
@@ -64,17 +66,9 @@ class ExpenseController extends Controller
         ]);
     }
 
-    public function store(Request $request): RedirectResponse
+    public function store(StoreExpenseRequest $request): RedirectResponse
     {
-        $data = $request->validate([
-            'branch_id'       => ['required', 'exists:branches,id'],
-            'title'           => ['required', 'string', 'max:255'],
-            'category'        => ['required', 'string', 'max:100'],
-            'amount_afn'      => ['required', 'numeric', 'min:0.01'],
-            'expense_date'    => ['required', 'date'],
-            'payment_method'  => ['required', 'in:cash,card,bank,other'],
-            'description'     => ['nullable', 'string'],
-        ]);
+        $data = $request->validated();
 
         $data['expense_number'] = Expense::generateExpenseNumber();
         $data['created_by']     = Auth::id();
@@ -114,17 +108,9 @@ class ExpenseController extends Controller
         ]);
     }
 
-    public function update(Request $request, Expense $expense): RedirectResponse
+    public function update(UpdateExpenseRequest $request, Expense $expense): RedirectResponse
     {
-        $data = $request->validate([
-            'branch_id'       => ['required', 'exists:branches,id'],
-            'title'           => ['required', 'string', 'max:255'],
-            'category'        => ['required', 'string', 'max:100'],
-            'amount_afn'      => ['required', 'numeric', 'min:0.01'],
-            'expense_date'    => ['required', 'date'],
-            'payment_method'  => ['required', 'in:cash,card,bank,other'],
-            'description'     => ['nullable', 'string'],
-        ]);
+        $data = $request->validated();
 
         $data['user_id'] = Auth::id();
 

@@ -6,14 +6,12 @@ use App\Models\Branch;
 use App\Models\Customer;
 use App\Models\Expense;
 use App\Models\Inventory;
-use App\Models\ProductBarcode;
 use App\Models\ProductBatch;
 use App\Models\Sale;
 use App\Models\SaleItem;
 use App\Models\SaleReturn;
 use App\Models\SaleReturnItem;
 use App\Services\CustomerLedgerService;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -86,10 +84,36 @@ class SaleReturnController extends Controller
 
     public function create(Request $request): Response
     {
-        $saleId       = $request->query('sale_id');
-        $scanBarcode  = trim((string) $request->query('barcode', ''));
-        $selectedSale = null;
-        $saleItems    = [];
+        $saleId        = $request->query('sale_id');
+        $invoiceQuery  = trim((string) $request->query('invoice', ''));
+        $invoiceError  = null;
+        $selectedSale  = null;
+        $saleItems     = [];
+
+        // Prefer explicit sale_id; otherwise resolve by invoice number (exact, then prefix).
+        if (! $saleId && $invoiceQuery !== '') {
+            $matched = Sale::query()
+                ->notTrashed()
+                ->completed()
+                ->where('invoice_number', $invoiceQuery)
+                ->orderByDesc('id')
+                ->first();
+
+            if (! $matched) {
+                $matched = Sale::query()
+                    ->notTrashed()
+                    ->completed()
+                    ->where('invoice_number', 'like', $invoiceQuery.'%')
+                    ->orderByDesc('id')
+                    ->first();
+            }
+
+            if ($matched) {
+                $saleId = $matched->id;
+            } else {
+                $invoiceError = "No completed sale found for invoice \"{$invoiceQuery}\".";
+            }
+        }
 
         if ($saleId) {
             $selectedSale = Sale::with([
@@ -99,86 +123,42 @@ class SaleReturnController extends Controller
 
             if ($selectedSale) {
                 $saleItems = $this->buildSaleItemsForReturn($selectedSale);
+            } elseif (! $invoiceError) {
+                $invoiceError = 'That sale was not found or is not available for return.';
             }
         }
 
-        /* ═══ Sales قابل انتخاب — فقط completed با remaining_due یا هر کاملی ═══ */
         $sales = Sale::query()
             ->notTrashed()
             ->completed()
             ->with('customer:id,name,phone')
             ->orderByDesc('id')
             ->limit(100)
-            ->get(['id', 'invoice_number', 'total_afn', 'branch_id', 'customer_id', 'sale_date']);
+            ->get(['id', 'invoice_number', 'total_afn', 'branch_id', 'customer_id', 'sale_date'])
+            ->map(fn (Sale $sale) => [
+                'id'              => $sale->id,
+                'invoice_number'  => $sale->invoice_number,
+                'total_afn'       => $sale->total_afn,
+                'sale_date'       => $sale->sale_date,
+                'customer_id'     => $sale->customer_id,
+                'branch_id'       => $sale->branch_id,
+                'customer_name'   => $sale->customer?->name,
+                'customer_phone'  => $sale->customer?->phone,
+            ]);
 
         return Inertia::render('sale-returns/create', [
             'sales'        => $sales,
             'selectedSale' => $selectedSale ? [
-                'id'             => $selectedSale->id,
-                'invoice_number' => $selectedSale->invoice_number,
-                'customer'       => $selectedSale->customer,
-                'branch'         => $selectedSale->branch,
-                'total_afn'      => $selectedSale->total_afn,
+                'id'                => $selectedSale->id,
+                'invoice_number'    => $selectedSale->invoice_number,
+                'customer'          => $selectedSale->customer,
+                'branch'            => $selectedSale->branch,
+                'total_afn'         => $selectedSale->total_afn,
                 'remaining_due_afn' => $selectedSale->remaining_due_afn,
             ] : null,
-            'saleItems'    => $saleItems,
-            'scanBarcode'  => $scanBarcode !== '' ? $scanBarcode : null,
-        ]);
-    }
-
-    public function lookupBarcode(Request $request): JsonResponse
-    {
-        $barcode = trim((string) $request->query('barcode', ''));
-
-        if ($barcode === '') {
-            return response()->json(['found' => false, 'message' => 'Barcode is empty.']);
-        }
-
-        $variantId = ProductBarcode::query()
-            ->where('barcode', $barcode)
-            ->value('variant_id');
-
-        $candidates = SaleItem::query()
-            ->where(function ($query) use ($barcode, $variantId) {
-                $query->where('barcode_snapshot', $barcode);
-                if ($variantId) {
-                    $query->orWhere('variant_id', $variantId);
-                }
-            })
-            ->whereHas('sale', fn ($query) => $query->notTrashed()->where('status', 'completed'))
-            ->with(['sale:id,invoice_number,sale_date,customer_id,branch_id,status', 'sale.customer:id,name,phone'])
-            ->orderByDesc('id')
-            ->limit(40)
-            ->get();
-
-        foreach ($candidates as $saleItem) {
-            $alreadyReturned = (int) SaleReturnItem::query()
-                ->where('sale_item_id', $saleItem->id)
-                ->whereHas('saleReturn', fn ($query) => $query->where('status', '!=', SaleReturn::STATUS_CANCELLED))
-                ->sum('quantity');
-
-            $maxReturnable = max(0, (int) $saleItem->quantity - $alreadyReturned);
-            if ($maxReturnable <= 0) {
-                continue;
-            }
-
-            return response()->json([
-                'found' => true,
-                'sale_id' => $saleItem->sale_id,
-                'sale_item_id' => $saleItem->id,
-                'barcode' => $barcode,
-                'invoice_number' => $saleItem->sale?->invoice_number,
-                'customer' => $saleItem->sale?->customer?->name,
-                'product' => $saleItem->product_name_snapshot,
-                'max_returnable' => $maxReturnable,
-            ]);
-        }
-
-        return response()->json([
-            'found' => false,
-            'message' => $candidates->isEmpty()
-                ? "No completed sale found for barcode \"{$barcode}\"."
-                : "Barcode \"{$barcode}\" was sold, but nothing is left to return.",
+            'saleItems'     => $saleItems,
+            'invoiceQuery'  => $invoiceQuery !== '' ? $invoiceQuery : null,
+            'invoiceError'  => $invoiceError,
         ]);
     }
 

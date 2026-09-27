@@ -48,7 +48,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
                                     'bg-muted': currentPath === item.url,
                                 })}
                             >
-                                <Link href={item.url} prefetch>
+                                <Link href={item.url}>
                                     {item.title}
                                 </Link>
                             </Button>

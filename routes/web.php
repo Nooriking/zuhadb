@@ -473,8 +473,6 @@ Route::middleware(['auth', 'verified', 'lock.records'])->group(function () {
             ->middleware('permission:sale-returns.view')->name('index');
         Route::get('/create', [SaleReturnController::class, 'create'])
             ->middleware('permission:sale-returns.create')->name('create');
-        Route::get('/lookup-barcode', [SaleReturnController::class, 'lookupBarcode'])
-            ->middleware('permission:sale-returns.create')->name('lookupBarcode');
         Route::post('/', [SaleReturnController::class, 'store'])
             ->middleware('permission:sale-returns.create')->name('store');
 
