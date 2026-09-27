@@ -32,7 +32,7 @@ export default function Splash({ app }: SplashProps) {
                 {/* Content */}
                 <div className="relative z-10 flex min-h-screen flex-col items-center justify-center px-6 text-center">
                     {/* Logo */}
-                    <img src="/images/logo.png" alt="ZUHA Logo" className="mb-8 h-28 w-28 object-contain" />
+                    <img loading="lazy" decoding="async" src="/images/logo.png" alt="ZUHA Logo" className="mb-8 h-28 w-28 object-contain" />
 
                     {/* Title */}
                     <h1 className="mb-4 text-5xl font-bold tracking-[8px] text-[#D4AF37] md:text-7xl">ZUHA</h1>

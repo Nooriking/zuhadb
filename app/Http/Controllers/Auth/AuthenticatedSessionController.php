@@ -20,6 +20,8 @@ class AuthenticatedSessionController extends Controller
     {
         return Inertia::render('auth/login', [
             'canResetPassword' => Route::has('password.request'),
+            'googleEnabled' => filled(config('services.google.client_id'))
+                && filled(config('services.google.client_secret')),
             'status' => $request->session()->get('status'),
         ]);
     }
@@ -29,9 +31,21 @@ class AuthenticatedSessionController extends Controller
      */
     public function store(LoginRequest $request): RedirectResponse
     {
-        $request->authenticate();
+        $user = $request->authenticate();
 
+        if ($user->hasEnabledTwoFactor()) {
+            $request->session()->put([
+                'login.id' => $user->id,
+                'login.remember' => $request->boolean('remember'),
+            ]);
+
+            return redirect()->route('two-factor.login');
+        }
+
+        Auth::login($user, $request->boolean('remember'));
         $request->session()->regenerate();
+
+        $user->forceFill(['last_login_at' => now()])->save();
 
         return redirect()->intended(route('dashboard', absolute: false));
     }

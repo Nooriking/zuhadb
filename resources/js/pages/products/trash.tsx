@@ -1,14 +1,11 @@
-// resources/js/pages/products/trash.tsx
-
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
+import { forceDeleteItem, restoreItem } from '@/lib/trash-actions';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link, router } from '@inertiajs/react';
-import { ArrowLeft, Package, RotateCcw, Trash2, X } from 'lucide-react';
-import { useState } from 'react';
+import { Head, Link } from '@inertiajs/react';
+import { ArrowLeft, Package, RotateCcw, Trash2 } from 'lucide-react';
 
 interface Product {
     id: number;
@@ -38,37 +35,6 @@ const breadcrumbs: BreadcrumbItem[] = [
 ];
 
 export default function ProductsTrash({ products }: Props) {
-    const { toast } = useToast();
-    const [productToDelete, setProductToDelete] = useState<Product | null>(null);
-
-    const handleRestore = (product: Product) => {
-        router.post(
-            `/products/${product.id}/restore`,
-            {},
-            {
-                preserveScroll: true,
-                onSuccess: () => toast({ title: 'Restored', description: `${product.name} restored.` }),
-                onError: () => toast({ title: 'Error', description: 'Failed to restore.', variant: 'destructive' }),
-            },
-        );
-    };
-
-    const confirmForceDelete = () => {
-        if (!productToDelete) return;
-
-        router.delete(`/products/${productToDelete.id}/force-delete`, {
-            preserveScroll: true,
-            onSuccess: () => {
-                toast({ title: 'Deleted', description: `${productToDelete.name} permanently deleted.` });
-                setProductToDelete(null);
-            },
-            onError: () => {
-                toast({ title: 'Error', description: 'Failed to delete.', variant: 'destructive' });
-                setProductToDelete(null);
-            },
-        });
-    };
-
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="Trashed Products" />
@@ -119,6 +85,8 @@ export default function ProductsTrash({ products }: Props) {
                                                     <img
                                                         src={`/storage/${product.image}`}
                                                         alt={product.name}
+                                                        loading="lazy"
+                                                        decoding="async"
                                                         className="h-10 w-10 rounded-md border object-cover"
                                                     />
                                                 ) : (
@@ -140,7 +108,12 @@ export default function ProductsTrash({ products }: Props) {
                                         </TableCell>
                                         <TableCell>
                                             <div className="flex items-center justify-center gap-1">
-                                                <Button variant="ghost" size="icon" title="Restore" onClick={() => handleRestore(product)}>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    title="Restore"
+                                                    onClick={() => void restoreItem(product.name, `/products/${product.id}/restore`)}
+                                                >
                                                     <RotateCcw className="h-4 w-4 text-green-600" />
                                                 </Button>
                                                 <Button
@@ -148,7 +121,13 @@ export default function ProductsTrash({ products }: Props) {
                                                     size="icon"
                                                     title="Delete Forever"
                                                     className="text-destructive hover:text-destructive"
-                                                    onClick={() => setProductToDelete(product)}
+                                                    onClick={() =>
+                                                        void forceDeleteItem(
+                                                            product.name,
+                                                            `/products/${product.id}/force-delete`,
+                                                            'Variants and barcodes will also be removed.',
+                                                        )
+                                                    }
                                                 >
                                                     <Trash2 className="h-4 w-4" />
                                                 </Button>
@@ -161,36 +140,6 @@ export default function ProductsTrash({ products }: Props) {
                     </Table>
                 </div>
             </div>
-
-            {productToDelete && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setProductToDelete(null)}>
-                    <div className="bg-background w-full max-w-md rounded-lg border shadow-lg" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-start gap-4 p-6">
-                            <div className="bg-destructive/10 text-destructive flex h-10 w-10 shrink-0 items-center justify-center rounded-full">
-                                <Trash2 className="h-5 w-5" />
-                            </div>
-                            <div className="flex-1">
-                                <h3 className="text-lg font-semibold">Delete forever?</h3>
-                                <p className="text-muted-foreground mt-1 text-sm">
-                                    Product <strong>{productToDelete.name}</strong> and all its variants/barcodes will be{' '}
-                                    <strong>permanently deleted</strong>.
-                                </p>
-                            </div>
-                            <button type="button" onClick={() => setProductToDelete(null)} className="text-muted-foreground hover:text-foreground">
-                                <X className="h-5 w-5" />
-                            </button>
-                        </div>
-                        <div className="flex justify-end gap-2 border-t px-6 py-4">
-                            <Button variant="outline" onClick={() => setProductToDelete(null)}>
-                                Cancel
-                            </Button>
-                            <Button onClick={confirmForceDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                                Delete Forever
-                            </Button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </AppLayout>
     );
 }

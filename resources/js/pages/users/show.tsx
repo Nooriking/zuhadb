@@ -175,7 +175,7 @@ export default function UsersShow({ user, stats, roles, permissions }: Props) {
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-4">
                         {user.avatar ? (
-                            <img src={`/storage/${user.avatar}`} alt={user.name} className="h-16 w-16 rounded-full border-2 object-cover" />
+                            <img loading="lazy" decoding="async" src={`/storage/${user.avatar}`} alt={user.name} className="h-16 w-16 rounded-full border-2 object-cover" />
                         ) : (
                             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-xl font-bold text-white">
                                 {getInitials(user.name)}

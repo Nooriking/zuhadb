@@ -1,37 +1,63 @@
-// resources/js/app.tsx
-
 import '../css/app.css';
 
 import { createInertiaApp } from '@inertiajs/react';
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
 import { createRoot } from 'react-dom/client';
-import { Toaster } from 'sonner';
-import { route as routeFn } from 'ziggy-js';
+import { lazy, Suspense } from 'react';
+import { route as ziggyRoute, type Config } from 'ziggy-js';
+import { Ziggy } from './ziggy';
 import { initializeTheme } from './hooks/use-appearance';
 
+/** Static Ziggy routes — avoids dumping the full route list into every HTML response. */
+const ziggyConfig = {
+    ...Ziggy,
+    url: typeof window !== 'undefined' ? window.location.origin : Ziggy.url,
+} as Config;
+
+const route = ((name: string, params?: unknown, absolute?: boolean) =>
+    ziggyRoute(name, params as never, absolute, ziggyConfig)) as typeof ziggyRoute;
+
 declare global {
-    const route: typeof routeFn;
+    // eslint-disable-next-line no-var
+    var route: typeof ziggyRoute;
 }
 
-const appName = import.meta.env.VITE_APP_NAME || 'Laravel';
+globalThis.route = route;
+
+const appName = import.meta.env.VITE_APP_NAME || 'ZUHA PERFUME';
+
+/** Lazy pages: each route downloads only its own chunk. */
+const pages = import.meta.glob('./pages/**/*.tsx');
+
+/** Toaster is not needed for first paint — load after mount. */
+const Toaster = lazy(() =>
+    import('sonner').then((mod) => ({
+        default: function LazyToaster() {
+            return <mod.Toaster position="top-right" richColors closeButton />;
+        },
+    })),
+);
 
 createInertiaApp({
-    title: (title) => `${title} - ${appName}`,
-    resolve: (name) => resolvePageComponent(`./pages/${name}.tsx`, import.meta.glob('./pages/**/*.tsx')),
+    title: (title) => (title ? `${title} — ${appName}` : appName),
+    resolve: (name) => resolvePageComponent(`./pages/${name}.tsx`, pages),
     setup({ el, App, props }) {
         const root = createRoot(el);
 
         root.render(
             <>
                 <App {...props} />
-                <Toaster position="top-right" richColors />
+                <Suspense fallback={null}>
+                    <Toaster />
+                </Suspense>
             </>,
         );
     },
     progress: {
-        color: '#4B5563',
+        color: '#D4AF37',
+        showSpinner: false,
+        delay: 120,
     },
 });
 
-// This will set light / dark mode on load...
 initializeTheme();

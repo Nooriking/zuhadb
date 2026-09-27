@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
+import { softDeleteItem } from '@/lib/trash-actions';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
 import {
@@ -22,7 +23,6 @@ import {
     UserCircle,
     Users,
     Wallet,
-    X,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -81,7 +81,6 @@ export default function CustomersIndex({ customers, filters, stats }: Props) {
     const [search, setSearch] = useState(filters.search || '');
     const [statusFilter, setStatusFilter] = useState(filters.status || 'all');
     const [onlyDue, setOnlyDue] = useState<boolean>(filters.only_due || false);
-    const [customerToDelete, setCustomerToDelete] = useState<Customer | null>(null);
 
     const handleSearch = (overrides?: { status?: string; only_due?: boolean }) => {
         router.get(
@@ -107,20 +106,8 @@ export default function CustomersIndex({ customers, filters, stats }: Props) {
         );
     };
 
-    const confirmDelete = () => {
-        if (!customerToDelete) return;
-
-        router.delete(`/customers/${customerToDelete.id}`, {
-            preserveScroll: true,
-            onSuccess: () => {
-                toast({ title: 'Moved to Trash', description: `${customerToDelete.name} moved to trash.` });
-                setCustomerToDelete(null);
-            },
-            onError: () => {
-                toast({ title: 'Error', description: 'Cannot delete.', variant: 'destructive' });
-                setCustomerToDelete(null);
-            },
-        });
+    const handleSoftDelete = (customer: Customer) => {
+        void softDeleteItem(customer.name, `/customers/${customer.id}`);
     };
 
     const handlePageChange = (url: string | null) => {
@@ -327,7 +314,7 @@ export default function CustomersIndex({ customers, filters, stats }: Props) {
                                                             <ToggleLeft className="h-4 w-4 text-gray-400" />
                                                         )}
                                                     </RowAction>
-                                                    <DeleteAction onClick={() => setCustomerToDelete(customer)} />
+                                                    <DeleteAction onClick={() => handleSoftDelete(customer)} />
                                                 </RowActions>
                                             </TableCell>
                                         </TableRow>
@@ -360,36 +347,6 @@ export default function CustomersIndex({ customers, filters, stats }: Props) {
                     </div>
                 )}
             </div>
-
-            {/* Delete Modal */}
-            {customerToDelete && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setCustomerToDelete(null)}>
-                    <div className="bg-background w-full max-w-md rounded-lg border shadow-lg" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-start gap-4 p-6">
-                            <div className="bg-destructive/10 text-destructive flex h-10 w-10 shrink-0 items-center justify-center rounded-full">
-                                <AlertTriangle className="h-5 w-5" />
-                            </div>
-                            <div className="flex-1">
-                                <h3 className="text-lg font-semibold">Are you sure?</h3>
-                                <p className="text-muted-foreground mt-1 text-sm">
-                                    Customer <strong>{customerToDelete.name}</strong> will be moved to trash.
-                                </p>
-                            </div>
-                            <button type="button" onClick={() => setCustomerToDelete(null)} className="text-muted-foreground hover:text-foreground">
-                                <X className="h-5 w-5" />
-                            </button>
-                        </div>
-                        <div className="flex justify-end gap-2 border-t px-6 py-4">
-                            <Button variant="outline" onClick={() => setCustomerToDelete(null)}>
-                                Cancel
-                            </Button>
-                            <Button onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                                Move to Trash
-                            </Button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </AppLayout>
     );
 }

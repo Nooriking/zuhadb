@@ -1,10 +1,10 @@
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import AppLayout from '@/layouts/app-layout';
+import { forceDeleteItem, restoreItem } from '@/lib/trash-actions';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
 import { ArrowLeft, RotateCcw, Trash2 } from 'lucide-react';
-import { useState } from 'react';
 
 interface SaleReturn {
     id: number;
@@ -28,7 +28,6 @@ const breadcrumbs: BreadcrumbItem[] = [
 ];
 
 export default function SaleReturnsTrash({ saleReturns }: Props) {
-    const [pendingId, setPendingId] = useState<number | null>(null);
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>

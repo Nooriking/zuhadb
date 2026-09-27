@@ -6,6 +6,11 @@ use App\Models\User;
 use App\Models\Branch;
 use Illuminate\Database\Seeder;
 
+/**
+ * Optional demo users (admin/cashier/…).
+ * Default install uses SuperAdminSeeder only — run this manually if needed:
+ *   php artisan db:seed --class=UserSeeder
+ */
 class UserSeeder extends Seeder
 {
     public function run(): void
@@ -36,7 +41,7 @@ class UserSeeder extends Seeder
             [
                 'branch_id'     => null, // سوپرادمین به شعبه‌ای وابسته نیست
                 'name'          => 'Super Admin',
-                'email'         => 'superadmin@example.com',
+                'email'         => 'Sami.farooqi2018@gmail.com',
                 'phone'         => '09120000001',
                 'password'      => 'Super@123',
                 'role'          => 'super_admin',

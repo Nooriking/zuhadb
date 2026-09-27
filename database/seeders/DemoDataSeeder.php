@@ -17,6 +17,11 @@ use App\Models\Supplier;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 
+/**
+ * Optional demo catalog / shop sample data.
+ * Not part of default `db:seed`. Run manually if needed:
+ *   php artisan db:seed --class=DemoDataSeeder
+ */
 class DemoDataSeeder extends Seeder
 {
     public function run(): void

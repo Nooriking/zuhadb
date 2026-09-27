@@ -15,6 +15,7 @@ use App\Models\ProductPriceHistory;
 use App\Models\ActivityNotification;
 use App\Models\ProductVariant;
 use App\Models\User;
+use App\Services\PurchaseService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -26,8 +27,12 @@ use Inertia\Response;
 
 class ProductController extends Controller
 {
+    public function __construct(
+        private readonly PurchaseService $purchases,
+    ) {}
+
     /**
-     * ✅ Branch ID از کاربر
+     * Branch ID از کاربر
      */
     private function getBranchId(): int
     {
@@ -94,26 +99,28 @@ class ProductController extends Controller
             ->paginate(15)
             ->withQueryString();
 
-        $variantIds = $products->getCollection()->flatMap(fn ($product) => $product->variants->pluck('id'));
-        $ratesByVariant = Product::query()
+        $variantIds = $products->getCollection()->flatMap(fn ($product) => $product->variants->pluck('id'))->unique()->values();
+
+        $avgRatesByVariant = Product::query()
             ->whereIn('variant_id', $variantIds)
             ->whereNotNull('exchange_rate')
+            ->where('exchange_rate', '>', 0)
             ->where('trash', false)
-            ->orderByDesc('purchase_date')
-            ->get(['variant_id', 'exchange_rate'])
-            ->unique('variant_id')
-            ->keyBy('variant_id');
+            ->selectRaw('variant_id, ROUND(AVG(exchange_rate), 2) as avg_exchange_rate')
+            ->groupBy('variant_id')
+            ->pluck('avg_exchange_rate', 'variant_id');
 
-        $products->getCollection()->each(function ($product) use ($ratesByVariant) {
-            $rate = null;
-            foreach ($product->variants as $variant) {
-                $found = $ratesByVariant->get($variant->id);
-                if ($found) {
-                    $rate = (float) $found->exchange_rate;
-                    break;
-                }
-            }
-            $product->setAttribute('exchange_rate', $rate);
+        $products->getCollection()->each(function ($product) use ($avgRatesByVariant) {
+            $rates = $product->variants
+                ->map(fn ($variant) => $avgRatesByVariant->get($variant->id))
+                ->filter(fn ($rate) => $rate !== null && (float) $rate > 0)
+                ->map(fn ($rate) => (float) $rate)
+                ->values();
+
+            $product->setAttribute(
+                'exchange_rate',
+                $rates->isNotEmpty() ? round($rates->avg(), 2) : null
+            );
         });
 
         $monthlyRates = ExchangeRateHistory::query()
@@ -138,7 +145,6 @@ class ProductController extends Controller
                 'brand_id' => $brandId,
                 'gender'   => $gender,
             ],
-            'supplierCredits' => Product::supplierCredits(),
         ]);
     }
 
@@ -233,6 +239,8 @@ class ProductController extends Controller
 
     public function receiveStore(Request $request): RedirectResponse
     {
+        $this->authorize('create', Product::class);
+
         $data = $request->validate([
             'variant_id' => ['required', 'exists:product_variants,id'],
             'quantity' => ['required', 'integer', 'min:1'],
@@ -249,108 +257,7 @@ class ProductController extends Controller
             'supplier_id' => ['nullable', 'exists:suppliers,id'],
         ]);
 
-        DB::transaction(function () use ($data) {
-            $variant = ProductVariant::with('product')->findOrFail($data['variant_id']);
-            $product = $variant->product;
-            $branchId = $this->getBranchId();
-            $qty = (int) $data['quantity'];
-            $purchasePrice = (float) $data['purchase_price_afn'];
-            $salePrice = (float) $data['sale_price_afn'];
-            $exchangeRate = (float) ($data['exchange_rate'] ?? 0);
-            $profitAfn = (float) ($data['profit_per_unit'] ?? 0);
-
-            $investorId = $data['investor_id'] ?? null;
-            if (empty($investorId) || $investorId === 'store' || $investorId === 'none') {
-                $investorId = null;
-            }
-
-            if ($investorId && $profitAfn > 0 && $exchangeRate <= 0) {
-                throw \Illuminate\Validation\ValidationException::withMessages([
-                    'exchange_rate' => 'Enter the USD to AFN rate so investor profit is saved in dollars.',
-                ]);
-            }
-
-            if ($purchasePrice < 0 || $salePrice < 0 || $profitAfn < 0) {
-                throw \Illuminate\Validation\ValidationException::withMessages([
-                    'sale_price_afn' => 'Prices cannot be negative.',
-                ]);
-            }
-
-            if ($salePrice < $purchasePrice) {
-                throw \Illuminate\Validation\ValidationException::withMessages([
-                    'sale_price_afn' => 'Sale price cannot be less than the purchase price.',
-                ]);
-            }
-
-            $oldPurchase = (float) $variant->purchase_price_afn;
-            $oldSale = (float) $variant->sale_price_afn;
-
-            $variant->update([
-                'purchase_price_afn' => $purchasePrice,
-                'sale_price_afn' => $salePrice,
-                'user_id' => Auth::id(),
-            ]);
-
-            $profitUsd = $this->profitAfnToUsd($profitAfn, $exchangeRate, $investorId);
-
-            $purchaseRow = Product::create([
-                'name' => $product->name,
-                'brand_id' => $product->brand_id,
-                'gender' => $product->gender,
-                'status' => $product->status,
-                'description' => $product->description,
-                'user_id' => Auth::id(),
-                'trash' => false,
-                'variant_id' => $variant->id,
-                'investor_id' => $investorId,
-                'supplier_id' => $data['supplier_id'] ?? null,
-                'invoice_number' => $data['invoice_number'] ?? null,
-                'purchase_date' => $data['purchase_date'],
-                'exchange_rate' => $exchangeRate > 0 ? $exchangeRate : null,
-                'quantity' => $qty,
-                'remaining_quantity' => $qty,
-                'purchase_price_afn' => $purchasePrice * $qty,
-                'profit_per_unit' => $profitAfn,
-                'line_total' => $purchasePrice * $qty,
-                'line_profit' => $profitAfn * $qty,
-                'notes' => $data['notes'] ?? null,
-                'payment_status' => ! empty($data['supplier_id']) ? 'unpaid' : 'paid',
-            ]);
-            $this->applyPaidNow($purchaseRow, (float) ($data['paid_now'] ?? 0));
-
-            $this->createProductBatch(
-                branchId: $branchId,
-                variantId: $variant->id,
-                purchaseRowId: $purchaseRow->id,
-                investorId: $investorId ? (int) $investorId : null,
-                qty: $qty,
-                unitCostAfn: $purchasePrice,
-                exchangeRate: $exchangeRate > 0 ? $exchangeRate : 1,
-                profitPerUnit: $profitUsd,
-                receivedDate: $data['purchase_date'],
-            );
-
-            $this->recordPriceChange(
-                $variant,
-                $oldPurchase,
-                $purchasePrice,
-                $oldSale,
-                $salePrice,
-                'Add stock'
-            );
-            $this->recordPriceDropLoss($variant, $oldPurchase, $purchasePrice);
-
-            Inventory::increase(
-                branchId: $branchId,
-                variantId: $variant->id,
-                qty: $qty,
-                type: 'purchase',
-                notes: 'Stock received',
-                unitCostAfn: $purchasePrice,
-            );
-
-            $this->refreshVariantStock($product);
-        });
+        $this->purchases->receiveStock($data, $request->user(), $this->getBranchId());
 
         return redirect()->route('products.index')->with('success', 'New stock was added.');
     }
@@ -361,6 +268,8 @@ class ProductController extends Controller
 
     public function store(StoreProductRequest $request): RedirectResponse
     {
+        $this->authorize('create', Product::class);
+
         $data = $request->validated();
 
         $product = DB::transaction(function () use ($request, $data) {

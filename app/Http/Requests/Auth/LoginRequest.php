@@ -2,58 +2,68 @@
 
 namespace App\Http\Requests\Auth;
 
+use App\Models\User;
+use App\Services\ActivityLogger;
 use Illuminate\Auth\Events\Lockout;
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class LoginRequest extends FormRequest
 {
-    /**
-     * Determine if the user is authorized to make this request.
-     */
     public function authorize(): bool
     {
         return true;
     }
 
     /**
-     * Get the validation rules that apply to the request.
-     *
      * @return array<string, \Illuminate\Contracts\Validation\ValidationRule|array<mixed>|string>
      */
     public function rules(): array
     {
         return [
-            'email' => ['required', 'string', 'email'],
+            'email' => ['required', 'string'],
             'password' => ['required', 'string'],
         ];
     }
 
     /**
-     * Attempt to authenticate the request's credentials.
+     * Validate credentials and return the matching active user (without logging in).
      *
      * @throws \Illuminate\Validation\ValidationException
      */
-    public function authenticate(): void
+    public function authenticate(): User
     {
         $this->ensureIsNotRateLimited();
 
-        if (! Auth::attempt($this->only('email', 'password'), $this->boolean('remember'))) {
-            RateLimiter::hit($this->throttleKey());
+        $login = trim((string) $this->input('email'));
+        $password = (string) $this->input('password');
+
+        $user = $this->findUserForLogin($login);
+
+        if (! $user || ! Hash::check($password, $user->password)) {
+            $this->hitRateLimits();
+
+            ActivityLogger::log(
+                action: 'login_failed',
+                section: 'auth',
+                description: 'Failed sign-in attempt',
+                properties: [
+                    'login' => $login,
+                    'ip' => $this->ip(),
+                ],
+                userId: $user?->id,
+            );
 
             throw ValidationException::withMessages([
                 'email' => __('auth.failed'),
             ]);
         }
 
-        $user = Auth::user();
-
-        if ($user && ($user->trash || $user->status !== 'active')) {
-            Auth::logout();
-            RateLimiter::hit($this->throttleKey());
+        if ($user->trash || $user->status !== 'active') {
+            $this->hitRateLimits();
 
             throw ValidationException::withMessages([
                 'email' => 'This account cannot sign in.',
@@ -61,36 +71,80 @@ class LoginRequest extends FormRequest
         }
 
         RateLimiter::clear($this->throttleKey());
+        RateLimiter::clear($this->ipThrottleKey());
+
+        return $user;
     }
 
-    /**
-     * Ensure the login request is not rate limited.
-     *
-     * @throws \Illuminate\Validation\ValidationException
-     */
+    protected function findUserForLogin(string $login): ?User
+    {
+        $loginLower = Str::lower($login);
+
+        if (filter_var($login, FILTER_VALIDATE_EMAIL)) {
+            return User::query()
+                ->whereRaw('LOWER(email) = ?', [$loginLower])
+                ->first();
+        }
+
+        return User::query()
+            ->whereRaw('LOWER(username) = ?', [$loginLower])
+            ->first();
+    }
+
     public function ensureIsNotRateLimited(): void
     {
-        if (! RateLimiter::tooManyAttempts($this->throttleKey(), 5)) {
+        $maxAttempts = max(1, (int) config('business.login_max_attempts', 5));
+        $ipMaxAttempts = max($maxAttempts, (int) config('business.login_ip_max_attempts', 20));
+
+        $accountLocked = RateLimiter::tooManyAttempts($this->throttleKey(), $maxAttempts);
+        $ipLocked = RateLimiter::tooManyAttempts($this->ipThrottleKey(), $ipMaxAttempts);
+
+        if (! $accountLocked && ! $ipLocked) {
             return;
         }
 
         event(new Lockout($this));
 
-        $seconds = RateLimiter::availableIn($this->throttleKey());
+        ActivityLogger::log(
+            action: 'login_lockout',
+            section: 'auth',
+            description: 'Login locked after too many failed attempts',
+            properties: [
+                'login' => trim((string) $this->input('email')),
+                'ip' => $this->ip(),
+                'account_locked' => $accountLocked,
+                'ip_locked' => $ipLocked,
+            ],
+        );
+
+        $seconds = max(
+            RateLimiter::availableIn($this->throttleKey()),
+            RateLimiter::availableIn($this->ipThrottleKey()),
+        );
 
         throw ValidationException::withMessages([
             'email' => __('auth.throttle', [
                 'seconds' => $seconds,
-                'minutes' => ceil($seconds / 60),
+                'minutes' => max(1, (int) ceil($seconds / 60)),
             ]),
         ]);
     }
 
-    /**
-     * Get the rate limiting throttle key for the request.
-     */
+    protected function hitRateLimits(): void
+    {
+        $decay = max(60, (int) config('business.login_decay_seconds', 900));
+
+        RateLimiter::hit($this->throttleKey(), $decay);
+        RateLimiter::hit($this->ipThrottleKey(), $decay);
+    }
+
     public function throttleKey(): string
     {
         return Str::transliterate(Str::lower($this->string('email')).'|'.$this->ip());
+    }
+
+    public function ipThrottleKey(): string
+    {
+        return 'login-ip:'.Str::transliterate((string) $this->ip());
     }
 }

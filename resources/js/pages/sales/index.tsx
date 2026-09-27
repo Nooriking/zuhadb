@@ -36,6 +36,7 @@ interface Sale {
     status: 'draft' | 'completed' | 'cancelled';
     items_count: number;
     printed_count: number;
+    exchange_rate?: number | null;
     branch: { id: number; name: string; code: string } | null;
     customer: { id: number; name: string; phone: string | null } | null;
     creator: { id: number; name: string } | null;
@@ -53,6 +54,7 @@ interface Props {
     };
     branches: { id: number; name: string; code: string }[];
     customers: { id: number; name: string; phone: string | null }[];
+    monthlyRates?: { year: number; month: number; average_rate: string; days: number }[];
     filters: {
         search: string | null;
         branch_id: string | null;
@@ -67,6 +69,8 @@ interface Props {
         today_count: number;
         today_profit: string;
         total_due: string;
+        avg_usd_rate?: number;
+        latest_usd_rate?: number;
     };
 }
 
@@ -112,7 +116,7 @@ const getStatusBadge = (status: string) => {
  |  Component
  ═══════════════════════════════════════════════════════ */
 
-export default function SalesIndex({ sales, branches, customers, filters, stats }: Props) {
+export default function SalesIndex({ sales, branches, customers, filters, stats, monthlyRates = [] }: Props) {
     const [search, setSearch] = useState(filters.search || '');
     const [branchFilter, setBranchFilter] = useState(filters.branch_id || 'all');
     const [customerFilter, setCustomerFilter] = useState(filters.customer_id || 'all');
@@ -205,7 +209,7 @@ export default function SalesIndex({ sales, branches, customers, filters, stats 
                 </div>
 
                 {/* ═══════════ Stats Cards ═══════════ */}
-                <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
                     <div className="bg-card rounded-lg border p-4 shadow-sm">
                         <div className="flex items-center justify-between">
                             <p className="text-muted-foreground text-xs">Today Sales</p>
@@ -233,6 +237,20 @@ export default function SalesIndex({ sales, branches, customers, filters, stats 
                             <TrendingDown className="text-muted-foreground h-4 w-4" />
                         </div>
                         <p className="mt-1 text-2xl font-bold">{formatPrice(stats.total_due)} AFN</p>
+                    </div>
+                    <div className="bg-card rounded-lg border p-4 shadow-sm">
+                        <div className="flex items-center justify-between">
+                            <p className="text-muted-foreground text-xs">Avg USD→AFN</p>
+                            <DollarSign className="text-muted-foreground h-4 w-4" />
+                        </div>
+                        <p className="mt-1 text-2xl font-bold font-mono">
+                            {stats.avg_usd_rate && stats.avg_usd_rate > 0 ? formatPrice(stats.avg_usd_rate, 2) : '—'}
+                        </p>
+                        <p className="text-muted-foreground mt-0.5 text-[10px]">
+                            {stats.latest_usd_rate && stats.latest_usd_rate > 0
+                                ? `latest ${formatPrice(stats.latest_usd_rate, 2)}`
+                                : 'this month average'}
+                        </p>
                     </div>
                 </div>
 
@@ -341,6 +359,20 @@ export default function SalesIndex({ sales, branches, customers, filters, stats 
                     </FilterField>
                 </IndexFilters>
 
+                {monthlyRates.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                        {monthlyRates.map((row) => (
+                            <div key={`${row.year}-${row.month}`} className="rounded-md border px-3 py-2 text-sm">
+                                <span className="text-muted-foreground">
+                                    {new Date(row.year, row.month - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' })}
+                                </span>
+                                <span className="ml-2 font-mono font-semibold">{row.average_rate}</span>
+                                <span className="text-muted-foreground ml-1 text-xs">avg USD to AFN</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
                 {/* ═══════════ Table ═══════════ */}
                 <div className="overflow-x-auto rounded-md border">
                     <Table>
@@ -350,6 +382,7 @@ export default function SalesIndex({ sales, branches, customers, filters, stats 
                                 <TableHead>Invoice</TableHead>
                                 <TableHead>Customer</TableHead>
                                 <TableHead>Date</TableHead>
+                                <TableHead className="text-center">USD→AFN</TableHead>
                                 <TableHead className="text-right">Sale</TableHead>
                                 <TableHead className="text-right">Paid</TableHead>
                                 <TableHead className="text-right">Remaining</TableHead>
@@ -360,7 +393,7 @@ export default function SalesIndex({ sales, branches, customers, filters, stats 
                         <TableBody>
                             {sales.data.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={9} className="text-muted-foreground h-24 text-center">
+                                    <TableCell colSpan={10} className="text-muted-foreground h-24 text-center">
                                         No sales found.
                                     </TableCell>
                                 </TableRow>
@@ -395,6 +428,9 @@ export default function SalesIndex({ sales, branches, customers, filters, stats 
                                                 )}
                                             </TableCell>
                                             <TableCell className="text-xs">{new Date(sale.sale_date).toLocaleDateString('en-US')}</TableCell>
+                                            <TableCell className="text-center font-mono text-sm font-semibold">
+                                                {sale.exchange_rate ? formatPrice(sale.exchange_rate, 2) : '—'}
+                                            </TableCell>
                                             <TableCell className="text-right font-mono text-sm font-semibold">
                                                 {formatPrice(sale.new_sale_amount_afn || sale.total_afn)}
                                             </TableCell>

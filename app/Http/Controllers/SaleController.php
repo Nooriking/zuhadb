@@ -2,21 +2,20 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\AddSalePaymentRequest;
 use App\Http\Requests\StoreSaleRequest;
 use App\Http\Requests\UpdateSaleRequest;
 use App\Models\Branch;
 use App\Models\Customer;
-use App\Models\Inventory;
-use App\Models\InvestorProfitEntry;
+use App\Models\ExchangeRateHistory;
 use App\Models\ProductBatch;
 use App\Models\ProductBarcode;
 use App\Models\ProductVariant;
 use App\Models\Receipt;
 use App\Models\Sale;
 use App\Models\SaleItem;
-use App\Models\SalePayment;
-use App\Services\CustomerLedgerService;
-use App\Services\SaleNotifier;
+use App\Services\SaleService;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -27,6 +26,10 @@ use Inertia\Response;
 
 class SaleController extends Controller
 {
+    public function __construct(
+        private readonly SaleService $sales,
+    ) {}
+
     /* =========================================================
      |  INDEX
      ========================================================= */
@@ -98,10 +101,48 @@ class SaleController extends Controller
             'today_count'  => (int) $statsRow->today_count,
             'today_profit' => (float) $statsRow->today_profit,
             'total_due'    => (float) $statsRow->total_due,
+            'avg_usd_rate' => round(ExchangeRateHistory::averageThisMonth(), 2),
+            'latest_usd_rate' => (float) (ExchangeRateHistory::latestRate()?->usd_to_afn ?? 0),
         ];
+
+        $saleDates = $sales->getCollection()
+            ->map(fn (Sale $sale) => optional($sale->sale_date)->toDateString())
+            ->filter()
+            ->unique()
+            ->values();
+
+        $ratesByDate = ExchangeRateHistory::query()
+            ->whereIn('rate_date', $saleDates)
+            ->get(['rate_date', 'usd_to_afn'])
+            ->mapWithKeys(fn ($row) => [
+                Carbon::parse($row->rate_date)->toDateString() => round((float) $row->usd_to_afn, 2),
+            ]);
+
+        // Fallback: nearest earlier rate for dates without an exact entry
+        $missingDates = $saleDates->reject(fn ($date) => $ratesByDate->has($date));
+        foreach ($missingDates as $date) {
+            $fallback = ExchangeRateHistory::rateOnDate($date);
+            if ($fallback) {
+                $ratesByDate->put($date, round((float) $fallback->usd_to_afn, 2));
+            }
+        }
+
+        $sales->getCollection()->each(function (Sale $sale) use ($ratesByDate) {
+            $date = optional($sale->sale_date)->toDateString();
+            $sale->setAttribute('exchange_rate', $date ? $ratesByDate->get($date) : null);
+        });
+
+        $monthlyRates = ExchangeRateHistory::query()
+            ->selectRaw('YEAR(rate_date) as year, MONTH(rate_date) as month, ROUND(AVG(usd_to_afn), 2) as average_rate, COUNT(*) as days')
+            ->groupByRaw('YEAR(rate_date), MONTH(rate_date)')
+            ->orderByDesc('year')
+            ->orderByDesc('month')
+            ->limit(6)
+            ->get();
 
         return Inertia::render('sales/index', [
             'sales'     => $sales,
+            'monthlyRates' => $monthlyRates,
             'branches'  => Branch::notTrashed()->visibleTo($user)->select('id', 'name', 'code')->get(),
             'customers' => Customer::notTrashed()->select('id', 'name', 'phone')->orderBy('name')->get(),
             'filters'   => [
@@ -151,317 +192,11 @@ class SaleController extends Controller
      |  STORE — چک موجودی + فروش + کاهش انبار + سود سرمایه‌گذار + قرض مشتری
      ========================================================= */
 
-    public function store(StoreSaleRequest $request): RedirectResponse
+        public function store(StoreSaleRequest $request): RedirectResponse
     {
-        $data     = $request->validated();
-        $items    = $data['items'];
-        $actor    = Auth::user();
-        $branchId = $actor?->isBranchScoped() ? (int) $actor->branch_id : (int) $data['branch_id'];
+        $this->authorize('create', Sale::class);
 
-        /* ═══════════════════════════════════════════════════════
-         |  ⭐ ۱. چک موجودی قبل از هر کاری
-         ═══════════════════════════════════════════════════════ */
-
-        $stockErrors = [];
-
-        foreach ($items as $index => $item) {
-            $variantId = (int) $item['variant_id'];
-            $qty       = (int) $item['quantity'];
-
-            $available = ProductBatch::getAvailableQuantity($branchId, $variantId);
-
-            if ($available < $qty) {
-                $variant = ProductVariant::with('product:id,name')->find($variantId);
-
-                $variantName = $variant
-                    ? trim(($variant->product?->name ?? '') . ' - ' . ($variant->name ?? ''))
-                    : "Variant #{$variantId}";
-
-                $stockErrors[] = [
-                    'index'        => $index,
-                    'variant_id'   => $variantId,
-                    'variant_name' => $variantName,
-                    'requested'    => $qty,
-                    'available'    => $available,
-                    'missing'      => $qty - $available,
-                ];
-            }
-        }
-
-        if (! empty($stockErrors)) {
-            return back()
-                ->withErrors([
-                    'stock'        => 'Some products do not have enough stock.',
-                    'stock_errors' => json_encode($stockErrors),
-                ])
-                ->withInput();
-        }
-
-        /* ═══════════════════════════════════════════════════════
-         |  ⭐ ۲. موجودی کافی است → ثبت فروش
-         ═══════════════════════════════════════════════════════ */
-
-        $sale = DB::transaction(function () use ($items, $data, $branchId) {
-            $payments = $data['payments'] ?? [];
-            unset($data['items'], $data['payments']);
-
-            /* ═══ Meta ═══ */
-            $data['branch_id']      = $branchId;
-            $data['created_by']     = Auth::id();
-            $data['invoice_number'] = Sale::generateInvoiceNumber();
-            $data['receipt_no']     = Sale::generateReceiptNumber();
-            $data['status']         = 'completed';
-            $data['payment_method'] = $data['payment_method'] ?? 'cash';
-            $data['sale_date']      = $data['sale_date'] ?? now()->toDateString();
-
-            /* ═══════════════════════════════════════════════════════
-             |  ⭐ Snapshot مشتری + قرض قبلی (با اعتبارسنجی سخت)
-             ═══════════════════════════════════════════════════════ */
-
-            $customer       = null;
-            $previousDueAfn = 0;
-
-            $customerIdInput = $data['customer_id'] ?? null;
-
-            if (! empty($customerIdInput) && is_numeric($customerIdInput)) {
-                $customer = Customer::find((int) $customerIdInput);
-
-                if ($customer) {
-                    $data['customer_id']             = $customer->id;
-                    $data['customer_name_snapshot']  = $customer->name;
-                    $data['customer_phone_snapshot'] = $customer->phone;
-
-                    // قرض قبلی مشتری
-                    $previousDueAfn = (float) $customer->current_due_afn;
-                } else {
-                    // مشتری پیدا نشد → پاک کن
-                    $data['customer_id']             = null;
-                    $data['customer_name_snapshot']  = null;
-                    $data['customer_phone_snapshot'] = null;
-                }
-            } else {
-                // Walk-in یا خالی
-                $data['customer_id']             = null;
-                $data['customer_name_snapshot']  = null;
-                $data['customer_phone_snapshot'] = null;
-            }
-
-            if (($data['payment_method'] ?? '') === 'credit' && ! $customer) {
-                throw \Illuminate\Validation\ValidationException::withMessages([
-                    'customer_id' => 'A customer is required when the sale is on credit.',
-                ]);
-            }
-
-            /* ═══ پیش‌واکشی variant ها ═══ */
-            $variantIds = collect($items)->pluck('variant_id')->unique()->all();
-            $variants   = ProductVariant::with([
-                'product:id,name',
-                'barcodes' => fn ($q) => $q->orderByDesc('is_primary'),
-            ])->whereIn('id', $variantIds)->get()->keyBy('id');
-
-            /* ═══════════════════════════════════════════════════════
-             |  ⭐ محاسبه اقلام — با round(2) دقیق
-             ═══════════════════════════════════════════════════════ */
-
-            $subtotalAfn  = 0.0;
-            $totalCostAfn = 0.0;
-            $lineData     = [];
-
-            foreach ($items as $item) {
-                $prepared = $this->prepareSaleLine($branchId, $item, $variants);
-
-                $subtotalAfn  = round($subtotalAfn + $prepared['line_subtotal_afn'], 2);
-                $totalCostAfn = round($totalCostAfn + $prepared['line_cost_afn'], 2);
-
-                $lineData[] = $prepared['line'];
-            }
-
-            /* ═══════════════════════════════════════════════════════
-             |  ⭐ Totals — با round(2)
-             ═══════════════════════════════════════════════════════ */
-
-            $discountAfn = round((float) ($data['discount_afn'] ?? 0), 2);
-
-            $data['subtotal_afn']     = $subtotalAfn;
-            $data['discount_afn']     = $discountAfn;
-            $data['total_afn']        = round($subtotalAfn - $discountAfn, 2);
-            $data['total_cost_afn']   = $totalCostAfn;
-            $data['total_profit_afn'] = round($data['total_afn'] - $totalCostAfn, 2);
-
-            /* ═══════════════════════════════════════════════════════
-             |  ⭐ محاسبه Due Flow — با round(2)
-             ═══════════════════════════════════════════════════════ */
-
-            $newSaleAmountAfn = round((float) $data['total_afn'], 2);
-            $grandTotalDueAfn = round($previousDueAfn + $newSaleAmountAfn, 2);
-
-            $data['previous_due_afn']    = $previousDueAfn;
-            $data['new_sale_amount_afn'] = $newSaleAmountAfn;
-            $data['grand_total_due_afn'] = $grandTotalDueAfn;
-
-            /* ═══ ساخت Sale ═══ */
-            $sale = Sale::create($data);
-
-            /* ═══════════════════════════════════════════════════════
-             |  ⭐ SaleItem + کاهش انبار + سود سرمایه‌گذار
-             ═══════════════════════════════════════════════════════ */
-
-            $totalInvestorProfit = 0.0;
-
-            foreach ($lineData as $line) {
-                $line['sale_id'] = $sale->id;
-                $saleItem = SaleItem::create($line);
-
-                $breakdown = $line['cost_breakdown'] ?? [];
-                $investorProfitForLine = 0.0;
-
-                foreach ($breakdown as $part) {
-                    $batch = ProductBatch::find($part['batch_id']);
-                    if (! $batch) continue;
-
-                    $take = (int) $part['qty'];
-
-                    /* ═══ سود سرمایه‌گذار ═══ */
-                    if ($batch->investor_id && (float) $batch->profit_per_unit_afn > 0) {
-                        InvestorProfitEntry::recordProfit(
-                            investorId:            $batch->investor_id,
-                            investmentId:          null,
-                            productAllocationId:   null,
-                            saleId:                $sale->id,
-                            saleItemId:            $saleItem->id,
-                            quantity:              $take,
-                            profitPerUnitAfn:      (float) $batch->profit_per_unit_afn,
-                            notes:                 "Profit from batch {$batch->batch_code}"
-                        );
-
-                        $investorProfitForLine = round(
-                            $investorProfitForLine + ((float) $batch->profit_per_unit_afn * $take),
-                            2
-                        );
-                    }
-
-                    /* ═══ کاهش انبار ═══ */
-                    $batch->reduceStock($take);
-
-                    Inventory::decrease(
-                        branchId:      $sale->branch_id,
-                        variantId:     $saleItem->variant_id,
-                        qty:           $take,
-                        type:          'sale',
-                        batchId:       $batch->id,
-                        referenceType: Sale::class,
-                        referenceId:   $sale->id,
-                        notes:         "Sold via {$sale->invoice_number}"
-                    );
-                }
-
-                $saleItem->update([
-                    'investor_profit_afn' => $investorProfitForLine,
-                ]);
-
-                $totalInvestorProfit = round($totalInvestorProfit + $investorProfitForLine, 2);
-            }
-
-            /* ═══════════════════════════════════════════════════════
-             |  ⭐ پرداخت‌ها — با round(2)
-             ═══════════════════════════════════════════════════════ */
-
-            $paidAfn    = 0.0;
-            $paymentIds = [];
-
-            foreach ($payments as $payment) {
-                $amountAfn = round((float) $payment['amount_afn'], 2);
-
-                if ($amountAfn <= 0) continue;
-
-                $salePayment = SalePayment::create([
-                    'sale_id'           => $sale->id,
-                    'customer_id'       => $sale->customer_id,
-                    'amount_afn'        => $amountAfn,
-                    'remaining_due_afn' => 0, // موقت — بعداً آپدیت می‌شود
-                    'payment_method'    => $payment['payment_method'],
-                    'reference_number'  => $payment['reference_number'] ?? null,
-                    'notes'             => $payment['notes'] ?? null,
-                    'paid_at'           => now(),
-                    'received_by'       => Auth::id(),
-                ]);
-
-                $paymentIds[] = $salePayment->id;
-                $paidAfn      = round($paidAfn + $amountAfn, 2);
-            }
-
-            /* ═══════════════════════════════════════════════════════
-             |  ⭐ محاسبه نهایی Due — با round(2)
-             ═══════════════════════════════════════════════════════ */
-
-            $remainingDueAfn = round(max(0, $grandTotalDueAfn - $paidAfn), 2);
-
-            $paymentStatus = 'unpaid';
-            if ($paidAfn >= $grandTotalDueAfn - 0.01) {
-                $paymentStatus = 'paid';
-            } elseif ($paidAfn > 0) {
-                $paymentStatus = 'partial';
-            }
-
-            /* ═══ مانده بعد از هر پرداخت، به ترتیب ═══ */
-            $runningDue = $grandTotalDueAfn;
-            foreach ($paymentIds as $paymentId) {
-                $createdPayment = SalePayment::find($paymentId);
-                if (! $createdPayment) {
-                    continue;
-                }
-                $runningDue = round(max(0, $runningDue - (float) $createdPayment->amount_afn), 2);
-                $createdPayment->update(['remaining_due_afn' => $runningDue]);
-            }
-
-            /* ═══════════════════════════════════════════════════════
-             |  ⭐ آپدیت نهایی Sale
-             ═══════════════════════════════════════════════════════ */
-
-            $sale->update([
-                'received_now_afn'          => $paidAfn,
-                'remaining_due_afn'         => $remainingDueAfn,
-                'due_date'                  => $remainingDueAfn > 0 ? $request->input('due_date') : null,
-                'paid_afn'                  => $paidAfn,
-                'due_afn'                   => $remainingDueAfn,
-                'payment_status'            => $paymentStatus,
-                'total_investor_profit_afn' => $totalInvestorProfit,
-                'store_profit_afn'          => round($sale->total_profit_afn - $totalInvestorProfit, 2),
-            ]);
-
-            /* ═══════════════════════════════════════════════════════
-             |  ⭐ آپدیت قرض مشتری + ledger
-             ═══════════════════════════════════════════════════════ */
-
-            if ($customer) {
-                $ledger = app(CustomerLedgerService::class);
-
-                // ثبت فروش در ledger
-                $ledger->recordSale($sale);
-
-                // ثبت هر پرداخت در ledger
-                foreach ($paymentIds as $paymentId) {
-                    $payment = SalePayment::find($paymentId);
-                    if ($payment) {
-                        $ledger->recordPayment($payment);
-                    }
-                }
-
-                // آپدیت customers.current_due_afn + last_sale_at
-                $customer->update([
-                    'current_due_afn' => $remainingDueAfn,
-                    'last_sale_at'    => now(),
-                ]);
-            }
-
-            return $sale;
-        });
-
-        try {
-            app(SaleNotifier::class)->notify($sale);
-        } catch (\Throwable $e) {
-            report($e);
-        }
+        $sale = $this->sales->createSale($request->validated(), $request->user());
 
         return redirect()
             ->route('sales.show', $sale)
@@ -587,7 +322,7 @@ class SaleController extends Controller
             $lineData     = [];
 
             foreach ($items as $item) {
-                $prepared = $this->prepareSaleLine($branchId, $item, $variants);
+                $prepared = $this->sales->prepareSaleLine($branchId, $item, $variants);
 
                 $subtotalAfn  = round($subtotalAfn + $prepared['line_subtotal_afn'], 2);
                 $totalCostAfn = round($totalCostAfn + $prepared['line_cost_afn'], 2);
@@ -664,69 +399,6 @@ class SaleController extends Controller
         return Inertia::render('sales/trash', ['sales' => $sales]);
     }
 
-    /**
-     * یک ردیف فروش را با snapshot، بچ FIFO و مبالغ ارزی (اگر بچ ارز داشته باشد) می‌سازد.
-     *
-     * @param  \Illuminate\Support\Collection<int, ProductVariant>  $variants
-     * @return array{line_subtotal_afn: float, line_cost_afn: float, line: array<string, mixed>}
-     */
-    private function prepareSaleLine(int $branchId, array $item, $variants): array
-    {
-        $variantId = (int) $item['variant_id'];
-        $qty       = (int) $item['quantity'];
-        $priceAfn  = round((float) $item['sale_price_afn'], 2);
-        $discAfn   = round((float) ($item['discount_afn'] ?? 0), 2);
-
-        $lineSubtotalAfn = round($priceAfn * $qty, 2);
-        $lineTotalAfn    = round($lineSubtotalAfn - $discAfn, 2);
-
-        $fifo        = ProductBatch::calculateFifoCost($branchId, $variantId, $qty);
-        $lineCostAfn = round((float) $fifo['cost_afn'], 2);
-        $breakdown   = $fifo['breakdown'];
-        $lineProfitAfn = round($lineTotalAfn - $lineCostAfn, 2);
-
-        $variant     = $variants->get($variantId);
-        $productName = null;
-        $barcode     = null;
-        $sku         = null;
-
-        if ($variant) {
-            $nameParts = array_values(array_filter([
-                trim((string) ($variant->product?->name ?? '')),
-                trim((string) ($variant->name ?? '')),
-            ], static fn (string $part) => $part !== ''));
-
-            $productName = $nameParts !== [] ? implode(' - ', $nameParts) : null;
-            $sku = $variant->sku ?: null;
-
-            $primaryBarcode = $variant->barcodes->firstWhere('is_primary', true)
-                           ?? $variant->barcodes->first();
-            $barcode = $primaryBarcode?->barcode;
-        }
-
-        $batchIds = collect($breakdown)->pluck('batch_id')->filter()->unique()->values();
-        $batchId  = $batchIds->count() === 1 ? (int) $batchIds->first() : null;
-
-        return [
-            'line_subtotal_afn' => $lineSubtotalAfn,
-            'line_cost_afn'     => $lineCostAfn,
-            'line'              => [
-                'variant_id'            => $variantId,
-                'batch_id'              => $batchId,
-                'product_name_snapshot' => $productName,
-                'sku_snapshot'          => $sku,
-                'barcode_snapshot'      => $barcode,
-                'quantity'              => $qty,
-                'cost_price_afn'        => round($lineCostAfn / max($qty, 1), 2),
-                'sale_price_afn'        => $priceAfn,
-                'discount_afn'          => $discAfn,
-                'line_total_afn'        => $lineTotalAfn,
-                'store_profit_afn'      => $lineProfitAfn,
-                'investor_profit_afn'   => 0,
-                'cost_breakdown'        => $breakdown,
-            ],
-        ];
-    }
 
     /* =========================================================
      |  LOOKUP BARCODE
@@ -828,86 +500,11 @@ class SaleController extends Controller
      |  ADD PAYMENT — پرداخت مرحله‌ای قرض
      ========================================================= */
 
-    public function addPayment(Request $request, Sale $sale): RedirectResponse
+    public function addPayment(AddSalePaymentRequest $request, Sale $sale): RedirectResponse
     {
-        $validated = $request->validate([
-            'amount_afn'       => ['required', 'numeric', 'min:0.01'],
-            'payment_method'   => ['required', 'in:cash,card,bank,mobile,credit,other'],
-            'reference_number' => ['nullable', 'string', 'max:255'],
-            'notes'            => ['nullable', 'string'],
-        ]);
+        $this->authorize('create', Sale::class);
 
-        $receipt = DB::transaction(function () use ($validated, $sale) {
-            $amountAfn = round((float) $validated['amount_afn'], 2);
-
-            $customer = $sale->customer_id
-                ? Customer::whereKey($sale->customer_id)->lockForUpdate()->first()
-                : null;
-
-            $accountDue = $customer
-                ? round((float) $customer->current_due_afn, 2)
-                : round((float) $sale->remaining_due_afn, 2);
-
-            if ($amountAfn > $accountDue + 0.01) {
-                throw \Illuminate\Validation\ValidationException::withMessages([
-                    'amount_afn' => 'The payment is larger than the current due.',
-                ]);
-            }
-
-            $newCustomerDue = round(max(0, $accountDue - $amountAfn), 2);
-            $newSaleRemaining = round(max(0, (float) $sale->remaining_due_afn - $amountAfn), 2);
-            $balanceAfter = $customer ? $newCustomerDue : $newSaleRemaining;
-
-            $salePayment = SalePayment::create([
-                'sale_id'           => $sale->id,
-                'customer_id'       => $sale->customer_id,
-                'amount_afn'        => $amountAfn,
-                'remaining_due_afn' => $balanceAfter,
-                'payment_method'    => $validated['payment_method'],
-                'reference_number'  => $validated['reference_number'] ?? null,
-                'notes'             => $validated['notes'] ?? null,
-                'paid_at'           => now(),
-                'received_by'       => Auth::id(),
-            ]);
-
-            $newPaidAfn = round((float) $sale->paid_afn + $amountAfn, 2);
-            $paymentStatus = $newSaleRemaining <= 0.01 ? 'paid' : 'partial';
-
-            $sale->update([
-                'paid_afn'          => $newPaidAfn,
-                'due_afn'           => $newSaleRemaining,
-                'remaining_due_afn' => $newSaleRemaining,
-                'payment_status'    => $paymentStatus,
-            ]);
-
-            if ($customer) {
-                app(CustomerLedgerService::class)->recordPayment($salePayment);
-
-                $customer->update([
-                    'current_due_afn' => $newCustomerDue,
-                ]);
-
-                $latest = $customer->sales()->notTrashed()->latest('id')->first();
-                if ($latest && $latest->id !== $sale->id) {
-                    $latest->update([
-                        'remaining_due_afn' => $newCustomerDue,
-                        'due_afn'           => $newCustomerDue,
-                        'payment_status'    => $newCustomerDue <= 0.01 ? 'paid' : 'partial',
-                    ]);
-                }
-            }
-
-            return Receipt::create([
-                'customer_id'       => $sale->customer_id,
-                'sale_id'           => $sale->id,
-                'sale_payment_id'   => $salePayment->id,
-                'receipt_number'    => Receipt::generateReceiptNumber(),
-                'amount_afn'        => $amountAfn,
-                'remaining_due_afn' => $balanceAfter,
-                'receipt_type'      => 'payment_receipt',
-                'created_by'        => Auth::id(),
-            ]);
-        });
+        $receipt = $this->sales->addPayment($sale, $request->validated(), $request->user());
 
         return redirect()
             ->route('receipts.print', $receipt)

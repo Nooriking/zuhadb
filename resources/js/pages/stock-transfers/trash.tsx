@@ -1,6 +1,7 @@
 // resources/js/pages/stock-transfers/trash.tsx
 
 import AppLayout from '@/layouts/app-layout';
+import { forceDeleteItem, restoreItem } from '@/lib/trash-actions';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
 
@@ -38,15 +39,6 @@ const formatDate = (date: string | null) => {
 };
 
 export default function StockTransfersTrash({ transfers }: Props) {
-    const handleRestore = (transfer: Transfer) => {
-        if (!confirm(`Restore "${transfer.transfer_number}"?`)) return;
-        router.post(`/stock-transfers/${transfer.id}/restore`, {}, { preserveScroll: true });
-    };
-
-    const handleForceDelete = (transfer: Transfer) => {
-        if (!confirm(`Permanently delete "${transfer.transfer_number}"? This cannot be undone.`)) return;
-        router.delete(`/stock-transfers/${transfer.id}/force-delete`, { preserveScroll: true });
-    };
 
     const handlePageChange = (url: string | null) => {
         if (url) router.get(url, {}, { preserveState: true, preserveScroll: true });
@@ -106,13 +98,13 @@ export default function StockTransfersTrash({ transfers }: Props) {
                                         <td className="px-4 py-3">
                                             <div className="flex items-center justify-center gap-3">
                                                 <button
-                                                    onClick={() => handleRestore(transfer)}
+                                                    onClick={() => void restoreItem(transfer.transfer_number, `/stock-transfers/${transfer.id}/restore`)}
                                                     className="text-xs font-semibold text-green-600 hover:text-green-800"
                                                 >
                                                     Restore
                                                 </button>
                                                 <button
-                                                    onClick={() => handleForceDelete(transfer)}
+                                                    onClick={() => void forceDeleteItem(transfer.transfer_number, `/stock-transfers/${transfer.id}/force-delete`)}
                                                     className="text-xs font-semibold text-red-600 hover:text-red-800"
                                                 >
                                                     Delete Forever

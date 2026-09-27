@@ -1,6 +1,7 @@
 // resources/js/pages/investments/trash.tsx
 
 import AppLayout from '@/layouts/app-layout';
+import { forceDeleteItem, restoreItem } from '@/lib/trash-actions';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
 
@@ -44,15 +45,6 @@ const formatDate = (date: string | null) => {
 };
 
 export default function InvestmentsTrash({ investments }: Props) {
-    const handleRestore = (investment: Investment) => {
-        if (!confirm(`Restore "${investment.investment_number}"?`)) return;
-        router.post(`/investments/${investment.id}/restore`, {}, { preserveScroll: true });
-    };
-
-    const handleForceDelete = (investment: Investment) => {
-        if (!confirm(`Permanently delete "${investment.investment_number}"? This cannot be undone.`)) return;
-        router.delete(`/investments/${investment.id}/force-delete`, { preserveScroll: true });
-    };
 
     const handlePageChange = (url: string | null) => {
         if (url) router.get(url, {}, { preserveState: true, preserveScroll: true });
@@ -114,13 +106,13 @@ export default function InvestmentsTrash({ investments }: Props) {
                                         <td className="px-4 py-3">
                                             <div className="flex items-center justify-center gap-3">
                                                 <button
-                                                    onClick={() => handleRestore(investment)}
+                                                    onClick={() => void restoreItem(investment.investment_number, `/investments/${investment.id}/restore`)}
                                                     className="text-xs font-semibold text-green-600 hover:text-green-800"
                                                 >
                                                     Restore
                                                 </button>
                                                 <button
-                                                    onClick={() => handleForceDelete(investment)}
+                                                    onClick={() => void forceDeleteItem(investment.investment_number, `/investments/${investment.id}/force-delete`)}
                                                     className="text-xs font-semibold text-red-600 hover:text-red-800"
                                                 >
                                                     Delete Forever

@@ -8,11 +8,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
+import { softDeleteItem } from '@/lib/trash-actions';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router, usePage } from '@inertiajs/react';
 import { AlertTriangle, Barcode as BarcodeIcon, Calendar, Package, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
-import Swal from 'sweetalert2';
 
 /* ═══════════════════════════════════════════════════════
  |  Types
@@ -71,11 +71,6 @@ interface Props {
     };
     brands: Brand[];
     monthlyRates?: { year: number; month: number; average_rate: string; days: number }[];
-    supplierCredits?: {
-        total: number;
-        suppliers: { id: number | null; supplier: string; amount: number; count: number }[];
-        items: { id: number; name: string; supplier: string | null; amount: number; date: string | null; invoice: string | null }[];
-    };
     filters: {
         search: string | null;
         status: string | null;
@@ -117,7 +112,7 @@ const LOW_STOCK_THRESHOLD = 5;
  |  Component
  ═══════════════════════════════════════════════════════ */
 
-export default function ProductsIndex({ products, brands, filters, monthlyRates = [], supplierCredits }: Props) {
+export default function ProductsIndex({ products, brands, filters, monthlyRates = [] }: Props) {
     const { toast } = useToast();
     const page = usePage().props as {
         access?: { is_super_admin?: boolean };
@@ -129,7 +124,6 @@ export default function ProductsIndex({ products, brands, filters, monthlyRates 
     const canView = allow('products.view');
     const canEdit = allow('products.update');
     const canDelete = allow('products.delete');
-    const money = (value: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value || 0);
     const [search, setSearch] = useState(filters.search || '');
     const [brandFilter, setBrandFilter] = useState(filters.brand_id || 'all');
     const [genderFilter, setGenderFilter] = useState(filters.gender || 'all');
@@ -166,25 +160,7 @@ export default function ProductsIndex({ products, brands, filters, monthlyRates 
     };
 
     const confirmDelete = async (product: Product) => {
-        const result = await Swal.fire({
-            icon: 'warning',
-            title: 'Are you sure?',
-            html: `Product <strong>${product.name || `#${product.id}`}</strong> and all its variants will be moved to trash.`,
-            showCancelButton: true,
-            confirmButtonText: 'Yes, move to trash',
-            confirmButtonColor: '#dc2626',
-            cancelButtonText: 'Cancel',
-            cancelButtonColor: '#6b7280',
-            reverseButtons: true,
-        });
-
-        if (!result.isConfirmed) return;
-
-        router.delete(`/products/${product.id}`, {
-            preserveScroll: true,
-            onSuccess: () => toast({ title: 'Moved to Trash', description: 'Product moved to trash.' }),
-            onError: () => toast({ title: 'Error', description: 'Cannot delete.', variant: 'destructive' }),
-        });
+        await softDeleteItem(product.name || `#${product.id}`, `/products/${product.id}`);
     };
 
     const handlePageChange = (url: string | null) => {
@@ -333,33 +309,6 @@ export default function ProductsIndex({ products, brands, filters, monthlyRates 
                     </div>
                 )}
 
-                <div className="rounded-lg border border-amber-300 bg-amber-50 p-4">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <p className="text-sm font-semibold text-amber-900">Supplier balance</p>
-                            <p className="text-xs text-amber-800">Bills taken from suppliers that are not fully paid.</p>
-                        </div>
-                        <p className="font-mono text-2xl font-bold text-amber-900">{money(supplierCredits?.total || 0)} AFN</p>
-                    </div>
-                    {(supplierCredits?.suppliers.length || 0) > 0 && (
-                        <div className="mt-3 space-y-1 text-sm">
-                            {supplierCredits?.suppliers.map((row) => (
-                                <div key={row.supplier} className="flex items-center justify-between border-t border-amber-200 pt-1">
-                                    {row.id ? (
-                                        <Link href={`/suppliers/${row.id}`} className="hover:underline">
-                                            {row.supplier}
-                                            <span className="text-amber-800"> · {row.count} bills</span>
-                                        </Link>
-                                    ) : (
-                                        <span>{row.supplier}</span>
-                                    )}
-                                    <span className="font-mono font-semibold">{money(row.amount)} AFN</span>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-
                 {/* ═══════════ Table ═══════════ */}
                 <div className="overflow-x-auto rounded-md border [&_td:not(:last-child)]:whitespace-normal [&_th:not(:last-child)]:whitespace-normal">
                     <Table className="table-fixed">
@@ -370,7 +319,7 @@ export default function ProductsIndex({ products, brands, filters, monthlyRates 
                                 <TableHead className="w-[12%]">Brand</TableHead>
                                 <TableHead className="w-[9%]">Gender</TableHead>
                                 <TableHead>Variants</TableHead>
-                                <TableHead>USD to AFN</TableHead>
+                                <TableHead className="text-center">Avg USD→AFN</TableHead>
                                 <TableHead className="text-center">Barcodes</TableHead>
                                 <TableHead className="text-right">Avg. Sale Price</TableHead>
                                 <TableHead className="text-center">Stock</TableHead>
@@ -467,8 +416,15 @@ export default function ProductsIndex({ products, brands, filters, monthlyRates 
                                                 </div>
                                             </TableCell>
 
-                                            <TableCell className="font-mono text-sm">
-                                                {product.exchange_rate ? product.exchange_rate : '—'}
+                                            <TableCell className="text-center font-mono text-sm">
+                                                {product.exchange_rate ? (
+                                                    <div>
+                                                        <div className="font-semibold">{product.exchange_rate}</div>
+                                                        <div className="text-muted-foreground text-[10px]">avg</div>
+                                                    </div>
+                                                ) : (
+                                                    '—'
+                                                )}
                                             </TableCell>
 
                                             {/* Barcodes Count */}

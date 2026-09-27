@@ -1,6 +1,5 @@
-// Components
 import { Head, useForm } from '@inertiajs/react';
-import { LoaderCircle } from 'lucide-react';
+import { LoaderCircle, Mail } from 'lucide-react';
 import { FormEventHandler } from 'react';
 
 import InputError from '@/components/input-error';
@@ -10,6 +9,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import AuthLayout from '@/layouts/auth-layout';
 
+const fieldClass =
+    'h-11 border-[#D4AF37]/20 bg-[#0A0A0A] pl-10 text-white placeholder:text-neutral-600 focus-visible:border-[#D4AF37] focus-visible:ring-[#D4AF37]/25';
+
 export default function ForgotPassword({ status }: { status?: string }) {
     const { data, setData, post, processing, errors } = useForm({
         email: '',
@@ -17,20 +19,26 @@ export default function ForgotPassword({ status }: { status?: string }) {
 
     const submit: FormEventHandler = (e) => {
         e.preventDefault();
-
         post(route('password.email'));
     };
 
     return (
-            <AuthLayout title="Forgot password" description="Enter your email. A 6-digit code will be sent to that inbox.">
+        <AuthLayout title="Forgot password" description="We will email a 6-digit reset code to your account inbox.">
             <Head title="Forgot password" />
 
-            {status && <div className="mb-4 text-center text-sm font-medium text-green-600">{status}</div>}
+            {status && (
+                <div className="mb-5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5 text-center text-sm text-emerald-300">
+                    {status}
+                </div>
+            )}
 
-            <div className="space-y-6">
-                <form onSubmit={submit}>
-                    <div className="grid gap-2">
-                        <Label htmlFor="email">Email address</Label>
+            <form onSubmit={submit} className="space-y-5">
+                <div className="grid gap-2">
+                    <Label htmlFor="email" className="text-neutral-300">
+                        Email address
+                    </Label>
+                    <div className="relative">
+                        <Mail className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[#D4AF37]/70" />
                         <Input
                             id="email"
                             type="email"
@@ -40,23 +48,26 @@ export default function ForgotPassword({ status }: { status?: string }) {
                             autoFocus
                             onChange={(e) => setData('email', e.target.value)}
                             placeholder="email@example.com"
+                            className={fieldClass}
                         />
-
-                        <InputError message={errors.email} />
                     </div>
-
-                    <div className="my-6 flex items-center justify-start">
-                        <Button className="w-full" disabled={processing}>
-                            {processing && <LoaderCircle className="h-4 w-4 animate-spin" />}
-                            Email a 6-digit code
-                        </Button>
-                    </div>
-                </form>
-
-                <div className="text-muted-foreground space-x-1 text-center text-sm">
-                    <span>Or, return to</span>
-                    <TextLink href={route('login')}>log in</TextLink>
+                    <InputError message={errors.email} />
                 </div>
+
+                <Button
+                    className="h-11 w-full gap-2 bg-gradient-to-r from-[#D4AF37] to-[#B8860B] font-semibold text-black hover:from-[#E0BD4A] hover:to-[#C9961A]"
+                    disabled={processing}
+                >
+                    {processing && <LoaderCircle className="h-4 w-4 animate-spin" />}
+                    Email a 6-digit code
+                </Button>
+            </form>
+
+            <div className="mt-6 space-x-1 text-center text-sm text-neutral-400">
+                <span>Or return to</span>
+                <TextLink href={route('login')} className="text-[#D4AF37] hover:text-[#F0D78C]">
+                    log in
+                </TextLink>
             </div>
         </AuthLayout>
     );

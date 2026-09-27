@@ -3,12 +3,12 @@
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { useToast } from '@/hooks/use-toast';
+
 import AppLayout from '@/layouts/app-layout';
+import { forceDeleteItem, restoreItem } from '@/lib/trash-actions';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link, router } from '@inertiajs/react';
-import { ArrowLeft, Building2, RotateCcw, Shield, Trash2, Users, X } from 'lucide-react';
-import { useState } from 'react';
+import { Head, Link } from '@inertiajs/react';
+import { ArrowLeft, Building2, RotateCcw, Shield, Trash2, Users } from 'lucide-react';
 
 interface User {
     id: number;
@@ -42,37 +42,7 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Trash', href: '/users/trash' },
 ];
 
-export default function UsersTrash({ users, roles }: Props) {
-    const { toast } = useToast();
-    const [userToDelete, setUserToDelete] = useState<User | null>(null);
-
-    const handleRestore = (user: User) => {
-        router.post(
-            `/users/${user.id}/restore`,
-            {},
-            {
-                preserveScroll: true,
-                onSuccess: () => toast({ title: 'Restored', description: `User ${user.name} was restored.` }),
-                onError: () => toast({ title: 'Error', description: 'Failed to restore.', variant: 'destructive' }),
-            },
-        );
-    };
-
-    const confirmForceDelete = () => {
-        if (!userToDelete) return;
-
-        router.delete(`/users/${userToDelete.id}/force-delete`, {
-            preserveScroll: true,
-            onSuccess: () => {
-                toast({ title: 'Deleted', description: `User ${userToDelete.name} was permanently deleted.` });
-                setUserToDelete(null);
-            },
-            onError: () => {
-                toast({ title: 'Error', description: 'Failed to delete.', variant: 'destructive' });
-                setUserToDelete(null);
-            },
-        });
-    };
+export default function UsersTrash({ users, roles }: Props) {
 
     const getStatusBadge = (status: string) => {
         const map = {
@@ -156,7 +126,7 @@ export default function UsersTrash({ users, roles }: Props) {
                                         <TableCell>{getStatusBadge(user.status)}</TableCell>
                                         <TableCell>
                                             <div className="flex items-center justify-center gap-1">
-                                                <Button variant="ghost" size="icon" title="Restore" onClick={() => handleRestore(user)}>
+                                                <Button variant="ghost" size="icon" title="Restore" onClick={() => void restoreItem(user.name, `/users/${user.id}/restore`)}>
                                                     <RotateCcw className="h-4 w-4 text-green-600" />
                                                 </Button>
                                                 <Button
@@ -164,7 +134,7 @@ export default function UsersTrash({ users, roles }: Props) {
                                                     size="icon"
                                                     title="Delete Forever"
                                                     className="text-destructive hover:text-destructive"
-                                                    onClick={() => setUserToDelete(user)}
+                                                    onClick={() => void forceDeleteItem(user.name, `/users/${user.id}/force-delete`)}
                                                 >
                                                     <Trash2 className="h-4 w-4" />
                                                 </Button>
@@ -179,39 +149,7 @@ export default function UsersTrash({ users, roles }: Props) {
             </div>
 
             {/* Force Delete Confirmation Modal */}
-            {userToDelete && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setUserToDelete(null)}>
-                    <div className="bg-background w-full max-w-md rounded-lg border shadow-lg" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-start gap-4 p-6">
-                            <div className="bg-destructive/10 text-destructive flex h-10 w-10 shrink-0 items-center justify-center rounded-full">
-                                <Trash2 className="h-5 w-5" />
-                            </div>
-                            <div className="flex-1">
-                                <h3 className="text-lg font-semibold">Delete forever?</h3>
-                                <p className="text-muted-foreground mt-1 text-sm">
-                                    User <strong>{userToDelete.name}</strong> will be <strong>permanently deleted</strong>. This action cannot be
-                                    undone.
-                                </p>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={() => setUserToDelete(null)}
-                                className="text-muted-foreground hover:text-foreground transition-colors"
-                            >
-                                <X className="h-5 w-5" />
-                            </button>
-                        </div>
-                        <div className="flex justify-end gap-2 border-t px-6 py-4">
-                            <Button variant="outline" onClick={() => setUserToDelete(null)}>
-                                Cancel
-                            </Button>
-                            <Button onClick={confirmForceDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                                Delete Forever
-                            </Button>
-                        </div>
-                    </div>
-                </div>
-            )}
+
         </AppLayout>
     );
 }

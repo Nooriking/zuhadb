@@ -89,9 +89,11 @@ return [
 
         'salesperson' => [
             'dashboard',
+            'products',
             'customers',
             'sales',
             'sale-returns',
+            'inventory',
         ],
 
         'investor' => [
@@ -177,14 +179,17 @@ return [
 
         'cashier' => [
             'sales.view', 'sales.create', 'sales.update',
-            'customers.view', 'customers.create',
+            'sale-returns.view', 'sale-returns.create',
+            'customers.view', 'customers.create', 'customers.update',
             'inventory.view',
         ],
 
-        // ⭐ فروشنده — فقط می‌تواند فروش ایجاد کند و ببیند
         'salesperson' => [
-            'sales.view', 'sales.create',
-            'customers.view', 'customers.create',
+            'sales.view', 'sales.create', 'sales.update',
+            'sale-returns.view', 'sale-returns.create',
+            'customers.view', 'customers.create', 'customers.update',
+            'products.view', 'products.create', 'products.update', 'products.delete',
+            'inventory.view',
         ],
 
         'investor' => [

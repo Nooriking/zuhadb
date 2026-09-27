@@ -198,7 +198,7 @@ export default function CompaniesEdit({ company, errors: initialErrors }: Props)
                                     <Label htmlFor="logo">Logo</Label>
                                     {company.logo && (
                                         <div className="mb-2">
-                                            <img
+                                            <img loading="lazy" decoding="async"
                                                 src={`/storage/${company.logo}`}
                                                 alt={company.name}
                                                 className="h-16 w-16 rounded-md border object-contain"

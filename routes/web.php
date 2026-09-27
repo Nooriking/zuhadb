@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\LicenseController;
 use App\Http\Controllers\AppSearchController;
 use App\Http\Controllers\AppSettingController;
 use App\Http\Controllers\BrandController;
@@ -10,6 +11,7 @@ use App\Http\Controllers\AccountantDashboardController;
 use App\Http\Controllers\BranchDashboardController;
 use App\Http\Controllers\CashierDashboardController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\DatabaseBackupController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\StockDashboardController;
 use App\Http\Controllers\ExpenseController;
@@ -42,6 +44,16 @@ use Illuminate\Support\Facades\Route;
 */
 
 Route::get('/', [SplashController::class, 'index'])->name('splash');
+
+/*
+|--------------------------------------------------------------------------
+| License activation (public — machine lock)
+|--------------------------------------------------------------------------
+*/
+Route::get('/license', [LicenseController::class, 'show'])->name('license.show');
+Route::post('/license', [LicenseController::class, 'activate'])
+    ->middleware('throttle:10,1')
+    ->name('license.activate');
 
 /*
 |--------------------------------------------------------------------------
@@ -164,6 +176,22 @@ Route::middleware(['auth', 'verified', 'lock.records'])->group(function () {
         Route::put('/{appSetting}', [AppSettingController::class, 'update'])->name('update');
         Route::delete('/{appSetting}', [AppSettingController::class, 'destroy'])->name('destroy');
     });
+
+    /* ═══════════════════════════════════════════════════════
+     |  DATABASE BACKUPS (create / download / restore upload)
+     ═══════════════════════════════════════════════════════ */
+    Route::middleware(['role:super_admin,admin', 'module:settings'])
+        ->prefix('backups')->name('backups.')->group(function () {
+            Route::get('/', [DatabaseBackupController::class, 'index'])->name('index');
+            Route::post('/', [DatabaseBackupController::class, 'store'])->name('store');
+            Route::get('/{filename}/download', [DatabaseBackupController::class, 'download'])
+                ->where('filename', '.*\.sql')
+                ->name('download');
+            Route::post('/restore', [DatabaseBackupController::class, 'restore'])->name('restore');
+            Route::delete('/{filename}', [DatabaseBackupController::class, 'destroy'])
+                ->where('filename', '.*\.sql')
+                ->name('destroy');
+        });
 
     /* ═══════════════════════════════════════════════════════
      |  BRANDS
@@ -337,7 +365,7 @@ Route::middleware(['auth', 'verified', 'lock.records'])->group(function () {
     /* ═══════════════════════════════════════════════════════
      |  INVENTORY
      ═══════════════════════════════════════════════════════ */
-    Route::middleware(['role:admin,branch_manager,stock_keeper,cashier', 'module:inventory'])
+    Route::middleware(['role:admin,branch_manager,stock_keeper,cashier,salesperson', 'module:inventory'])
         ->prefix('inventory')->name('inventory.')->group(function () {
 
         Route::get('/', [InventoryController::class, 'index'])
@@ -445,6 +473,8 @@ Route::middleware(['auth', 'verified', 'lock.records'])->group(function () {
             ->middleware('permission:sale-returns.view')->name('index');
         Route::get('/create', [SaleReturnController::class, 'create'])
             ->middleware('permission:sale-returns.create')->name('create');
+        Route::get('/lookup-barcode', [SaleReturnController::class, 'lookupBarcode'])
+            ->middleware('permission:sale-returns.create')->name('lookupBarcode');
         Route::post('/', [SaleReturnController::class, 'store'])
             ->middleware('permission:sale-returns.create')->name('store');
 

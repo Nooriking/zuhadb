@@ -39,8 +39,10 @@ class PasswordResetLinkController extends Controller
             'email' => 'required|email',
         ]);
 
-        $email = $request->string('email')->toString();
-        $user = User::query()->where('email', $email)->first();
+        $email = Str::lower(trim($request->string('email')->toString()));
+        $user = User::query()
+            ->whereRaw('LOWER(email) = ?', [$email])
+            ->first();
 
         if ($user) {
             $code = (string) random_int(100000, 999999);
@@ -56,13 +58,13 @@ class PasswordResetLinkController extends Controller
                 report($e);
 
                 return back()->withErrors([
-                    'email' => 'The reset code could not be sent. Check the mail settings.',
+                    'email' => 'The reset code could not be sent. Check the mail settings (Gmail App Password in .env).',
                 ]);
             }
         }
 
         return redirect()
-            ->route('password.code', ['email' => $email])
+            ->route('password.code', ['email' => $user?->email ?? $email])
             ->with('status', 'If this email has an account, a 6-digit code was sent to it.');
     }
 
@@ -82,9 +84,16 @@ class PasswordResetLinkController extends Controller
             'password' => ['required', 'confirmed', Rules\Password::defaults()],
         ]);
 
-        $row = DB::table('password_reset_tokens')->where('email', $data['email'])->first();
+        $email = Str::lower(trim($data['email']));
+        $user = User::query()
+            ->whereRaw('LOWER(email) = ?', [$email])
+            ->first();
+
+        $row = $user
+            ? DB::table('password_reset_tokens')->where('email', $user->email)->first()
+            : null;
+
         $fresh = $row && $row->created_at && now()->subMinutes(10)->lte($row->created_at);
-        $user = User::query()->where('email', $data['email'])->first();
 
         if (! $user || ! $row || ! $fresh || ! Hash::check($data['code'], $row->token)) {
             return back()->withErrors(['code' => 'This code is invalid or expired.']);
@@ -95,7 +104,7 @@ class PasswordResetLinkController extends Controller
             'remember_token' => Str::random(60),
         ])->save();
 
-        DB::table('password_reset_tokens')->where('email', $data['email'])->delete();
+        DB::table('password_reset_tokens')->where('email', $user->email)->delete();
         event(new PasswordReset($user));
 
         return to_route('login')->with('status', 'Your password has been reset.');

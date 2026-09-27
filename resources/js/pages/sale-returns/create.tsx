@@ -12,8 +12,8 @@ import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
-import { AlertCircle, AlertTriangle, ArrowLeft, Package, RotateCcw, Save } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { AlertCircle, AlertTriangle, ArrowLeft, Package, RotateCcw, Save, ScanBarcode } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 /* ═══════════════════════════════════════════════════════
  |  Types
@@ -38,6 +38,7 @@ interface SaleItemInfo {
     concentration: string | null;
     batch_code: string | null;
     batch_id: number | null;
+    barcode_snapshot: string | null;
     quantity_sold: number;
     already_returned: number;
     max_returnable: number;
@@ -57,6 +58,7 @@ interface Props {
     sales: SaleOption[];
     selectedSale: SelectedSaleInfo | null;
     saleItems: SaleItemInfo[];
+    scanBarcode?: string | null;
     errors?: Record<string, string>;
 }
 
@@ -83,8 +85,9 @@ const CONDITION_OPTIONS = [
  |  Component
  ═══════════════════════════════════════════════════════ */
 
-export default function SaleReturnsCreate({ sales, selectedSale, saleItems, errors: initialErrors }: Props) {
+export default function SaleReturnsCreate({ sales, selectedSale, saleItems, scanBarcode = null, errors: initialErrors }: Props) {
     const { toast } = useToast();
+    const barcodeInputRef = useRef<HTMLInputElement>(null);
 
     const [form, setForm] = useState({
         sale_id: selectedSale ? String(selectedSale.id) : '',
@@ -93,22 +96,113 @@ export default function SaleReturnsCreate({ sales, selectedSale, saleItems, erro
         status: 'draft' as 'draft' | 'completed' | 'cancelled',
     });
 
-    const [items, setItems] = useState<Record<number, { quantity: string; condition: string; reason: string; expense_amount: string }>>(
-        Object.fromEntries(saleItems.map((it) => [it.id, { quantity: '', condition: 'good', reason: '', expense_amount: '' }])),
-    );
+    const [barcode, setBarcode] = useState(scanBarcode || '');
+    const [barcodeLoading, setBarcodeLoading] = useState(false);
+    const [barcodeError, setBarcodeError] = useState('');
+    const [matchedSaleItemId, setMatchedSaleItemId] = useState<number | null>(null);
+
+    const [items, setItems] = useState<Record<number, { quantity: string; condition: string; reason: string; expense_amount: string }>>({});
 
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
     const [loading, setLoading] = useState(false);
 
+    useEffect(() => {
+        setForm((prev) => ({ ...prev, sale_id: selectedSale ? String(selectedSale.id) : prev.sale_id }));
+    }, [selectedSale?.id]);
+
+    useEffect(() => {
+        const next: Record<number, { quantity: string; condition: string; reason: string; expense_amount: string }> = {};
+        let matchedId: number | null = null;
+
+        saleItems.forEach((item) => {
+            const isExact =
+                !!scanBarcode &&
+                !!item.barcode_snapshot &&
+                item.barcode_snapshot === scanBarcode &&
+                item.max_returnable > 0;
+
+            if (isExact && matchedId === null) {
+                matchedId = item.id;
+            }
+
+            next[item.id] = {
+                quantity: isExact ? '1' : '',
+                condition: 'good',
+                reason: '',
+                expense_amount: '',
+            };
+        });
+
+        if (matchedId === null && scanBarcode) {
+            const fallback = saleItems.find((item) => item.max_returnable > 0);
+            if (fallback) {
+                matchedId = fallback.id;
+                next[fallback.id] = { ...next[fallback.id], quantity: '1' };
+            }
+        }
+
+        setItems(next);
+        setMatchedSaleItemId(matchedId);
+        if (scanBarcode) {
+            setBarcode(scanBarcode);
+        }
+    }, [saleItems, scanBarcode]);
+
     const handleSaleChange = (saleId: string) => {
         setForm({ ...form, sale_id: saleId });
-        router.get('/sale-returns/create', { sale_id: saleId }, { preserveState: true, preserveScroll: true });
+        setBarcodeError('');
+        setMatchedSaleItemId(null);
+        router.get('/sale-returns/create', { sale_id: saleId }, { preserveState: false, preserveScroll: true });
+    };
+
+    const lookupBarcode = async () => {
+        const code = barcode.trim();
+        if (!code || barcodeLoading) return;
+
+        setBarcodeLoading(true);
+        setBarcodeError('');
+
+        try {
+            const response = await fetch(`/sale-returns/lookup-barcode?barcode=${encodeURIComponent(code)}`, {
+                headers: { Accept: 'application/json' },
+            });
+            const data = await response.json();
+
+            if (!data.found) {
+                setBarcodeError(data.message || 'Barcode not found.');
+                toast({ title: 'Not found', description: data.message || 'Barcode not found.', variant: 'destructive' });
+                return;
+            }
+
+            toast({
+                title: 'Sale found',
+                description: `${data.invoice_number}${data.product ? ` · ${data.product}` : ''}`,
+            });
+
+            router.get(
+                '/sale-returns/create',
+                { sale_id: data.sale_id, barcode: data.barcode },
+                { preserveState: false, preserveScroll: true },
+            );
+        } catch {
+            setBarcodeError('Could not look up this barcode.');
+            toast({ title: 'Error', description: 'Could not look up this barcode.', variant: 'destructive' });
+        } finally {
+            setBarcodeLoading(false);
+            barcodeInputRef.current?.select();
+        }
+    };
+
+    const handleBarcodeKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        void lookupBarcode();
     };
 
     const updateItem = (saleItemId: number, field: 'quantity' | 'condition' | 'reason' | 'expense_amount', value: string) => {
         setItems((prev) => ({
             ...prev,
-            [saleItemId]: { ...prev[saleItemId], [field]: value },
+            [saleItemId]: { ...(prev[saleItemId] || { quantity: '', condition: 'good', reason: '', expense_amount: '' }), [field]: value },
         }));
     };
 
@@ -202,6 +296,33 @@ export default function SaleReturnsCreate({ sales, selectedSale, saleItems, erro
                         <CardDescription>Select the original sale.</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
+                        <div className="space-y-2 rounded-lg border border-primary/40 bg-primary/5 p-4">
+                            <Label className="flex items-center gap-2 text-base font-semibold">
+                                <ScanBarcode className="h-5 w-5" /> Scan barcode
+                            </Label>
+                            <p className="text-muted-foreground text-sm">
+                                Scan or type the product barcode. The matching completed sale opens for return.
+                            </p>
+                            <div className="flex flex-col gap-2 sm:flex-row">
+                                <Input
+                                    ref={barcodeInputRef}
+                                    value={barcode}
+                                    onChange={(e) => {
+                                        setBarcode(e.target.value);
+                                        setBarcodeError('');
+                                    }}
+                                    onKeyDown={handleBarcodeKeyDown}
+                                    placeholder="Scan barcode..."
+                                    autoFocus
+                                    className="h-12 font-mono text-base"
+                                />
+                                <Button type="button" className="h-12 gap-2 sm:w-36" disabled={barcodeLoading || !barcode.trim()} onClick={() => void lookupBarcode()}>
+                                    {barcodeLoading ? 'Looking...' : 'Find sale'}
+                                </Button>
+                            </div>
+                            {barcodeError && <p className="text-destructive text-sm">{barcodeError}</p>}
+                        </div>
+
                         <div className="space-y-2">
                             <Label>
                                 Sale <span className="text-destructive">*</span>
@@ -280,9 +401,13 @@ export default function SaleReturnsCreate({ sales, selectedSale, saleItems, erro
                                             const qty = parseFloat(entry.quantity || '0') || 0;
                                             const lineTotal = qty * item.sale_price_afn;
                                             const disabled = item.max_returnable <= 0;
+                                            const isMatched = matchedSaleItemId === item.id;
 
                                             return (
-                                                <tr key={item.id} className={`border-b ${disabled ? 'opacity-50' : ''}`}>
+                                                <tr
+                                                    key={item.id}
+                                                    className={`border-b ${disabled ? 'opacity-50' : ''} ${isMatched ? 'bg-primary/10' : ''}`}
+                                                >
                                                     <td className="p-3">
                                                         <div className="font-medium">
                                                             {item.brand_name && <span className="text-muted-foreground">{item.brand_name} — </span>}
@@ -293,6 +418,9 @@ export default function SaleReturnsCreate({ sales, selectedSale, saleItems, erro
                                                                 .filter(Boolean)
                                                                 .join(' · ')}
                                                         </div>
+                                                        {item.barcode_snapshot && (
+                                                            <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">{item.barcode_snapshot}</div>
+                                                        )}
                                                     </td>
                                                     <td className="p-3 font-mono text-xs">{item.batch_code || '—'}</td>
                                                     <td className="p-3 text-center font-mono">{item.quantity_sold}</td>

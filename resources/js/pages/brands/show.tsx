@@ -64,7 +64,7 @@ export default function BrandsShow({ brand, stats }: Props) {
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-4">
                         {brand.logo ? (
-                            <img src={`/storage/${brand.logo}`} alt={brand.name} className="h-16 w-16 rounded-lg border object-contain" />
+                            <img loading="lazy" decoding="async" src={`/storage/${brand.logo}`} alt={brand.name} className="h-16 w-16 rounded-lg border object-contain" />
                         ) : (
                             <div className="flex h-16 w-16 items-center justify-center rounded-lg border bg-gray-100">
                                 <Tag className="h-8 w-8 text-gray-400" />
@@ -168,7 +168,7 @@ export default function BrandsShow({ brand, stats }: Props) {
                                     className="hover:bg-muted/50 flex items-center gap-3 rounded-lg border p-3 transition-colors"
                                 >
                                     {product.image ? (
-                                        <img
+                                        <img loading="lazy" decoding="async"
                                             src={`/storage/${product.image}`}
                                             alt={product.name}
                                             className="h-12 w-12 rounded-md border object-cover"

@@ -14,7 +14,7 @@ export default function AppLogo() {
 
     return (
         <div className="ml-1 flex min-w-0 items-center gap-2">
-            <img src={logo} alt={name} className="h-8 w-8 shrink-0 object-contain" />
+            <img loading="lazy" decoding="async" src={logo} alt={name} className="h-8 w-8 shrink-0 object-contain" />
             <span
                 className="truncate leading-none font-bold tracking-wider group-data-[collapsible=icon]:hidden"
                 style={{

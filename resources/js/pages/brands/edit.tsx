@@ -146,7 +146,7 @@ export default function BrandsEdit({ brand, errors: initialErrors }: Props) {
                                     <Label>Logo</Label>
                                     {brand.logo && (
                                         <div className="mb-2">
-                                            <img
+                                            <img loading="lazy" decoding="async"
                                                 src={`/storage/${brand.logo}`}
                                                 alt={brand.name}
                                                 className="h-16 w-16 rounded-md border object-contain"

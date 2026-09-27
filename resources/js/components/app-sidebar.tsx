@@ -8,6 +8,7 @@ import {
     ArrowLeftRight,
     Banknote,
     BookOpen,
+    DatabaseBackup,
     FileClock,
     HandCoins,
     LayoutGrid,
@@ -192,6 +193,12 @@ const settingsNavItems: NavItem[] = [
         title: 'App Settings',
         url: '/app-settings',
         icon: Settings,
+        module: 'settings',
+    },
+    {
+        title: 'Backups',
+        url: '/backups',
+        icon: DatabaseBackup,
         module: 'settings',
     },
 ];

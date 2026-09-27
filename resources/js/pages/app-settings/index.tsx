@@ -152,7 +152,7 @@ export default function AppSettingsIndex({ settings, hasSettings, filters }: Pro
                                                 <TableCell>{settings.from ? settings.from + index : index + 1}</TableCell>
                                                 <TableCell>
                                                     {setting.logo_url ? (
-                                                        <img
+                                                        <img loading="lazy" decoding="async"
                                                             src={setting.logo_url}
                                                             alt={setting.name}
                                                             className="h-12 w-12 rounded border bg-white object-contain p-1"

@@ -72,7 +72,7 @@ export default function CompaniesShow({ company, stats }: Props) {
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-4">
                         {company.logo ? (
-                            <img src={`/storage/${company.logo}`} alt={company.name} className="h-14 w-14 rounded-lg border object-contain" />
+                            <img loading="lazy" decoding="async" src={`/storage/${company.logo}`} alt={company.name} className="h-14 w-14 rounded-lg border object-contain" />
                         ) : (
                             <div className="bg-muted flex h-14 w-14 items-center justify-center rounded-lg border">
                                 <Building2 className="text-muted-foreground h-7 w-7" />

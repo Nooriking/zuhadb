@@ -203,7 +203,7 @@ export default function AppSettingsEdit({ setting, errors: initialErrors }: Prop
                                 <div className="flex items-start gap-4">
                                     {logoPreview && (
                                         <div className="relative">
-                                            <img src={logoPreview} alt="Preview" className="h-20 w-20 rounded border bg-white object-contain p-1" />
+                                            <img loading="lazy" decoding="async" src={logoPreview} alt="Preview" className="h-20 w-20 rounded border bg-white object-contain p-1" />
                                             <button
                                                 type="button"
                                                 onClick={clearLogo}

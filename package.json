@@ -2,9 +2,10 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "build": "vite build",
-        "build:ssr": "vite build && vite build --ssr",
+        "build": "php artisan ziggy:generate resources/js/ziggy.js && vite build",
+        "build:ssr": "php artisan ziggy:generate resources/js/ziggy.js && vite build && vite build --ssr",
         "dev": "vite",
+        "ziggy": "php artisan ziggy:generate resources/js/ziggy.js",
         "format": "prettier --write resources/",
         "format:check": "prettier --check resources/",
         "lint": "eslint . --fix"

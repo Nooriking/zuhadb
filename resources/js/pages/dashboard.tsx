@@ -4,15 +4,17 @@ import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
 import { AlertTriangle, Boxes, DollarSign, Package, ShoppingBag, ShoppingCart, TrendingUp, UserCircle, Users, Wallet } from 'lucide-react';
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 
-import BranchBar from '@/components/dashboard/branch-bar';
-import BrandPie from '@/components/dashboard/brand-pie';
+import { LazyInView } from '@/components/lazy-in-view';
 import KpiCard from '@/components/dashboard/kpi-card';
 import LowStock from '@/components/dashboard/low-stock';
-import PaymentPie from '@/components/dashboard/payment-pie';
 import RecentSales from '@/components/dashboard/recent-sales';
-import SalesChart from '@/components/dashboard/sales-chart';
+
+const SalesChart = lazy(() => import('@/components/dashboard/sales-chart'));
+const BrandPie = lazy(() => import('@/components/dashboard/brand-pie'));
+const PaymentPie = lazy(() => import('@/components/dashboard/payment-pie'));
+const BranchBar = lazy(() => import('@/components/dashboard/branch-bar'));
 
 /* ═══════════════════════════════════════════════════════
  |  Types
@@ -351,26 +353,42 @@ export default function Dashboard({
                             <p className="text-muted-foreground text-sm">Completed sales and store profit for the last {days} days</p>
                         </div>
                     </div>
-                    <SalesChart data={salesTrend} />
+                    <LazyInView minHeight={280}>
+                        <Suspense fallback={<div className="bg-muted/40 h-[280px] animate-pulse rounded-xl" />}>
+                            <SalesChart data={salesTrend} />
+                        </Suspense>
+                    </LazyInView>
                 </div>
 
                 {/* ═══════════ Charts Row: Brand + Payment ═══════════ */}
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                     <div className="bg-card rounded-lg border p-6 shadow-sm">
                         <h3 className="mb-4 text-lg font-semibold">Sales by Brand</h3>
-                        <BrandPie data={brandSales} />
+                        <LazyInView minHeight={280}>
+                            <Suspense fallback={<div className="bg-muted/40 h-[280px] animate-pulse rounded-xl" />}>
+                                <BrandPie data={brandSales} />
+                            </Suspense>
+                        </LazyInView>
                     </div>
                     <div className="bg-card rounded-lg border p-6 shadow-sm">
                         <h3 className="text-lg font-semibold">Payments & Due</h3>
                         <p className="text-muted-foreground mb-4 text-sm">Collected by method, plus remaining due</p>
-                        <PaymentPie data={paymentMethods} />
+                        <LazyInView minHeight={280}>
+                            <Suspense fallback={<div className="bg-muted/40 h-[280px] animate-pulse rounded-xl" />}>
+                                <PaymentPie data={paymentMethods} />
+                            </Suspense>
+                        </LazyInView>
                     </div>
                 </div>
 
                 {/* ═══════════ Branch Bar Chart ═══════════ */}
                 <div className="bg-card rounded-lg border p-6 shadow-sm">
                     <h3 className="mb-4 text-lg font-semibold">Branch Performance</h3>
-                    <BranchBar data={branchStats} />
+                    <LazyInView minHeight={280}>
+                        <Suspense fallback={<div className="bg-muted/40 h-[280px] animate-pulse rounded-xl" />}>
+                            <BranchBar data={branchStats} />
+                        </Suspense>
+                    </LazyInView>
                 </div>
 
                 <LowStock items={lowStockItems} />

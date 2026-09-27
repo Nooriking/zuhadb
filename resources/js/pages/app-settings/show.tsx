@@ -91,7 +91,7 @@ export default function AppSettingsShow({ setting }: Props) {
                 <Card className="border-primary/20 from-primary/5 border-2 bg-gradient-to-br to-transparent">
                     <CardContent className="flex flex-col items-center gap-6 p-6 md:flex-row">
                         {setting.logo_url ? (
-                            <img
+                            <img loading="lazy" decoding="async"
                                 src={setting.logo_url}
                                 alt={setting.name}
                                 className="h-28 w-28 rounded-lg border bg-white object-contain p-2 shadow-sm"

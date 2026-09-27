@@ -8,9 +8,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
+import { softDeleteItem } from '@/lib/trash-actions';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
-import { AlertTriangle, Globe, Plus, Tag, ToggleLeft, ToggleRight, Trash2, X } from 'lucide-react';
+import { Globe, Plus, Tag, ToggleLeft, ToggleRight, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
 interface Brand {
@@ -50,7 +51,6 @@ export default function BrandsIndex({ brands, filters }: Props) {
     const { toast } = useToast();
     const [search, setSearch] = useState(filters.search || '');
     const [statusFilter, setStatusFilter] = useState(filters.status || 'all');
-    const [brandToDelete, setBrandToDelete] = useState<Brand | null>(null);
 
     const handleSearch = () => {
         router.get(
@@ -75,24 +75,8 @@ export default function BrandsIndex({ brands, filters }: Props) {
         );
     };
 
-    const confirmDelete = () => {
-        if (!brandToDelete) return;
-
-        router.delete(`/brands/${brandToDelete.id}`, {
-            preserveScroll: true,
-            onSuccess: () => {
-                toast({ title: 'Moved to Trash', description: `Brand ${brandToDelete.name} moved to trash.` });
-                setBrandToDelete(null);
-            },
-            onError: (errors) => {
-                toast({
-                    title: 'Delete Failed',
-                    description: errors.message || 'Cannot delete this brand.',
-                    variant: 'destructive',
-                });
-                setBrandToDelete(null);
-            },
-        });
+    const handleSoftDelete = (brand: Brand) => {
+        void softDeleteItem(brand.name, `/brands/${brand.id}`);
     };
 
     const handlePageChange = (url: string | null) => {
@@ -173,7 +157,7 @@ export default function BrandsIndex({ brands, filters }: Props) {
                                         <TableCell>
                                             <div className="flex items-center gap-3">
                                                 {brand.logo ? (
-                                                    <img
+                                                    <img loading="lazy" decoding="async"
                                                         src={`/storage/${brand.logo}`}
                                                         alt={brand.name}
                                                         className="h-10 w-10 rounded-md border object-contain"
@@ -222,7 +206,7 @@ export default function BrandsIndex({ brands, filters }: Props) {
                                                         <ToggleLeft className="h-4 w-4 text-gray-400" />
                                                     )}
                                                 </RowAction>
-                                                <DeleteAction onClick={() => setBrandToDelete(brand)} />
+                                                <DeleteAction onClick={() => handleSoftDelete(brand)} />
                                             </RowActions>
                                         </TableCell>
                                     </TableRow>
@@ -254,40 +238,6 @@ export default function BrandsIndex({ brands, filters }: Props) {
                     </div>
                 )}
             </div>
-
-            {/* Delete Modal */}
-            {brandToDelete && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setBrandToDelete(null)}>
-                    <div className="bg-background w-full max-w-md rounded-lg border shadow-lg" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-start gap-4 p-6">
-                            <div className="bg-destructive/10 text-destructive flex h-10 w-10 shrink-0 items-center justify-center rounded-full">
-                                <AlertTriangle className="h-5 w-5" />
-                            </div>
-                            <div className="flex-1">
-                                <h3 className="text-lg font-semibold">Are you sure?</h3>
-                                <p className="text-muted-foreground mt-1 text-sm">
-                                    Brand <strong>{brandToDelete.name}</strong> will be moved to trash.
-                                </p>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={() => setBrandToDelete(null)}
-                                className="text-muted-foreground hover:text-foreground transition-colors"
-                            >
-                                <X className="h-5 w-5" />
-                            </button>
-                        </div>
-                        <div className="flex justify-end gap-2 border-t px-6 py-4">
-                            <Button variant="outline" onClick={() => setBrandToDelete(null)}>
-                                Cancel
-                            </Button>
-                            <Button onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                                Move to Trash
-                            </Button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </AppLayout>
     );
 }

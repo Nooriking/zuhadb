@@ -13,11 +13,13 @@ class AppSettingFactory extends Factory
     public function definition(): array
     {
         return [
-            'name' => 'Zuha Perfume',
-            'company_name' => 'Zuha Perfume Shop',
-            'phone' => '0700000000',
-            'email' => 'shop@zuha.test',
+            'name' => 'ZUHA PERFUME',
+            'company_name' => 'ZUHA PERFUME',
+            'company_name_local' => 'Tezhoshan Support',
+            'phone' => '0744442863',
+            'email' => 'support@tezhoshan.test',
             'address' => 'Kabul, Afghanistan',
+            'website' => 'Tezhoshan',
         ];
     }
 }

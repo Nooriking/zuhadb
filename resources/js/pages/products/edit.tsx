@@ -28,7 +28,7 @@ import {
     X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import Swal from 'sweetalert2';
+import { getSwal } from '@/lib/swal';
 
 /* ═══════════════════════════════════════════════════════
  |  Types
@@ -382,27 +382,29 @@ export default function ProductsEdit({
     const removeVariant = (index: number) => {
         if (variants.length === 1) return;
 
-        Swal.fire({
-            icon: 'warning',
-            title: 'Remove this variant?',
-            text: 'It will be moved to trash after you save.',
-            showCancelButton: true,
-            confirmButtonText: 'Yes, remove',
-            confirmButtonColor: '#dc2626',
-            cancelButtonColor: '#6b7280',
-        }).then((result) => {
-            if (result.isConfirmed) {
-                setVariants((prev) => prev.filter((_, i) => i !== index));
-                setPurchases((prev) =>
-                    prev
-                        .filter((p) => p.variant_index !== index)
-                        .map((p) => ({
-                            ...p,
-                            variant_index: p.variant_index > index ? p.variant_index - 1 : p.variant_index,
-                        })),
-                );
-            }
-        });
+        void getSwal().then((Swal) =>
+            Swal.fire({
+                icon: 'warning',
+                title: 'Remove this variant?',
+                text: 'It will be moved to trash after you save.',
+                showCancelButton: true,
+                confirmButtonText: 'Yes, remove',
+                confirmButtonColor: '#dc2626',
+                cancelButtonColor: '#6b7280',
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    setVariants((prev) => prev.filter((_, i) => i !== index));
+                    setPurchases((prev) =>
+                        prev
+                            .filter((p) => p.variant_index !== index)
+                            .map((p) => ({
+                                ...p,
+                                variant_index: p.variant_index > index ? p.variant_index - 1 : p.variant_index,
+                            })),
+                    );
+                }
+            }),
+        );
     };
 
     /* ═══════════ Barcode Handlers ═══════════ */
@@ -523,7 +525,7 @@ export default function ProductsEdit({
                 updateVariant(vIndex, 'barcodes', updated);
 
                 if (data.exists) {
-                    Swal.fire({
+                    void getSwal().then((Swal) => Swal.fire({
                         icon: 'error',
                         title: '❌ Barcode Already Exists',
                         html: data.product_name
@@ -531,7 +533,7 @@ export default function ProductsEdit({
                             : 'This barcode is already registered in the system.',
                         confirmButtonText: 'OK',
                         confirmButtonColor: '#dc2626',
-                    });
+                    }));
                 }
 
                 return data.exists === true;
@@ -629,7 +631,7 @@ export default function ProductsEdit({
         /* ─── 1. Duplicate barcodes within form ─── */
         const duplicates = allBarcodesInForm.filter((b, i, arr) => arr.indexOf(b) !== i);
         if (duplicates.length > 0) {
-            await Swal.fire({
+            await (await getSwal()).fire({
                 icon: 'error',
                 title: 'Duplicate Barcodes in Form',
                 html: `These barcodes are duplicated:<br><strong>${[...new Set(duplicates)].join('<br>')}</strong>`,
@@ -668,7 +670,7 @@ export default function ProductsEdit({
                     })
                     .join('');
 
-                await Swal.fire({
+                await (await getSwal()).fire({
                     icon: 'error',
                     title: '❌ Barcode Already Registered',
                     html: `<p style="margin-bottom:10px;">Cannot save. The following barcodes already exist in the system:</p>
@@ -724,7 +726,7 @@ export default function ProductsEdit({
         if (Object.keys(clientErrors).length > 0) {
             setErrors(clientErrors);
             setLoading(false);
-            await Swal.fire({
+            await (await getSwal()).fire({
                 icon: 'warning',
                 title: 'Validation Failed',
                 text: Object.values(clientErrors)[0],
@@ -829,13 +831,13 @@ export default function ProductsEdit({
                     })
                     .join('');
 
-                Swal.fire({
+                void getSwal().then((Swal) => Swal.fire({
                     icon: 'error',
                     title: `Validation Error (${errorCount})`,
                     html: `<ul style="padding-right:20px;max-height:300px;overflow-y:auto;">${errorListHtml}</ul>`,
                     confirmButtonText: 'OK',
                     confirmButtonColor: '#dc2626',
-                });
+                }));
             },
         });
     };

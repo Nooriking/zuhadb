@@ -29,7 +29,7 @@ import {
     X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import Swal from 'sweetalert2';
+import { getSwal } from '@/lib/swal';
 
 /* ═══════════════════════════════════════════════════════
  |  Types
@@ -400,7 +400,7 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                 updateVariant(vIndex, 'barcodes', updated);
 
                 if (data.exists) {
-                    Swal.fire({
+                    void getSwal().then((Swal) => Swal.fire({
                         icon: 'error',
                         title: '❌ Barcode Already Exists',
                         html: data.product_name
@@ -408,7 +408,7 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                             : 'This barcode is already registered in the system.',
                         confirmButtonText: 'OK',
                         confirmButtonColor: '#dc2626',
-                    });
+                    }));
                 }
 
                 return data.exists === true;
@@ -513,7 +513,7 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
         /* ─── 1. Duplicate barcodes within form ─── */
         const duplicates = allBarcodesInForm.filter((b, i, arr) => arr.indexOf(b) !== i);
         if (duplicates.length > 0) {
-            await Swal.fire({
+            await (await getSwal()).fire({
                 icon: 'error',
                 title: 'Duplicate Barcodes in Form',
                 html: `These barcodes are duplicated:<br><strong>${[...new Set(duplicates)].join('<br>')}</strong>`,
@@ -552,7 +552,7 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                     })
                     .join('');
 
-                await Swal.fire({
+                await (await getSwal()).fire({
                     icon: 'error',
                     title: '❌ Barcode Already Registered',
                     html: `<p style="margin-bottom:10px;">Cannot save. The following barcodes already exist in the system:</p>
@@ -615,7 +615,7 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
         if (Object.keys(clientErrors).length > 0) {
             setErrors(clientErrors);
             setLoading(false);
-            await Swal.fire({
+            await (await getSwal()).fire({
                 icon: 'warning',
                 title: 'Validation Failed',
                 text: Object.values(clientErrors)[0],
@@ -714,13 +714,13 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                     })
                     .join('');
 
-                Swal.fire({
+                void getSwal().then((Swal) => Swal.fire({
                     icon: 'error',
                     title: `Validation Error (${errorCount})`,
                     html: `<ul style="padding-right:20px;max-height:300px;overflow-y:auto;">${errorListHtml}</ul>`,
                     confirmButtonText: 'OK',
                     confirmButtonColor: '#dc2626',
-                });
+                }));
 
                 setTimeout(() => {
                     const errorEl = document.querySelector('[data-error="true"]');

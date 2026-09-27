@@ -56,13 +56,22 @@ class AppSetting extends Model
     {
         $setting = self::current();
 
-        $phone = collect([$setting?->phone, $setting?->phone_2])
+        $supportPhone = filled($setting?->phone)
+            ? (string) $setting->phone
+            : (string) config('business.support_phone', '0744442863');
+
+        $phone = collect([$supportPhone, $setting?->phone_2])
             ->filter(fn ($value) => filled($value))
+            ->unique()
             ->implode(' / ');
 
         return [
             'name' => $setting?->display_name ?? 'ZUHA PERFUME',
             'phone' => $phone,
+            'support_phone' => $supportPhone,
+            'manufacturer' => (string) config('business.manufacturer', 'Tezhoshan'),
+            'exchange_window_days' => (int) config('business.sale_exchange_window_days', 3),
+            'default_currency' => (string) config('business.default_currency', 'AFN'),
             'address' => $setting?->address ?? '',
             'slogan' => $setting?->company_name_local ?? '',
             'logo' => $setting?->logo_url ?: '/images/logo.png',

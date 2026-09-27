@@ -123,7 +123,7 @@ export default function SettingsIndex({ settings, groups, currentGroup }: Props)
                                     {setting.type === 'image' && (
                                         <div className="space-y-2">
                                             {setting.value && (
-                                                <img
+                                                <img loading="lazy" decoding="async"
                                                     src={`/storage/${setting.value}`}
                                                     alt={setting.key}
                                                     className="h-20 w-20 rounded-md border object-contain"

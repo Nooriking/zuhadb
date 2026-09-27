@@ -3,12 +3,12 @@
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { useToast } from '@/hooks/use-toast';
+
 import AppLayout from '@/layouts/app-layout';
+import { forceDeleteItem, restoreItem } from '@/lib/trash-actions';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
-import { ArrowLeft, RotateCcw, Trash2, Users, X } from 'lucide-react';
-import { useState } from 'react';
+import { ArrowLeft, RotateCcw, Trash2, Users } from 'lucide-react';
 
 interface Investor {
     id: number;
@@ -46,41 +46,7 @@ const formatPrice = (value: string | number) => {
     return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(num);
 };
 
-export default function InvestorsTrash({ investors }: Props) {
-    const { toast } = useToast();
-    const [investorToDelete, setInvestorToDelete] = useState<Investor | null>(null);
-
-    const handleRestore = (investor: Investor) => {
-        router.post(
-            `/investors/${investor.id}/restore`,
-            {},
-            {
-                preserveScroll: true,
-                onSuccess: () => toast({ title: 'Restored', description: `${investor.full_name} restored.` }),
-                onError: () => toast({ title: 'Error', description: 'Failed to restore.', variant: 'destructive' }),
-            },
-        );
-    };
-
-    const confirmForceDelete = () => {
-        if (!investorToDelete) return;
-
-        router.delete(`/investors/${investorToDelete.id}/force-delete`, {
-            preserveScroll: true,
-            onSuccess: () => {
-                toast({ title: 'Deleted', description: `${investorToDelete.full_name} permanently deleted.` });
-                setInvestorToDelete(null);
-            },
-            onError: (errors: any) => {
-                toast({
-                    title: 'Cannot Delete',
-                    description: errors?.message || 'Investor has investment history.',
-                    variant: 'destructive',
-                });
-                setInvestorToDelete(null);
-            },
-        });
-    };
+export default function InvestorsTrash({ investors }: Props) {
 
     const handlePageChange = (url: string | null) => {
         if (url) router.get(url, {}, { preserveState: true, preserveScroll: true });
@@ -146,7 +112,7 @@ export default function InvestorsTrash({ investors }: Props) {
                                         </TableCell>
                                         <TableCell>
                                             <div className="flex items-center justify-center gap-1">
-                                                <Button variant="ghost" size="icon" title="Restore" onClick={() => handleRestore(investor)}>
+                                                <Button variant="ghost" size="icon" title="Restore" onClick={() => void restoreItem(investor.full_name, `/investors/${investor.id}/restore`)}>
                                                     <RotateCcw className="h-4 w-4 text-green-600" />
                                                 </Button>
                                                 <Button
@@ -154,7 +120,7 @@ export default function InvestorsTrash({ investors }: Props) {
                                                     size="icon"
                                                     title="Delete Forever"
                                                     className="text-destructive hover:text-destructive"
-                                                    onClick={() => setInvestorToDelete(investor)}
+                                                    onClick={() => void forceDeleteItem(investor.full_name, `/investors/${investor.id}/force-delete`)}
                                                 >
                                                     <Trash2 className="h-4 w-4" />
                                                 </Button>
@@ -189,35 +155,6 @@ export default function InvestorsTrash({ investors }: Props) {
                 )}
             </div>
 
-            {investorToDelete && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setInvestorToDelete(null)}>
-                    <div className="bg-background w-full max-w-md rounded-lg border shadow-lg" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-start gap-4 p-6">
-                            <div className="bg-destructive/10 text-destructive flex h-10 w-10 shrink-0 items-center justify-center rounded-full">
-                                <Trash2 className="h-5 w-5" />
-                            </div>
-                            <div className="flex-1">
-                                <h3 className="text-lg font-semibold">Delete forever?</h3>
-                                <p className="text-muted-foreground mt-1 text-sm">
-                                    Investor <strong>{investorToDelete.full_name}</strong> will be <strong>permanently deleted</strong>. All related
-                                    data will also be removed.
-                                </p>
-                            </div>
-                            <button type="button" onClick={() => setInvestorToDelete(null)} className="text-muted-foreground hover:text-foreground">
-                                <X className="h-5 w-5" />
-                            </button>
-                        </div>
-                        <div className="flex justify-end gap-2 border-t px-6 py-4">
-                            <Button variant="outline" onClick={() => setInvestorToDelete(null)}>
-                                Cancel
-                            </Button>
-                            <Button onClick={confirmForceDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                                Delete Forever
-                            </Button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </AppLayout>
     );
 }

@@ -171,9 +171,17 @@ class Inventory extends Model
     ): self {
         return DB::transaction(function () use ($branchId, $variantId, $qty, $type, $batchId, $referenceType, $referenceId, $notes) {
             $inventory = self::getOrCreate($branchId, $variantId);
+            $inventory = self::query()->whereKey($inventory->id)->lockForUpdate()->firstOrFail();
 
             $before = $inventory->quantity;
-            $after  = max(0, $before - $qty);
+
+            if ($qty > $before) {
+                throw new \RuntimeException(
+                    "Insufficient stock for variant #{$variantId} in branch #{$branchId}. Available: {$before}, requested: {$qty}."
+                );
+            }
+
+            $after = $before - $qty;
 
             $inventory->update([
                 'quantity'           => $after,
@@ -213,7 +221,12 @@ class Inventory extends Model
         ?string $notes = null
     ): self {
         return DB::transaction(function () use ($branchId, $variantId, $newQty, $notes) {
+            if ($newQty < 0) {
+                throw new \InvalidArgumentException('Inventory quantity cannot be negative.');
+            }
+
             $inventory = self::getOrCreate($branchId, $variantId);
+            $inventory = self::query()->whereKey($inventory->id)->lockForUpdate()->firstOrFail();
 
             $before = $inventory->quantity;
             $diff   = $newQty - $before;

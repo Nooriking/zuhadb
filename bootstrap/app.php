@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\CheckModuleAccess;
+use App\Http\Middleware\EnsureLicenseIsValid;
 use App\Http\Middleware\EnsureUserIsActive;
 use App\Http\Middleware\HandleInertiaRequests;
 use App\Http\Middleware\LockRecordChanges;
@@ -19,10 +20,14 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware) {
 
+        // Hostinger / reverse-proxy HTTPS
+        $middleware->trustProxies(at: '*');
+
         // ────────────────────────────────────────────────
         // Web middleware (Laravel default + Inertia)
         // ────────────────────────────────────────────────
         $middleware->web(append: [
+            EnsureLicenseIsValid::class,
             EnsureUserIsActive::class,
             HandleInertiaRequests::class,
             AddLinkHeadersForPreloadedAssets::class,
@@ -36,6 +41,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'permission' => PermissionMiddleware::class,
             'module'     => CheckModuleAccess::class,
             'lock.records' => LockRecordChanges::class,
+            'license'    => EnsureLicenseIsValid::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

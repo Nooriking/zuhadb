@@ -35,7 +35,7 @@ import {
     X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import Swal from 'sweetalert2';
+import { getSwal } from '@/lib/swal';
 
 /* ═══════════════════════════════════════════════════════
  |  Interfaces
@@ -544,7 +544,7 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
         if (stockErrors.length === 1) {
             const e = stockErrors[0];
 
-            Swal.fire({
+            void getSwal().then((Swal) => Swal.fire({
                 toast: true,
                 position: 'bottom-end',
                 icon: 'error',
@@ -564,10 +564,10 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
                 width: 'auto',
                 padding: '12px 16px',
                 didOpen: (toast) => {
-                    toast.addEventListener('mouseenter', Swal.stopTimer);
-                    toast.addEventListener('mouseleave', Swal.resumeTimer);
+                    toast.addEventListener('mouseenter', () => { void getSwal().then((S) => S.stopTimer()); });
+                    toast.addEventListener('mouseleave', () => { void getSwal().then((S) => S.resumeTimer()); });
                 },
-            });
+            }));
             return;
         }
 
@@ -594,7 +594,7 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
             )
             .join('');
 
-        Swal.fire({
+        void getSwal().then((Swal) => Swal.fire({
             toast: true,
             position: 'bottom-end',
             icon: 'error',
@@ -606,10 +606,10 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
             width: 'auto',
             padding: '12px 16px',
             didOpen: (toast) => {
-                toast.addEventListener('mouseenter', Swal.stopTimer);
-                toast.addEventListener('mouseleave', Swal.resumeTimer);
+                toast.addEventListener('mouseenter', () => { void getSwal().then((S) => S.stopTimer()); });
+                toast.addEventListener('mouseleave', () => { void getSwal().then((S) => S.resumeTimer()); });
             },
-        });
+        }));
     };
 
     /* ═══════════════════════════════════════════════════════
@@ -695,7 +695,7 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
                 }
 
                 if (errorsObj.stock) {
-                    Swal.fire({
+                    void getSwal().then((Swal) => Swal.fire({
                         toast: true,
                         position: 'bottom-end',
                         icon: 'error',
@@ -706,7 +706,7 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
                         timerProgressBar: true,
                         width: 'auto',
                         padding: '12px 16px',
-                    });
+                    }));
                     return;
                 }
 

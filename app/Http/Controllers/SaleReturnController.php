@@ -6,12 +6,14 @@ use App\Models\Branch;
 use App\Models\Customer;
 use App\Models\Expense;
 use App\Models\Inventory;
+use App\Models\ProductBarcode;
 use App\Models\ProductBatch;
 use App\Models\Sale;
 use App\Models\SaleItem;
 use App\Models\SaleReturn;
 use App\Models\SaleReturnItem;
 use App\Services\CustomerLedgerService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -85,6 +87,7 @@ class SaleReturnController extends Controller
     public function create(Request $request): Response
     {
         $saleId       = $request->query('sale_id');
+        $scanBarcode  = trim((string) $request->query('barcode', ''));
         $selectedSale = null;
         $saleItems    = [];
 
@@ -119,6 +122,63 @@ class SaleReturnController extends Controller
                 'remaining_due_afn' => $selectedSale->remaining_due_afn,
             ] : null,
             'saleItems'    => $saleItems,
+            'scanBarcode'  => $scanBarcode !== '' ? $scanBarcode : null,
+        ]);
+    }
+
+    public function lookupBarcode(Request $request): JsonResponse
+    {
+        $barcode = trim((string) $request->query('barcode', ''));
+
+        if ($barcode === '') {
+            return response()->json(['found' => false, 'message' => 'Barcode is empty.']);
+        }
+
+        $variantId = ProductBarcode::query()
+            ->where('barcode', $barcode)
+            ->value('variant_id');
+
+        $candidates = SaleItem::query()
+            ->where(function ($query) use ($barcode, $variantId) {
+                $query->where('barcode_snapshot', $barcode);
+                if ($variantId) {
+                    $query->orWhere('variant_id', $variantId);
+                }
+            })
+            ->whereHas('sale', fn ($query) => $query->notTrashed()->where('status', 'completed'))
+            ->with(['sale:id,invoice_number,sale_date,customer_id,branch_id,status', 'sale.customer:id,name,phone'])
+            ->orderByDesc('id')
+            ->limit(40)
+            ->get();
+
+        foreach ($candidates as $saleItem) {
+            $alreadyReturned = (int) SaleReturnItem::query()
+                ->where('sale_item_id', $saleItem->id)
+                ->whereHas('saleReturn', fn ($query) => $query->where('status', '!=', SaleReturn::STATUS_CANCELLED))
+                ->sum('quantity');
+
+            $maxReturnable = max(0, (int) $saleItem->quantity - $alreadyReturned);
+            if ($maxReturnable <= 0) {
+                continue;
+            }
+
+            return response()->json([
+                'found' => true,
+                'sale_id' => $saleItem->sale_id,
+                'sale_item_id' => $saleItem->id,
+                'barcode' => $barcode,
+                'invoice_number' => $saleItem->sale?->invoice_number,
+                'customer' => $saleItem->sale?->customer?->name,
+                'product' => $saleItem->product_name_snapshot,
+                'max_returnable' => $maxReturnable,
+            ]);
+        }
+
+        return response()->json([
+            'found' => false,
+            'message' => $candidates->isEmpty()
+                ? "No completed sale found for barcode \"{$barcode}\"."
+                : "Barcode \"{$barcode}\" was sold, but nothing is left to return.",
         ]);
     }
 
@@ -668,6 +728,7 @@ class SaleReturnController extends Controller
                 'concentration'  => $variant?->concentration,
                 'batch_code'     => $item->batch?->batch_code,
                 'batch_id'       => $item->batch_id,
+                'barcode_snapshot' => $item->barcode_snapshot,
                 'quantity_sold'  => $item->quantity,
                 'already_returned' => $alreadyReturned,
                 'max_returnable' => $maxReturnable,

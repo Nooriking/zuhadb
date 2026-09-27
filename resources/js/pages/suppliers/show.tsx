@@ -161,7 +161,7 @@ export default function SuppliersShow({ supplier, account, debts, payments }: Pr
                                                 <div className="flex items-center gap-2">
                                                     {row.bill_image && (
                                                         <a href={`/storage/${row.bill_image}`} target="_blank" rel="noreferrer">
-                                                            <img src={`/storage/${row.bill_image}`} alt="Bill" className="h-10 w-10 rounded border object-cover" />
+                                                            <img loading="lazy" decoding="async" src={`/storage/${row.bill_image}`} alt="Bill" className="h-10 w-10 rounded border object-cover" />
                                                         </a>
                                                     )}
                                                     <Input

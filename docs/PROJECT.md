@@ -1,6 +1,6 @@
 # Zuha Perfume POS
 
-This document describes the project: what it does, the rule each section follows, and how to run it. The application screens are in English.
+Open `docs/PROJECT.md` for the feature map. Open `docs/NFR.md` for non-functional requirements and implementation status.
 
 ## 1. What this system is
 
@@ -16,15 +16,27 @@ Open `http://localhost:8000`. The first screen is login. After login, the dashbo
 | Interface | Inertia, React, Vite, Tailwind |
 | Live database | MySQL database `zuha`, host `127.0.0.1`, port `3306`, user `root` |
 | Test database | MySQL database `zuha_testing` |
-| Dev processes | `composer run dev` starts the server, the queue, and Vite together |
+| Dev processes | `composer run dev:fast` (server + Vite only) or `composer run dev` (with queue/logs) |
 
 Daily start, from the project folder:
 
 ```bash
-composer run dev
+composer run dev:fast
 ```
 
-Do not start a second `npm run dev`. The live log viewer (Pail) does not start on Windows, because the `pcntl` extension is missing. The application still runs.
+Use `composer run dev` only when you need the queue worker and log viewer. Do not start a second `npm run dev`. The live log viewer (Pail) does not start on Windows, because the `pcntl` extension is missing. The application still runs.
+
+### Performance notes
+
+- Inertia pages are code-split (lazy chunks per route).
+- Dashboard and investor charts load only when scrolled into view (`LazyInView` + `React.lazy`).
+- SweetAlert2 loads on demand via `getSwal()` (`resources/js/lib/swal.ts`).
+- Ziggy routes are generated to `resources/js/ziggy.js` (no full `@routes` dump in HTML). Regenerate with `npm run ziggy` or automatically on `npm run build`.
+- Google sign-in: set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and redirect URI `{APP_URL}/auth/google/callback` in Google Cloud Console. Until those are set, the login page shows “Google sign-in is not available yet.” Existing users must already have a matching email in `users`.
+- Shared notifications use Inertia `defer`; shop settings use `once`.
+- Images use `loading="lazy"`.
+- Light local stack: `composer run dev:fast` (server + Vite only).
+- Production assets: `npm run build` then serve without Vite.
 
 Tests use `zuha_testing` only. A test run must not wipe the live `zuha` database.
 
@@ -55,7 +67,7 @@ Every user has one role. The role limits both the menu and the actions.
 | Admin | Sales, stock, customers, suppliers, investors, expenses, users, settings |
 | Branch Manager | The same shop work inside their own branch: sales, products, customers, suppliers, inventory, transfers, and creating cashiers, salespeople, and stock keepers for that branch |
 | Cashier | Cashier dashboard, customers, sales, sale returns, inventory view |
-| Salesperson | Customers, sales, sale returns, and products (view, create, update, delete) |
+| Salesperson | Customers, customer dues/ledger, sales, payment receipts, sale returns, products (incl. receive), inventory view |
 | Stock Keeper | Products, brands, suppliers, inventory, purchases, stock transfers |
 | Accountant | Investors, investments, withdrawals, profit, expenses, reports, product view |
 | Investor | The investor dashboard only |
@@ -142,7 +154,15 @@ The wallet's capital and profit are in US dollars. Creating a withdrawal does no
 
 ### Password reset
 
-Forgot password emails a 6-digit code. The code is valid for 10 minutes. Until mail is configured with SMTP, the code is written to the Laravel log and is not delivered to Gmail. `MAIL_MAILER` defaults to `log`.
+Forgot password emails a 6-digit code to the user’s own email. The code is valid for 10 minutes. Mail uses Gmail SMTP (`smtp.gmail.com:587`, TLS). Set `MAIL_USERNAME` / `MAIL_FROM_ADDRESS` to the shop Gmail and put a Gmail App Password in `MAIL_PASSWORD` (Google Account → Security → 2-Step Verification → App passwords).
+
+### Machine license (anti-resale)
+
+Each paid install can be locked to one computer. See `docs/LICENSE.md`. On the client PC run `php artisan license:machine-id`, issue a key on your vendor PC with `license:issue`, then activate with `license:activate` or `/license`. Keep `LICENSE_ALLOW_ISSUE=false` on client installs.
+
+### Two-factor authentication (TOTP)
+
+Users enable 2FA under **Settings → Two-factor**. After password login, a confirmed account must enter an authenticator app code (or a one-time recovery code) on `/two-factor-challenge`. Secrets and recovery codes are encrypted at rest.
 
 ## 7. Row actions
 

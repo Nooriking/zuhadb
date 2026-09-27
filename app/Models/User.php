@@ -129,8 +129,14 @@ class User extends Authenticatable
             'dashboard', 'customers', 'sales', 'sale-returns', 'inventory',
         ],
 
+        // Shop-floor seller: products, sales, dues/receipts, returns, stock view
         self::ROLE_SALESPERSON => [
-            'dashboard', 'customers', 'sales', 'sale-returns', 'products',
+            'dashboard',
+            'products',
+            'customers',
+            'sales',
+            'sale-returns',
+            'inventory',
         ],
 
         self::ROLE_INVESTOR => [
@@ -150,7 +156,7 @@ class User extends Authenticatable
             'products.view', 'products.create', 'products.update', 'products.delete',
             'brands.view', 'brands.create',
             'suppliers.view', 'suppliers.create',
-            'customers.view', 'customers.create', 'customers.update',
+            'customers.view', 'customers.create', 'customers.update', 'customers.delete',
             'inventory.view', 'inventory.adjust',
             'stock-transfers.view', 'stock-transfers.create',
             'sales.view', 'sales.create', 'sales.update', 'sales.delete',
@@ -170,7 +176,7 @@ class User extends Authenticatable
             'products.view', 'products.create', 'products.update', 'products.delete',
             'brands.view', 'brands.create',
             'suppliers.view', 'suppliers.create',
-            'customers.view', 'customers.create', 'customers.update',
+            'customers.view', 'customers.create', 'customers.update', 'customers.delete',
             'inventory.view', 'inventory.adjust',
             'stock-transfers.view', 'stock-transfers.create',
             'sales.view', 'sales.create',
@@ -198,17 +204,18 @@ class User extends Authenticatable
         ],
 
         self::ROLE_CASHIER => [
-            'sales.view', 'sales.create',
+            'sales.view', 'sales.create', 'sales.update',
             'sale-returns.view', 'sale-returns.create',
             'customers.view', 'customers.create', 'customers.update',
             'inventory.view',
         ],
 
         self::ROLE_SALESPERSON => [
-            'sales.view', 'sales.create',
+            'sales.view', 'sales.create', 'sales.update',
             'sale-returns.view', 'sale-returns.create',
             'customers.view', 'customers.create', 'customers.update',
             'products.view', 'products.create', 'products.update', 'products.delete',
+            'inventory.view',
         ],
 
         self::ROLE_INVESTOR => [
@@ -227,8 +234,12 @@ class User extends Authenticatable
         'name',
         'username',
         'email',
+        'google_id',
         'phone',
         'password',
+        'two_factor_secret',
+        'two_factor_recovery_codes',
+        'two_factor_confirmed_at',
         'role',
         'employee_code',
         'avatar',
@@ -238,7 +249,16 @@ class User extends Authenticatable
         'user_id',
     ];
 
-    protected $hidden = ['password', 'remember_token'];
+    protected $hidden = [
+        'password',
+        'remember_token',
+        'two_factor_secret',
+        'two_factor_recovery_codes',
+    ];
+
+    protected $appends = [
+        'two_factor_enabled',
+    ];
 
     protected function casts(): array
     {
@@ -246,11 +266,24 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'last_login_at'     => 'datetime',
             'password'          => 'hashed',
+            'two_factor_secret'  => 'encrypted',
+            'two_factor_recovery_codes' => 'encrypted:array',
+            'two_factor_confirmed_at' => 'datetime',
             'trash'             => 'boolean',
             'created_at'        => 'datetime',
             'updated_at'        => 'datetime',
             'deleted_at'        => 'datetime',
         ];
+    }
+
+    public function hasEnabledTwoFactor(): bool
+    {
+        return filled($this->two_factor_secret) && $this->two_factor_confirmed_at !== null;
+    }
+
+    public function getTwoFactorEnabledAttribute(): bool
+    {
+        return $this->hasEnabledTwoFactor();
     }
 
     /* =========================================================

@@ -7,6 +7,7 @@ use App\Http\Requests\UpdateCustomerRequest;
 use App\Models\Customer;
 use App\Models\Receipt;
 use App\Models\SalePayment;
+use App\Services\ActivityLogger;
 use App\Services\CustomerLedgerService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -79,12 +80,22 @@ class CustomerController extends Controller
 
     public function store(StoreCustomerRequest $request): RedirectResponse|JsonResponse
     {
+        $this->authorize('create', Customer::class);
+
         $data = $request->validated();
         $data['created_by'] = Auth::id();
 
         $data['current_due_afn'] = $data['current_due_afn'] ?? 0;
 
         $customer = Customer::create($data);
+
+        ActivityLogger::log(
+            action: 'create',
+            section: 'customers',
+            description: "Customer {$customer->name} created",
+            subject: $customer,
+            properties: ['phone' => $customer->phone],
+        );
 
         if ($request->expectsJson()) {
             return response()->json([
@@ -181,9 +192,19 @@ class CustomerController extends Controller
 
     public function update(UpdateCustomerRequest $request, Customer $customer): RedirectResponse|\Illuminate\Http\JsonResponse
     {
+        $this->authorize('update', $customer);
+
         $data = $request->validated();
 
         $customer->update($data);
+
+        ActivityLogger::log(
+            action: 'update',
+            section: 'customers',
+            description: "Customer {$customer->name} updated",
+            subject: $customer,
+            properties: ['phone' => $customer->phone],
+        );
 
         if ($request->expectsJson()) {
             return response()->json(['customer' => $customer->only(['id', 'name', 'phone', 'address', 'notes', 'status'])]);
@@ -200,9 +221,18 @@ class CustomerController extends Controller
 
     public function destroy(Customer $customer): RedirectResponse
     {
+        $this->authorize('delete', $customer);
+
         $name = $customer->name;
 
         $customer->update(['trash' => true]);
+
+        ActivityLogger::log(
+            action: 'soft_delete',
+            section: 'customers',
+            description: "Customer {$name} moved to trash",
+            subject: $customer,
+        );
 
         return redirect()
             ->route('customers.index')
@@ -211,7 +241,10 @@ class CustomerController extends Controller
 
     public function restore(int $id): RedirectResponse
     {
-        $customer = Customer::onlyTrashed()->findOrFail($id);
+        $customer = Customer::query()
+            ->withoutGlobalScopes()
+            ->where('trash', true)
+            ->findOrFail($id);
 
         $customer->update(['trash' => false]);
 
@@ -222,7 +255,10 @@ class CustomerController extends Controller
 
     public function forceDelete(int $id): RedirectResponse
     {
-        $customer = Customer::onlyTrashed()->findOrFail($id);
+        $customer = Customer::query()
+            ->withoutGlobalScopes()
+            ->where('trash', true)
+            ->findOrFail($id);
         $name     = $customer->name;
         $customer->forceDelete();
 
@@ -233,7 +269,9 @@ class CustomerController extends Controller
 
     public function trash(): Response
     {
-        $customers = Customer::onlyTrashed()
+        $customers = Customer::query()
+            ->withoutGlobalScopes()
+            ->where('trash', true)
             ->with('creator:id,name')
             ->orderByDesc('updated_at')
             ->paginate(15);

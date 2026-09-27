@@ -11,9 +11,15 @@ test('salesperson can save products', function () {
     $user = new User(['role' => User::ROLE_SALESPERSON]);
 
     expect($user->canAccessModule('products'))->toBeTrue()
+        ->and($user->canAccessModule('sales'))->toBeTrue()
+        ->and($user->canAccessModule('customers'))->toBeTrue()
+        ->and($user->canAccessModule('inventory'))->toBeTrue()
         ->and($user->hasPermission('products.view'))->toBeTrue()
         ->and($user->hasPermission('products.create'))->toBeTrue()
         ->and($user->hasPermission('sales.create'))->toBeTrue()
+        ->and($user->hasPermission('sales.update'))->toBeTrue()
+        ->and($user->hasPermission('customers.update'))->toBeTrue()
+        ->and($user->hasPermission('inventory.view'))->toBeTrue()
         ->and($user->canAccessModule('investors'))->toBeFalse();
 });
 

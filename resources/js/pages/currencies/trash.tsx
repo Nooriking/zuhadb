@@ -3,12 +3,12 @@
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { useToast } from '@/hooks/use-toast';
+
 import AppLayout from '@/layouts/app-layout';
+import { forceDeleteItem, restoreItem } from '@/lib/trash-actions';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link, router } from '@inertiajs/react';
-import { ArrowLeft, Coins, RotateCcw, Trash2, X } from 'lucide-react';
-import { useState } from 'react';
+import { Head, Link } from '@inertiajs/react';
+import { ArrowLeft, Coins, RotateCcw, Trash2 } from 'lucide-react';
 
 interface Currency {
     id: number;
@@ -37,37 +37,7 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Trash', href: '/currencies/trash' },
 ];
 
-export default function CurrenciesTrash({ currencies }: Props) {
-    const { toast } = useToast();
-    const [currencyToDelete, setCurrencyToDelete] = useState<Currency | null>(null);
-
-    const handleRestore = (currency: Currency) => {
-        router.post(
-            `/currencies/${currency.id}/restore`,
-            {},
-            {
-                preserveScroll: true,
-                onSuccess: () => toast({ title: 'Restored', description: `Currency ${currency.code} was restored.` }),
-                onError: () => toast({ title: 'Error', description: 'Failed to restore.', variant: 'destructive' }),
-            },
-        );
-    };
-
-    const confirmForceDelete = () => {
-        if (!currencyToDelete) return;
-
-        router.delete(`/currencies/${currencyToDelete.id}/force-delete`, {
-            preserveScroll: true,
-            onSuccess: () => {
-                toast({ title: 'Deleted', description: `Currency ${currencyToDelete.code} was permanently deleted.` });
-                setCurrencyToDelete(null);
-            },
-            onError: () => {
-                toast({ title: 'Error', description: 'Failed to delete.', variant: 'destructive' });
-                setCurrencyToDelete(null);
-            },
-        });
-    };
+export default function CurrenciesTrash({ currencies }: Props) {
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
@@ -127,7 +97,7 @@ export default function CurrenciesTrash({ currencies }: Props) {
                                         </TableCell>
                                         <TableCell>
                                             <div className="flex items-center justify-center gap-1">
-                                                <Button variant="ghost" size="icon" title="Restore" onClick={() => handleRestore(currency)}>
+                                                <Button variant="ghost" size="icon" title="Restore" onClick={() => void restoreItem(currency.code, `/currencies/${currency.id}/restore`)}>
                                                     <RotateCcw className="h-4 w-4 text-green-600" />
                                                 </Button>
                                                 <Button
@@ -135,7 +105,7 @@ export default function CurrenciesTrash({ currencies }: Props) {
                                                     size="icon"
                                                     title="Delete Forever"
                                                     className="text-destructive hover:text-destructive"
-                                                    onClick={() => setCurrencyToDelete(currency)}
+                                                    onClick={() => void forceDeleteItem(currency.code, `/currencies/${currency.id}/force-delete`)}
                                                 >
                                                     <Trash2 className="h-4 w-4" />
                                                 </Button>
@@ -149,39 +119,6 @@ export default function CurrenciesTrash({ currencies }: Props) {
                 </div>
             </div>
 
-            {currencyToDelete && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setCurrencyToDelete(null)}>
-                    <div className="bg-background w-full max-w-md rounded-lg border shadow-lg" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-start gap-4 p-6">
-                            <div className="bg-destructive/10 text-destructive flex h-10 w-10 shrink-0 items-center justify-center rounded-full">
-                                <Trash2 className="h-5 w-5" />
-                            </div>
-                            <div className="flex-1">
-                                <h3 className="text-lg font-semibold">Delete forever?</h3>
-                                <p className="text-muted-foreground mt-1 text-sm">
-                                    Currency <strong>{currencyToDelete.code}</strong> will be <strong>permanently deleted</strong>. This action cannot
-                                    be undone.
-                                </p>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={() => setCurrencyToDelete(null)}
-                                className="text-muted-foreground hover:text-foreground transition-colors"
-                            >
-                                <X className="h-5 w-5" />
-                            </button>
-                        </div>
-                        <div className="flex justify-end gap-2 border-t px-6 py-4">
-                            <Button variant="outline" onClick={() => setCurrencyToDelete(null)}>
-                                Cancel
-                            </Button>
-                            <Button onClick={confirmForceDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                                Delete Forever
-                            </Button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </AppLayout>
     );
 }

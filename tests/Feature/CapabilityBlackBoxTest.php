@@ -118,8 +118,21 @@ test('each role only opens the sections that role is allowed to use', function (
     ],
     'salesperson' => [
         User::ROLE_SALESPERSON,
-        ['/dashboard', '/dashboard/cashier', '/sales', '/sales/create', '/products', '/products/create', '/customers', '/sale-returns'],
-        ['/users', '/investors', '/inventory', '/expenses'],
+        [
+            '/dashboard',
+            '/dashboard/cashier',
+            '/sales',
+            '/sales/create',
+            '/products',
+            '/products/create',
+            '/products/receive',
+            '/customers',
+            '/customer-transactions',
+            '/sale-returns',
+            '/receipts',
+            '/inventory',
+        ],
+        ['/users', '/investors', '/expenses', '/stock-transfers', '/app-settings'],
     ],
     'stock keeper' => [
         User::ROLE_STOCK_KEEPER,

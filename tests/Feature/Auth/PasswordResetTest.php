@@ -1,60 +1,69 @@
 <?php
 
+use App\Mail\PasswordResetCode;
 use App\Models\User;
-use Illuminate\Auth\Notifications\ResetPassword;
-use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
 
-test('reset password link screen can be rendered', function () {
+test('reset password request screen can be rendered', function () {
     $response = $this->get('/forgot-password');
 
     $response->assertStatus(200);
 });
 
-test('reset password link can be requested', function () {
-    Notification::fake();
+test('reset password code can be requested and mailed', function () {
+    Mail::fake();
 
-    $user = User::factory()->create();
+    $user = User::factory()->create([
+        'email' => 'reset.user@example.com',
+        'status' => 'active',
+        'trash' => false,
+    ]);
 
-    $this->post('/forgot-password', ['email' => $user->email]);
+    $response = $this->post('/forgot-password', ['email' => $user->email]);
 
-    Notification::assertSentTo($user, ResetPassword::class);
+    $response->assertRedirect(route('password.code', ['email' => $user->email]));
+    Mail::assertSent(PasswordResetCode::class, function (PasswordResetCode $mail) use ($user) {
+        return $mail->hasTo($user->email) && strlen($mail->code) === 6;
+    });
+    expect(DB::table('password_reset_tokens')->where('email', $user->email)->exists())->toBeTrue();
 });
 
-test('reset password screen can be rendered', function () {
-    Notification::fake();
+test('reset code screen can be rendered', function () {
+    $response = $this->get('/forgot-password/code?email=reset.user@example.com');
 
-    $user = User::factory()->create();
-
-    $this->post('/forgot-password', ['email' => $user->email]);
-
-    Notification::assertSentTo($user, ResetPassword::class, function ($notification) {
-        $response = $this->get('/reset-password/'.$notification->token);
-
-        $response->assertStatus(200);
-
-        return true;
-    });
+    $response->assertStatus(200);
 });
 
-test('password can be reset with valid token', function () {
-    Notification::fake();
+test('password can be reset with a valid 6-digit code', function () {
+    Mail::fake();
 
-    $user = User::factory()->create();
+    $user = User::factory()->create([
+        'email' => 'code.user@example.com',
+        'status' => 'active',
+        'trash' => false,
+    ]);
 
-    $this->post('/forgot-password', ['email' => $user->email]);
+    $code = '123456';
 
-    Notification::assertSentTo($user, ResetPassword::class, function ($notification) use ($user) {
-        $response = $this->post('/reset-password', [
-            'token' => $notification->token,
-            'email' => $user->email,
-            'password' => 'password',
-            'password_confirmation' => 'password',
-        ]);
+    DB::table('password_reset_tokens')->updateOrInsert(
+        ['email' => $user->email],
+        ['token' => Hash::make($code), 'created_at' => now()]
+    );
 
-        $response
-            ->assertSessionHasNoErrors()
-            ->assertRedirect(route('login'));
+    $response = $this->post('/forgot-password/code', [
+        'email' => $user->email,
+        'code' => $code,
+        'password' => 'NewPass@123',
+        'password_confirmation' => 'NewPass@123',
+    ]);
 
-        return true;
-    });
+    $response
+        ->assertSessionHasNoErrors()
+        ->assertRedirect(route('login'));
+
+    $user->refresh();
+    expect(Hash::check('NewPass@123', $user->password))->toBeTrue();
+    expect(DB::table('password_reset_tokens')->where('email', $user->email)->exists())->toBeFalse();
 });

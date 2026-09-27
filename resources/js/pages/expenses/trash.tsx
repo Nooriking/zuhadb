@@ -1,8 +1,9 @@
 // resources/js/pages/expenses/trash.tsx
 
 import AppLayout from '@/layouts/app-layout';
+import { forceDeleteItem, restoreItem } from '@/lib/trash-actions';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link, router } from '@inertiajs/react';
+import { Head, Link } from '@inertiajs/react';
 
 interface Expense {
     id: number;
@@ -36,15 +37,6 @@ const formatPrice = (v: string | number) =>
     new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(typeof v === 'string' ? parseFloat(v) : v);
 
 export default function ExpensesTrash({ expenses }: Props) {
-    const handleRestore = (e: Expense) => {
-        if (!confirm(`Restore "${e.expense_number}"?`)) return;
-        router.post(`/expenses/${e.id}/restore`, {}, { preserveScroll: true });
-    };
-
-    const handleForceDelete = (e: Expense) => {
-        if (!confirm(`Permanently delete "${e.expense_number}"?`)) return;
-        router.delete(`/expenses/${e.id}/force-delete`, { preserveScroll: true });
-    };
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
@@ -88,13 +80,13 @@ export default function ExpensesTrash({ expenses }: Props) {
                                         <td className="px-4 py-3 text-center">
                                             <div className="flex justify-center gap-3">
                                                 <button
-                                                    onClick={() => handleRestore(e)}
+                                                    onClick={() => void restoreItem(e.title, `/expenses/${e.id}/restore`)}
                                                     className="text-xs font-semibold text-green-600 hover:text-green-800"
                                                 >
                                                     Restore
                                                 </button>
                                                 <button
-                                                    onClick={() => handleForceDelete(e)}
+                                                    onClick={() => void forceDeleteItem(e.title, `/expenses/${e.id}/force-delete`)}
                                                     className="text-xs font-semibold text-red-600 hover:text-red-800"
                                                 >
                                                     Delete Forever

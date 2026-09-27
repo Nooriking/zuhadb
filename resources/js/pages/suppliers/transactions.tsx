@@ -135,7 +135,7 @@ export default function SupplierTransactions({ invoices, suppliers, filters, sum
                                         <TableCell>
                                             {row.bill_image ? (
                                                 <a href={`/storage/${row.bill_image}`} target="_blank" rel="noreferrer">
-                                                    <img src={`/storage/${row.bill_image}`} alt="Bill" className="h-12 w-12 rounded border object-cover" />
+                                                    <img loading="lazy" decoding="async" src={`/storage/${row.bill_image}`} alt="Bill" className="h-12 w-12 rounded border object-cover" />
                                                 </a>
                                             ) : (
                                                 <span className="text-muted-foreground text-xs">No image</span>
