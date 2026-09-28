@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import AuthLayout from '@/layouts/auth-layout';
 import { Head, useForm } from '@inertiajs/react';
 import { Eye, EyeOff, LoaderCircle, Lock, Mail, ShieldAlert, ShieldCheck } from 'lucide-react';
-import { FormEventHandler, useEffect, useMemo, useState } from 'react';
+import { FormEventHandler, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface LoginForm {
     email: string;
@@ -36,9 +36,39 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
         remember: false,
     });
     const [showPassword, setShowPassword] = useState(false);
-    const [lockSecondsLeft, setLockSecondsLeft] = useState(() =>
-        lockoutSeconds && lockoutSeconds > 0 ? lockoutSeconds : 0,
-    );
+    const emailRef = useRef<HTMLInputElement>(null);
+    const passwordRef = useRef<HTMLInputElement>(null);
+    const [lockSecondsLeft, setLockSecondsLeft] = useState(() => (lockoutSeconds && lockoutSeconds > 0 ? lockoutSeconds : 0));
+
+    const clearCredentialFields = useCallback(() => {
+        [emailRef.current, passwordRef.current].forEach((field) => {
+            if (field) field.value = '';
+        });
+        setData('email', '');
+        setData('password', '');
+    }, [setData]);
+
+    useEffect(() => {
+        clearCredentialFields();
+
+        const frame = window.requestAnimationFrame(clearCredentialFields);
+        const timer = window.setTimeout(clearCredentialFields, 400);
+
+        return () => {
+            window.cancelAnimationFrame(frame);
+            window.clearTimeout(timer);
+        };
+    }, [clearCredentialFields]);
+
+    useEffect(() => {
+        const onRestore = (event: PageTransitionEvent) => {
+            if (event.persisted) clearCredentialFields();
+        };
+
+        window.addEventListener('pageshow', onRestore);
+
+        return () => window.removeEventListener('pageshow', onRestore);
+    }, [clearCredentialFields]);
 
     const serverLockSeconds = useMemo(() => {
         const raw = (errors as Record<string, string>).lockout;
@@ -97,9 +127,7 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                     <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
                     <div>
                         <p className="font-semibold">Sign-in locked</p>
-                        <p className="text-red-200/90">
-                            Too many failed attempts. Wait {formatCountdown(lockSecondsLeft)} before trying again.
-                        </p>
+                        <p className="text-red-200/90">Too many failed attempts. Wait {formatCountdown(lockSecondsLeft)} before trying again.</p>
                     </div>
                 </div>
             )}
@@ -114,7 +142,7 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                 </div>
             )}
 
-            <form className="flex flex-col gap-5" onSubmit={submit}>
+            <form className="flex flex-col gap-5" onSubmit={submit} autoComplete="off">
                 <div className="grid gap-2">
                     <Label htmlFor="email" className="text-neutral-300">
                         Email or username
@@ -123,11 +151,16 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                         <Mail className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[#D4AF37]/70" />
                         <Input
                             id="email"
+                            ref={emailRef}
+                            name="zuha-login-identifier"
                             type="text"
                             required
                             autoFocus
                             tabIndex={1}
-                            autoComplete="username"
+                            autoComplete="off"
+                            data-form-type="other"
+                            data-1p-ignore
+                            data-lpignore="true"
                             value={data.email}
                             onChange={(e) => setData('email', e.target.value)}
                             placeholder="email@example.com or username"
@@ -143,11 +176,7 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                             Password
                         </Label>
                         {canResetPassword && (
-                            <TextLink
-                                href={route('password.request')}
-                                className="ml-auto text-sm text-[#D4AF37] hover:text-[#F0D78C]"
-                                tabIndex={5}
-                            >
+                            <TextLink href={route('password.request')} className="ml-auto text-sm text-[#D4AF37] hover:text-[#F0D78C]" tabIndex={5}>
                                 Forgot password?
                             </TextLink>
                         )}
@@ -156,10 +185,15 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                         <Lock className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[#D4AF37]/70" />
                         <Input
                             id="password"
+                            ref={passwordRef}
+                            name="zuha-login-secret"
                             type={showPassword ? 'text' : 'password'}
                             required
                             tabIndex={2}
-                            autoComplete="current-password"
+                            autoComplete="new-password"
+                            data-form-type="other"
+                            data-1p-ignore
+                            data-lpignore="true"
                             value={data.password}
                             onChange={(e) => setData('password', e.target.value)}
                             placeholder="••••••••"
