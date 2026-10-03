@@ -129,7 +129,6 @@ class User extends Authenticatable
             'dashboard', 'customers', 'sales', 'sale-returns', 'inventory',
         ],
 
-        // Shop-floor seller: products, sales, dues/receipts, returns, stock view
         self::ROLE_SALESPERSON => [
             'dashboard',
             'products',
@@ -237,8 +236,6 @@ class User extends Authenticatable
         'phone',
         'password',
         'role',
-        'employee_code',
-        'avatar',
         'status',
         'user_id',
     ];
@@ -363,7 +360,6 @@ class User extends Authenticatable
     public function isAdmin(): bool                { return $this->hasRole(self::ROLE_ADMIN); }
     public function isBranchManager(): bool        { return $this->hasRole(self::ROLE_BRANCH_MANAGER); }
 
-    /** Shop staff stay on their own branch and do not pick another one. */
     public function isBranchScoped(): bool
     {
         return (bool) $this->branch_id
@@ -549,35 +545,26 @@ class User extends Authenticatable
 
     /* =========================================================
      |  ⭐ TARGET-BASED PERMISSIONS
-     |  قوانین:
-     |  - Super Admin هرگز قابل مدیریت/بلاک/حذف توسط دیگران نیست
-     |  - Admin فقط توسط Super Admin قابل مدیریت/بلاک است
-     |  - Branch Manager فقط کاربران شعبه خودش را مدیریت می‌کند
      ========================================================= */
 
     public function canManageUser(User $target): bool
     {
-        // ⛔ هیچ‌کس نمی‌تواند خودش را مدیریت کند
         if ($this->id === $target->id) {
             return false;
         }
 
-        // Super Admin می‌تواند همه را مدیریت کند (به جز خودش)
         if ($this->isSuperAdmin()) {
             return true;
         }
 
-        // ⛔ Super Admin فقط توسط Super Admin قابل مدیریت است
         if ($target->isSuperAdmin()) {
             return false;
         }
 
-        // Admin می‌تواند همه را مدیریت کند مگر Super Admin و Admin دیگر
         if ($this->isAdmin()) {
             return ! $target->isAdmin();
         }
 
-        // Branch Manager فقط کاربران شعبه خودش
         if ($this->isBranchManager()) {
             return $target->branch_id === $this->branch_id
                 && in_array($target->role, $this->getCreatableRoles(), true);
@@ -588,12 +575,10 @@ class User extends Authenticatable
 
     public function canBlockTarget(User $target): bool
     {
-        // ⛔ نمی‌توانی خودت را بلاک کنی
         if ($this->id === $target->id) {
             return false;
         }
 
-        // ⛔ Super Admin هرگز بلاک نمی‌شود — حتی توسط Super Admin دیگر
         if ($target->isSuperAdmin()) {
             return false;
         }
@@ -602,17 +587,14 @@ class User extends Authenticatable
             return false;
         }
 
-        // اگر قبلاً بلاک شده، دیگر بلاک نکن
         if ($target->status === 'blocked') {
             return false;
         }
 
-        // ⛔ Admin فقط توسط Super Admin قابل بلاک است
         if ($target->isAdmin()) {
             return $this->isSuperAdmin();
         }
 
-        // Branch Manager فقط کاربران شعبه خودش
         if ($this->isBranchManager()) {
             return $target->branch_id === $this->branch_id;
         }
@@ -622,7 +604,6 @@ class User extends Authenticatable
 
     public function canUnblockTarget(User $target): bool
     {
-        // ⛔ Super Admin هرگز آنبلاک نمی‌شود (چون اصلاً نباید بلاک شود)
         if ($target->isSuperAdmin()) {
             return false;
         }
@@ -631,17 +612,14 @@ class User extends Authenticatable
             return false;
         }
 
-        // فقط کاربران بلاک‌شده قابل آنبلاک هستند
         if ($target->status !== 'blocked') {
             return false;
         }
 
-        // ⛔ Admin فقط توسط Super Admin قابل آنبلاک است
         if ($target->isAdmin()) {
             return $this->isSuperAdmin();
         }
 
-        // Branch Manager فقط کاربران شعبه خودش
         if ($this->isBranchManager()) {
             return $target->branch_id === $this->branch_id;
         }

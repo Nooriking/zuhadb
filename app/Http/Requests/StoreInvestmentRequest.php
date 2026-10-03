@@ -26,7 +26,7 @@ class StoreInvestmentRequest extends FormRequest
                 Rule::exists('users', 'id')->where(fn ($q) => $q->where('role', User::ROLE_INVESTOR)),
             ],
             'parent_investment_id' => ['nullable', 'integer', 'exists:investments,id'],
-            'capital_amount_afn' => SafeData::money(true, 0.01),
+            'capital_amount_afn' => SafeData::money(true, 0),
             'investment_date' => ['required', 'date'],
             'notes' => SafeData::plainText(SafeData::NOTES_MAX),
         ];

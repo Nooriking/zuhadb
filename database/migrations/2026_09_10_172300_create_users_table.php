@@ -40,10 +40,6 @@ return new class extends Migration
                 'salesperson',
             ])->default('salesperson');
 
-            // اطلاعات شغلی
-            $table->string('employee_code')->nullable()->unique();
-            $table->string('avatar')->nullable();
-
             // آخرین ورود
             $table->timestamp('last_login_at')->nullable();
             $table->rememberToken();

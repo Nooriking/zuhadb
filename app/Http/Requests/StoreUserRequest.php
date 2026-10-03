@@ -45,8 +45,6 @@ class StoreUserRequest extends FormRequest
             'phone' => SafeData::phone(),
             'password' => ['required', 'confirmed', SafeData::strongPassword()],
             'role' => ['required', Rule::in($creatableRoles)],
-            'employee_code' => ['nullable', 'string', 'max:50', 'regex:/^[^<>]*$/u', 'unique:users,employee_code'],
-            'avatar' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
             'status' => ['required', Rule::in(['active', 'inactive', 'blocked'])],
         ];
     }

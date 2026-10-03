@@ -3,13 +3,13 @@
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
-import { AlertTriangle, Boxes, DollarSign, Package, ShoppingBag, ShoppingCart, TrendingUp, UserCircle, Users, Wallet } from 'lucide-react';
+import { AlertTriangle, Boxes, DollarSign, Package, ShoppingBag, ShoppingCart, Store, TrendingUp, UserCircle, Users, Wallet } from 'lucide-react';
 import { lazy, Suspense, useState } from 'react';
 
-import { LazyInView } from '@/components/lazy-in-view';
 import KpiCard from '@/components/dashboard/kpi-card';
 import LowStock from '@/components/dashboard/low-stock';
 import RecentSales from '@/components/dashboard/recent-sales';
+import { LazyInView } from '@/components/lazy-in-view';
 
 const SalesChart = lazy(() => import('@/components/dashboard/sales-chart'));
 const BrandPie = lazy(() => import('@/components/dashboard/brand-pie'));
@@ -110,6 +110,42 @@ interface LowStockItem {
     min_stock: number;
 }
 
+/* ✅ Store Assets types */
+interface StoreAssetsSummary {
+    total_items: number;
+    total_qty: number;
+    total_remaining_qty: number;
+    total_cost_afn: number;
+    remaining_cost_afn: number;
+    expected_profit_afn: number;
+    realized_sales_afn: number;
+    realized_qty: number;
+    realized_profit_afn: number;
+    total_profit_afn: number;
+}
+
+interface StoreAssetItem {
+    batch_id: number;
+    batch_code: string;
+    variant_id: number;
+    name: string;
+    brand: string | null;
+    quantity: number;
+    remaining: number;
+    unit_cost_afn: number;
+    sale_price_afn: number;
+    total_cost_afn: number;
+    remaining_cost_afn: number;
+    expected_profit_afn: number;
+    received_date: string | null;
+    branch_id: number | null;
+}
+
+interface StoreAssets {
+    summary: StoreAssetsSummary;
+    items: StoreAssetItem[];
+}
+
 interface Props {
     days: number;
     kpis: Kpis;
@@ -123,6 +159,7 @@ interface Props {
     recentActivity?: ActivityItem[];
     lowStockItems: LowStockItem[];
     dueCustomers: { id: number; name: string; phone: string | null; current_due_afn: number; due_date: string | null }[];
+    storeAssets?: StoreAssets;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -131,8 +168,7 @@ interface Props {
 
 const breadcrumbs: BreadcrumbItem[] = [{ title: 'Dashboard', href: '/dashboard' }];
 
-const formatPrice = (v: number) =>
-    new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(v);
+const formatPrice = (v: number) => new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(v);
 
 /* ═══════════════════════════════════════════════════════
  |  Component
@@ -151,6 +187,7 @@ export default function Dashboard({
     recentActivity = [],
     lowStockItems,
     dueCustomers = [],
+    storeAssets,
 }: Props) {
     const [range, setRange] = useState(days);
 
@@ -311,6 +348,156 @@ export default function Dashboard({
                     </div>
                 </div>
 
+                {/* ═══════════ ✅ Store Assets (دارایی‌های دوکان) ═══════════ */}
+                {storeAssets && (
+                    <div className="bg-card rounded-lg border shadow-sm">
+                        <div className="border-b px-6 py-4">
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                <div>
+                                    <h3 className="flex items-center gap-2 text-lg font-semibold">
+                                        <Store className="h-5 w-5 text-purple-600" />
+                                        Store-Owned Assets
+                                    </h3>
+                                    <p className="text-muted-foreground text-sm">
+                                        Goods bought by the shop (not investor-owned) — 100% of profit stays with the store
+                                    </p>
+                                </div>
+                                <Link href="/products?owner=store" className="text-xs font-semibold text-blue-600 hover:underline">
+                                    View all →
+                                </Link>
+                            </div>
+                        </div>
+
+                        <div className="p-6">
+                            {/* Summary KPI cards */}
+                            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                                {/* Total Items */}
+                                <div className="rounded-lg border bg-gradient-to-br from-blue-50 to-blue-100/50 p-4 dark:from-blue-950/40 dark:to-blue-900/20">
+                                    <div className="flex items-center gap-2 text-xs font-medium text-blue-800 uppercase dark:text-blue-400">
+                                        <Package className="h-3.5 w-3.5" /> Items
+                                    </div>
+                                    <p className="mt-2 text-2xl font-bold text-blue-900 dark:text-blue-300">{storeAssets.summary.total_items}</p>
+                                    <p className="text-xs text-blue-700 dark:text-blue-500">
+                                        {storeAssets.summary.total_remaining_qty} / {storeAssets.summary.total_qty} pcs left
+                                    </p>
+                                </div>
+
+                                {/* Stock Value */}
+                                <div className="rounded-lg border bg-gradient-to-br from-slate-50 to-slate-100/50 p-4 dark:from-slate-950/40 dark:to-slate-900/20">
+                                    <div className="flex items-center gap-2 text-xs font-medium text-slate-700 uppercase dark:text-slate-400">
+                                        <DollarSign className="h-3.5 w-3.5" /> Stock Value
+                                    </div>
+                                    <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-300">
+                                        {formatPrice(storeAssets.summary.remaining_cost_afn)}
+                                    </p>
+                                    <p className="text-xs text-slate-600 dark:text-slate-500">AFN at cost</p>
+                                </div>
+
+                                {/* Expected Profit */}
+                                <div className="rounded-lg border bg-gradient-to-br from-emerald-50 to-emerald-100/50 p-4 dark:from-emerald-950/40 dark:to-emerald-900/20">
+                                    <div className="flex items-center gap-2 text-xs font-medium text-emerald-800 uppercase dark:text-emerald-400">
+                                        <TrendingUp className="h-3.5 w-3.5" /> Expected
+                                    </div>
+                                    <p className="mt-2 text-2xl font-bold text-emerald-900 dark:text-emerald-300">
+                                        {formatPrice(storeAssets.summary.expected_profit_afn)}
+                                    </p>
+                                    <p className="text-xs text-emerald-700 dark:text-emerald-500">If all stock sells</p>
+                                </div>
+
+                                {/* Realized Profit */}
+                                <div className="rounded-lg border bg-gradient-to-br from-amber-50 to-amber-100/50 p-4 dark:from-amber-950/40 dark:to-amber-900/20">
+                                    <div className="flex items-center gap-2 text-xs font-medium text-amber-800 uppercase dark:text-amber-400">
+                                        <ShoppingCart className="h-3.5 w-3.5" /> Realized
+                                    </div>
+                                    <p className="mt-2 text-2xl font-bold text-amber-900 dark:text-amber-300">
+                                        {formatPrice(storeAssets.summary.realized_profit_afn)}
+                                    </p>
+                                    <p className="text-xs text-amber-700 dark:text-amber-500">{storeAssets.summary.realized_qty} pcs sold</p>
+                                </div>
+
+                                {/* Total Profit */}
+                                <div className="rounded-lg border bg-gradient-to-br from-violet-50 to-violet-100/50 p-4 dark:from-violet-950/40 dark:to-violet-900/20">
+                                    <div className="flex items-center gap-2 text-xs font-medium text-violet-800 uppercase dark:text-violet-400">
+                                        <Wallet className="h-3.5 w-3.5" /> Total Profit
+                                    </div>
+                                    <p className="mt-2 text-2xl font-bold text-violet-900 dark:text-violet-300">
+                                        {formatPrice(storeAssets.summary.total_profit_afn)}
+                                    </p>
+                                    <p className="text-xs text-violet-700 dark:text-violet-500">Realized + expected</p>
+                                </div>
+                            </div>
+
+                            {/* Items table */}
+                            {storeAssets.items.length === 0 ? (
+                                <div className="text-muted-foreground mt-6 py-8 text-center text-sm">
+                                    <Package className="mx-auto mb-2 h-8 w-8 opacity-40" />
+                                    No store-owned stock in inventory yet.
+                                </div>
+                            ) : (
+                                <div className="mt-6 overflow-x-auto rounded-lg border">
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-muted/50">
+                                            <tr>
+                                                <th className="text-muted-foreground px-4 py-3 text-left text-xs font-semibold uppercase">#</th>
+                                                <th className="text-muted-foreground px-4 py-3 text-left text-xs font-semibold uppercase">Product</th>
+                                                <th className="text-muted-foreground px-4 py-3 text-right text-xs font-semibold uppercase">Cost</th>
+                                                <th className="text-muted-foreground px-4 py-3 text-right text-xs font-semibold uppercase">Sale</th>
+                                                <th className="text-muted-foreground px-4 py-3 text-right text-xs font-semibold uppercase">
+                                                    Remaining
+                                                </th>
+                                                <th className="text-muted-foreground px-4 py-3 text-right text-xs font-semibold uppercase">
+                                                    Stock Value
+                                                </th>
+                                                <th className="text-muted-foreground px-4 py-3 text-right text-xs font-semibold uppercase">
+                                                    Exp. Profit
+                                                </th>
+                                                <th className="text-muted-foreground px-4 py-3 text-left text-xs font-semibold uppercase">
+                                                    Received
+                                                </th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-border divide-y">
+                                            {storeAssets.items.slice(0, 10).map((item, i) => (
+                                                <tr key={item.batch_id} className="hover:bg-muted/40">
+                                                    <td className="text-muted-foreground px-4 py-3">{i + 1}</td>
+                                                    <td className="px-4 py-3">
+                                                        <div className="font-medium">{item.name}</div>
+                                                        <div className="text-muted-foreground font-mono text-xs">{item.batch_code}</div>
+                                                    </td>
+                                                    <td className="px-4 py-3 text-right font-mono text-xs">{formatPrice(item.unit_cost_afn)}</td>
+                                                    <td className="px-4 py-3 text-right font-mono text-xs text-green-700">
+                                                        {formatPrice(item.sale_price_afn)}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-right font-mono">
+                                                        <span className="font-semibold">{item.remaining}</span>
+                                                        <span className="text-muted-foreground text-xs"> / {item.quantity}</span>
+                                                    </td>
+                                                    <td className="px-4 py-3 text-right font-mono font-semibold">
+                                                        {formatPrice(item.remaining_cost_afn)}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-right font-mono font-semibold text-emerald-700">
+                                                        {formatPrice(item.expected_profit_afn)}
+                                                    </td>
+                                                    <td className="text-muted-foreground px-4 py-3 text-xs">{item.received_date || '—'}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+
+                                    {storeAssets.items.length > 10 && (
+                                        <div className="border-t px-4 py-3 text-center">
+                                            <Link href="/products?owner=store" className="text-xs font-semibold text-blue-600 hover:underline">
+                                                + {storeAssets.items.length - 10} more items →
+                                            </Link>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                {/* ═══════════ Customer Dues ═══════════ */}
                 <div className="bg-card rounded-lg border p-6 shadow-sm">
                     <h3 className="text-lg font-semibold">Customer dues</h3>
                     <p className="text-muted-foreground mb-4 text-sm">Who owes money, and the date they should pay the rest</p>
@@ -436,6 +623,7 @@ export default function Dashboard({
                     </div>
                 </div>
 
+                {/* ═══════════ Recent Activity ═══════════ */}
                 <div className="bg-card rounded-lg border shadow-sm">
                     <div className="border-b px-6 py-4">
                         <h3 className="text-lg font-semibold">Recent activity</h3>
@@ -463,7 +651,11 @@ export default function Dashboard({
                             ) : (
                                 <div className="divide-y">
                                     {recentActivity.map((item) => (
-                                        <Link key={item.id} href={item.url} className="hover:bg-muted/50 flex items-start justify-between gap-4 px-6 py-3">
+                                        <Link
+                                            key={item.id}
+                                            href={item.url}
+                                            className="hover:bg-muted/50 flex items-start justify-between gap-4 px-6 py-3"
+                                        >
                                             <div className="min-w-0">
                                                 <p className="text-sm font-medium">{item.title}</p>
                                                 {item.body && <p className="text-muted-foreground truncate text-xs">{item.body}</p>}

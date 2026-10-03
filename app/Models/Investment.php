@@ -18,6 +18,7 @@ class Investment extends Model
 
     protected $fillable = [
         'investor_id',
+        'source_type',              // ✅ اضافه شد — cash | goods
         'parent_investment_id',
         'investment_number',
         'capital_amount_afn',
@@ -34,16 +35,16 @@ class Investment extends Model
     ];
 
     protected $casts = [
-        'capital_amount_afn'   => 'decimal:2',
-        'available_amount_afn' => 'decimal:2',
-        'allocated_amount_afn' => 'decimal:2',
-        'profit_amount_afn'    => 'decimal:2',
-        'withdrawn_amount_afn'      => 'decimal:2',
-        'investment_date'           => 'date',
-        'trash'                     => 'boolean',
-        'created_at'                => 'datetime',
-        'updated_at'                => 'datetime',
-        'deleted_at'                => 'datetime',
+        'capital_amount_afn'    => 'decimal:2',
+        'available_amount_afn'  => 'decimal:2',
+        'allocated_amount_afn'  => 'decimal:2',
+        'profit_amount_afn'     => 'decimal:2',
+        'withdrawn_amount_afn'  => 'decimal:2',
+        'investment_date'       => 'date',
+        'trash'                 => 'boolean',
+        'created_at'            => 'datetime',
+        'updated_at'            => 'datetime',
+        'deleted_at'            => 'datetime',
     ];
 
     /* =========================================================
@@ -57,6 +58,30 @@ class Investment extends Model
         'withdrawn'      => 'Withdrawn',
         'closed'         => 'Closed',
     ];
+
+    /* =========================================================
+     |  ✅ Source Type Labels (Cash vs Goods)
+     ========================================================= */
+
+    public const SOURCE_TYPES = [
+        'cash'  => 'Cash',
+        'goods' => 'Goods',
+    ];
+
+    public function getSourceTypeLabelAttribute(): string
+    {
+        return self::SOURCE_TYPES[$this->source_type] ?? $this->source_type;
+    }
+
+    public function isCashInvestment(): bool
+    {
+        return $this->source_type === 'cash';
+    }
+
+    public function isGoodsInvestment(): bool
+    {
+        return $this->source_type === 'goods';
+    }
 
     /* =========================================================
      |  Relationships
@@ -113,7 +138,8 @@ class Investment extends Model
 
     public function scopeOnlyTrashed($query)
     {
-        return $query->withoutGlobalScope(\Illuminate\Database\Eloquent\SoftDeletingScope::class)->where('trash', true);
+        return $query->withoutGlobalScope(\Illuminate\Database\Eloquent\SoftDeletingScope::class)
+                     ->where('trash', true);
     }
 
     public function scopeActive($query)
@@ -133,13 +159,20 @@ class Investment extends Model
         return $query->where('investor_id', $investorId);
     }
 
+    public function scopeCash($query)
+    {
+        return $query->where('source_type', 'cash');
+    }
+
+    public function scopeGoods($query)
+    {
+        return $query->where('source_type', 'goods');
+    }
+
     /* =========================================================
      |  Static Helpers
      ========================================================= */
 
-    /**
-     * تولید شماره یکتای Investment
-     */
     public static function generateInvestmentNumber(): string
     {
         $prefix = 'INV-' . date('Ymd');
@@ -159,9 +192,6 @@ class Investment extends Model
      |  Status Management
      ========================================================= */
 
-    /**
-     * به‌روزرسانی وضعیت بر اساس موجودی و تخصیص.
-     */
     public function refreshStatus(): void
     {
         $available = (float) $this->available_amount_afn;
@@ -182,17 +212,11 @@ class Investment extends Model
      |  Capital Helpers
      ========================================================= */
 
-    /**
-     * آیا این Investment هنوز پول قابل تخصیص دارد؟
-     */
     public function hasAvailableCapital(): bool
     {
         return (float) $this->available_amount_afn > 0.01;
     }
 
-    /**
-     * درصد استفاده از سرمایه (۰ تا ۱۰۰)
-     */
     public function getProgressPercentAttribute(): float
     {
         $capital = (float) $this->capital_amount_afn;
@@ -202,9 +226,6 @@ class Investment extends Model
         return round(($allocated / $capital) * 100, 1);
     }
 
-    /**
-     * تبدیل مبلغ ارز به AFN
-     */
     public function toAfn(float $amountAfn): float
     {
         return $amountAfn;
@@ -219,11 +240,6 @@ class Investment extends Model
      |  Purchase Allocation
      ========================================================= */
 
-    /**
-     * تخصیص سرمایه به یک خرید.
-     *
-     * @throws \Exception
-     */
     public function allocateToPurchase(
         int $purchaseId,
         float $allocatedAmountAfn,
@@ -263,9 +279,6 @@ class Investment extends Model
      |  Stats Accessors
      ========================================================= */
 
-    /**
-     * مجموع سود پرداخت شده
-     */
     public function getTotalProfitPaidAttribute(): float
     {
         return (float) $this->profitEntries()
@@ -273,9 +286,6 @@ class Investment extends Model
             ->sum('profit_amount_afn');
     }
 
-    /**
-     * مجموع سود در انتظار پرداخت
-     */
     public function getTotalProfitPendingAttribute(): float
     {
         return (float) $this->profitEntries()
@@ -283,41 +293,26 @@ class Investment extends Model
             ->sum('profit_amount_afn');
     }
 
-    /**
-     * تعداد Batchهای این Investment
-     */
     public function getTotalBatchesAttribute(): int
     {
         return $this->productAllocations()->count();
     }
 
-    /**
-     * مجموع تعداد محصولات خریداری‌شده با این سرمایه
-     */
     public function getTotalFundedQuantityAttribute(): int
     {
         return (int) $this->productAllocations()->sum('funded_quantity');
     }
 
-    /**
-     * مجموع تعداد فروخته‌شده
-     */
     public function getTotalSoldQuantityAttribute(): int
     {
         return (int) $this->productAllocations()->sum('sold_quantity');
     }
 
-    /**
-     * مجموع تعداد باقی‌مانده
-     */
     public function getTotalRemainingQuantityAttribute(): int
     {
         return (int) $this->productAllocations()->sum('remaining_quantity');
     }
 
-    /**
-     * آیا این Investment تمام محصولاتش فروخته شده؟
-     */
     public function isFullySold(): bool
     {
         return $this->total_remaining_quantity <= 0;

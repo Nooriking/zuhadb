@@ -10,7 +10,7 @@ import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
-import { ArrowLeft, Building2, Save } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Building2, Save, UserPlus, UserX } from 'lucide-react';
 import { useState } from 'react';
 
 /* ═══════════════════════════════════════════════════════
@@ -49,6 +49,7 @@ interface Props {
 
 export default function BranchesEdit({ branch, managers, errors: initialErrors }: Props) {
     const { toast } = useToast();
+
     const [form, setForm] = useState({
         manager_user_id: branch.manager_user_id ? String(branch.manager_user_id) : 'none',
         name: branch.name,
@@ -61,6 +62,7 @@ export default function BranchesEdit({ branch, managers, errors: initialErrors }
         address: branch.address || '',
         status: branch.status,
     });
+
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
     const [loading, setLoading] = useState(false);
 
@@ -78,7 +80,8 @@ export default function BranchesEdit({ branch, managers, errors: initialErrors }
 
         const payload = {
             ...form,
-            manager_user_id: form.manager_user_id === 'none' ? '' : form.manager_user_id,
+            // ⭐ 'none' → null (نه رشته خالی)
+            manager_user_id: form.manager_user_id === 'none' ? null : form.manager_user_id,
         };
 
         router.put(`/branches/${branch.id}`, payload, {
@@ -112,6 +115,12 @@ export default function BranchesEdit({ branch, managers, errors: initialErrors }
         }
     };
 
+    // ⭐ آیا این شعبه مدیر دارد؟
+    const hasManager = form.manager_user_id !== 'none';
+
+    // ⭐ آیا هیچ Branch Manager آزادی وجود ندارد؟ (برای هشدار)
+    const noFreeManagers = managers.length === 0;
+
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title={`Edit ${branch.name}`} />
@@ -130,6 +139,17 @@ export default function BranchesEdit({ branch, managers, errors: initialErrors }
                     </Link>
                 </div>
 
+                {/* ⭐ هشدار: این شعبه مدیر ندارد */}
+                {!branch.manager_user_id && (
+                    <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <div className="flex-1">
+                            <p className="font-medium">این شعبه هنوز مدیری ندارد</p>
+                            <p className="mt-1 text-xs">لطفاً یک Branch Manager انتخاب کنید و ذخیره کنید.</p>
+                        </div>
+                    </div>
+                )}
+
                 <form onSubmit={handleSubmit}>
                     <Card>
                         <CardHeader>
@@ -137,16 +157,52 @@ export default function BranchesEdit({ branch, managers, errors: initialErrors }
                             <CardDescription>Update the information for branch {branch.name}.</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-6">
+                            {/* ⭐ هشدار اگر هیچ Branch Manager آزادی وجود ندارد */}
+                            {noFreeManagers && hasManager && (
+                                <div className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300">
+                                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                                    <div className="flex-1">
+                                        <p className="font-medium">Branch Manager آزادی وجود ندارد</p>
+                                        <p className="mt-1 text-xs">
+                                            فقط مدیر فعلی این شعبه در لیست نمایش داده می‌شود. برای تغییر مدیر، ابتدا یک Branch Manager آزاد بسازید.
+                                        </p>
+                                        <Link
+                                            href="/users/create"
+                                            className="mt-2 inline-flex items-center gap-1 text-xs font-medium underline hover:no-underline"
+                                        >
+                                            <UserPlus className="h-3 w-3" />
+                                            ساخت Branch Manager جدید
+                                        </Link>
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Manager */}
                             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                                 <div className="space-y-2">
-                                    <Label>Branch Manager</Label>
+                                    <Label className="flex items-center gap-2">
+                                        Branch Manager
+                                        {hasManager ? (
+                                            <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                                                تعیین شده
+                                            </span>
+                                        ) : (
+                                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                                                بدون مدیر
+                                            </span>
+                                        )}
+                                    </Label>
                                     <Select value={form.manager_user_id} onValueChange={(v) => handleChange('manager_user_id', v)}>
-                                        <SelectTrigger>
-                                            <SelectValue placeholder="Select a manager" />
+                                        <SelectTrigger className={errors.manager_user_id ? 'border-destructive' : ''}>
+                                            <SelectValue placeholder="انتخاب مدیر" />
                                         </SelectTrigger>
                                         <SelectContent>
-                                            <SelectItem value="none">No Manager</SelectItem>
+                                            <SelectItem value="none">
+                                                <div className="flex items-center gap-2">
+                                                    <UserX className="h-4 w-4 text-amber-500" />
+                                                    بدون مدیر
+                                                </div>
+                                            </SelectItem>
                                             {managers.map((m) => (
                                                 <SelectItem key={m.id} value={String(m.id)}>
                                                     {m.name} ({m.email})
@@ -154,6 +210,10 @@ export default function BranchesEdit({ branch, managers, errors: initialErrors }
                                             ))}
                                         </SelectContent>
                                     </Select>
+                                    {errors.manager_user_id && <p className="text-destructive text-sm">{errors.manager_user_id}</p>}
+                                    <p className="text-muted-foreground text-xs">
+                                        فقط Branch Manager های آزاد + مدیر فعلی این شعبه نمایش داده می‌شوند.
+                                    </p>
                                 </div>
                             </div>
 

@@ -90,7 +90,6 @@ class SaleReturnController extends Controller
         $selectedSale  = null;
         $saleItems     = [];
 
-        // Prefer explicit sale_id; otherwise resolve by invoice number (exact, then prefix).
         if (! $saleId && $invoiceQuery !== '') {
             $matched = Sale::query()
                 ->notTrashed()
@@ -185,7 +184,6 @@ class SaleReturnController extends Controller
         $saleReturn = DB::transaction(function () use ($validated) {
             $sale = Sale::with('customer')->findOrFail($validated['sale_id']);
 
-            /* ═══ ساخت SaleReturn ═══ */
             $customer       = $sale->customer;
             $previousDueAfn = $customer ? (float) $customer->current_due_afn : 0;
 
@@ -206,7 +204,6 @@ class SaleReturnController extends Controller
                 'created_by'      => Auth::id(),
             ]);
 
-            /* ═══ ساخت SaleReturnItem ها ═══ */
             $subtotalAfn = 0;
 
             foreach ($validated['items'] as $itemData) {
@@ -287,7 +284,7 @@ class SaleReturnController extends Controller
      |  EDIT
      ========================================================= */
 
-    public function edit(SaleReturn $saleReturn): Response
+    public function edit(SaleReturn $saleReturn): Response|RedirectResponse
     {
         if ($saleReturn->trash) abort(404);
 
@@ -368,7 +365,7 @@ class SaleReturnController extends Controller
     }
 
     /* =========================================================
-     |  MARK AS COMPLETED — اعمال نهایی: انبار + ledger + قرض
+     |  MARK AS COMPLETED
      ========================================================= */
 
     public function markAsCompleted(SaleReturn $saleReturn): RedirectResponse
@@ -396,7 +393,7 @@ class SaleReturnController extends Controller
                             branchId:      $saleReturn->branch_id,
                             variantId:     $item->variant_id,
                             qty:           $item->quantity,
-                            type:          'sale_return',
+                            type:          'return',    // ✅ اصلاح شد (قبلاً 'sale_return' بود)
                             batchId:       $batch->id,
                             referenceType: SaleReturn::class,
                             referenceId:   $saleReturn->id,
@@ -404,7 +401,6 @@ class SaleReturnController extends Controller
                         );
                     }
                 }
-                /* اگر خراب/منقضی → به انبار برنمی‌گردد */
             }
 
             /* ═══ ۲. آپدیت مشتری + ledger ═══ */
@@ -476,7 +472,7 @@ class SaleReturnController extends Controller
                     branchId: $saleReturn->branch_id,
                     variantId: $item->variant_id,
                     qty: $item->quantity,
-                    type: 'sale_return',
+                    type: 'return',    // ✅ اصلاح شد (قبلاً 'sale_return' بود)
                     batchId: $item->batch_id,
                     referenceType: SaleReturn::class,
                     referenceId: $saleReturn->id,
@@ -674,14 +670,10 @@ class SaleReturnController extends Controller
      |  PRIVATE HELPERS
      ========================================================= */
 
-    /**
-     * ساختن لیست اقلام قابل برگشت برای یک فروش
-     */
     protected function buildSaleItemsForReturn(Sale $sale): array
     {
         $sale->load(['items.variant.product:id,name', 'items.variant.product.brand:id,name', 'items.batch:id,batch_code']);
 
-        /* ═══ محاسبه مقادیر قبلاً برگشت‌شده ═══ */
         $returnedPerItem = SaleReturnItem::query()
             ->whereIn('sale_item_id', $sale->items->pluck('id'))
             ->whereHas('saleReturn', fn ($q) => $q->where('status', '!=', SaleReturn::STATUS_CANCELLED))

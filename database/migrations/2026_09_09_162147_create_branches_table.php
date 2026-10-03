@@ -11,10 +11,17 @@ return new class extends Migration
         Schema::create('branches', function (Blueprint $table) {
             $table->id();
 
+            // ⭐ Manager اختیاری — FK بعداً در migration جداگانه اضافه می‌شود
+            // چون جدول users هنوز ساخته نشده
+            $table->unsignedBigInteger('manager_user_id')->nullable();
+
+            // ⭐ سازنده شعبه (Super Admin) — FK بعداً
+            $table->unsignedBigInteger('user_id')->nullable();
+
             // Basic info
             $table->string('name');
             $table->string('code')->unique();
-            $table->string('phone')->nullable();
+            $table->string('phone', 50)->nullable();
             $table->string('email')->nullable();
 
             // Location
@@ -32,6 +39,8 @@ return new class extends Migration
             // Indexes
             $table->index('trash');
             $table->index('status');
+            $table->index('manager_user_id');
+            $table->index('user_id');
         });
     }
 

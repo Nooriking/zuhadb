@@ -15,8 +15,18 @@ class UpdateUserRequest extends FormRequest
     public function authorize(): bool
     {
         $targetUser = $this->route('user');
+        $authUser = $this->user();
 
-        return $this->user()?->canManageUser($targetUser) ?? false;
+        if (! $authUser || ! $targetUser) {
+            return false;
+        }
+
+        // ✅ Super Admin می‌تواند هر کسی (از جمله خودش) را ویرایش کند
+        if ($authUser->isSuperAdmin()) {
+            return true;
+        }
+
+        return $authUser->canManageUser($targetUser);
     }
 
     public function rules(): array
@@ -25,6 +35,11 @@ class UpdateUserRequest extends FormRequest
         $authUser = $this->user();
         $targetUser = $this->route('user');
         $creatableRoles = $authUser->getCreatableRoles();
+
+        // ✅ اگر Super Admin خودش را ویرایش می‌کند، نقش خودش را هم به لیست اضافه کن
+        if ($authUser->isSuperAdmin()) {
+            $creatableRoles[] = User::ROLE_SUPER_ADMIN;
+        }
 
         return [
             'branch_id' => [
@@ -53,14 +68,6 @@ class UpdateUserRequest extends FormRequest
             'phone' => SafeData::phone(),
             'password' => ['nullable', 'confirmed', SafeData::strongPassword()],
             'role' => ['required', Rule::in($creatableRoles)],
-            'employee_code' => [
-                'nullable',
-                'string',
-                'max:50',
-                'regex:/^[^<>]*$/u',
-                Rule::unique('users', 'employee_code')->ignore($targetUser->id),
-            ],
-            'avatar' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
             'status' => ['required', Rule::in(['active', 'inactive', 'blocked'])],
         ];
     }

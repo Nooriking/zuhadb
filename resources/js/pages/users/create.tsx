@@ -9,15 +9,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link, router } from '@inertiajs/react';
+import { Head, router } from '@inertiajs/react';
 import {
     AlertCircle,
-    ArrowLeft,
     Building2,
     Check,
     CheckCircle2,
     Eye,
     EyeOff,
+    Info,
     KeyRound,
     Lock,
     Save,
@@ -63,15 +63,15 @@ const breadcrumbs: BreadcrumbItem[] = [
  ═══════════════════════════════════════════════════════ */
 
 interface PasswordStrength {
-    score: number; // 0-5
+    score: number;
     level: 'empty' | 'weak' | 'medium' | 'strong' | 'very-strong';
     label: string;
-    color: string; // tailwind color class
+    color: string;
     bgColor: string;
     textColor: string;
     borderColor: string;
     icon: React.ReactNode;
-    percent: number; // 0-100
+    percent: number;
 }
 
 function calculatePasswordStrength(password: string): PasswordStrength {
@@ -90,19 +90,14 @@ function calculatePasswordStrength(password: string): PasswordStrength {
     }
 
     let score = 0;
-
-    // Length checks
     if (password.length >= 8) score++;
     if (password.length >= 12) score++;
     if (password.length >= 16) score++;
+    if (/[a-z]/.test(password)) score++;
+    if (/[A-Z]/.test(password)) score++;
+    if (/[0-9]/.test(password)) score++;
+    if (/[^A-Za-z0-9]/.test(password)) score++;
 
-    // Character variety
-    if (/[a-z]/.test(password)) score++; // lowercase
-    if (/[A-Z]/.test(password)) score++; // uppercase
-    if (/[0-9]/.test(password)) score++; // numbers
-    if (/[^A-Za-z0-9]/.test(password)) score++; // special chars
-
-    // Determine level
     let level: PasswordStrength['level'];
     let label: string;
     let color: string;
@@ -194,20 +189,16 @@ export default function UsersCreate({ branches, roles, defaultBranchId, isBranch
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
     const [loading, setLoading] = useState(false);
 
-    /* ⭐ Show/Hide toggles */
     const [showPassword, setShowPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
-    /* ⭐ Password strength */
     const strength = useMemo(() => calculatePasswordStrength(form.password), [form.password]);
 
-    /* ⭐ Password match check */
     const passwordsMatch = useMemo(() => {
         if (!form.password_confirmation) return null;
         return form.password === form.password_confirmation;
     }, [form.password, form.password_confirmation]);
 
-    /* ⭐ Requirements status */
     const requirementStatus = useMemo(() => {
         return REQUIREMENTS.map((req) => ({
             ...req,
@@ -256,12 +247,16 @@ export default function UsersCreate({ branches, roles, defaultBranchId, isBranch
         }
     };
 
+    /* ⭐ آیا role انتخاب‌شده Branch Manager است؟ */
+    const isBranchManagerRole = form.role === 'branch_manager';
+    const branchIsEmpty = form.branch_id === 'none';
+
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="Create New User" />
 
             <div className="flex flex-col gap-6 p-6">
-                {/* ═══════════ Header ═══════════ */}
+                {/* Header */}
                 <div className="flex flex-wrap items-center gap-3">
                     <BackButton href="/users" label="Back" />
                     <div className="flex items-center gap-3">
@@ -277,9 +272,7 @@ export default function UsersCreate({ branches, roles, defaultBranchId, isBranch
                             <CardDescription>Please enter the required information for the new user.</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-6">
-                            {/* ═══════════════════════════════════════════════════
-                             |  ⭐ PASSWORD SECTION (Top — priority)
-                             ═══════════════════════════════════════════════════ */}
+                            {/* ═══════════ PASSWORD SECTION ═══════════ */}
                             <div className="rounded-lg border-2 border-blue-200 bg-blue-50/30 p-4">
                                 <div className="mb-3 flex items-center gap-2">
                                     <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-600 text-white">
@@ -292,7 +285,7 @@ export default function UsersCreate({ branches, roles, defaultBranchId, isBranch
                                 </div>
 
                                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                    {/* ─── Password ─── */}
+                                    {/* Password */}
                                     <div className="space-y-2">
                                         <Label>
                                             Password <span className="text-destructive">*</span>
@@ -318,7 +311,7 @@ export default function UsersCreate({ branches, roles, defaultBranchId, isBranch
                                         {errors.password && <p className="text-destructive text-sm">{errors.password}</p>}
                                     </div>
 
-                                    {/* ─── Confirm Password ─── */}
+                                    {/* Confirm Password */}
                                     <div className="space-y-2">
                                         <Label>
                                             Confirm Password <span className="text-destructive">*</span>
@@ -365,10 +358,9 @@ export default function UsersCreate({ branches, roles, defaultBranchId, isBranch
                                     </div>
                                 </div>
 
-                                {/* ═══════ Password Strength Meter ═══════ */}
+                                {/* Password Strength */}
                                 {form.password && (
                                     <div className={`mt-4 rounded-lg border-2 p-3 ${strength.borderColor} ${strength.bgColor}`}>
-                                        {/* Header */}
                                         <div className="mb-2 flex items-center justify-between">
                                             <div className={`flex items-center gap-2 font-semibold ${strength.textColor}`}>
                                                 {strength.icon}
@@ -377,7 +369,6 @@ export default function UsersCreate({ branches, roles, defaultBranchId, isBranch
                                             <span className={`font-mono text-xs ${strength.textColor}`}>{strength.percent}%</span>
                                         </div>
 
-                                        {/* Progress Bar */}
                                         <div className="h-2 w-full overflow-hidden rounded-full bg-gray-200">
                                             <div
                                                 className={`h-full ${strength.color} transition-all duration-300`}
@@ -385,7 +376,6 @@ export default function UsersCreate({ branches, roles, defaultBranchId, isBranch
                                             />
                                         </div>
 
-                                        {/* Requirements Checklist */}
                                         <div className="mt-3 grid grid-cols-1 gap-1 md:grid-cols-2">
                                             {requirementStatus.map((req, i) => (
                                                 <div
@@ -405,140 +395,151 @@ export default function UsersCreate({ branches, roles, defaultBranchId, isBranch
                                 )}
                             </div>
 
-                            {/* ═══════════════════════════════════════════════════
-                             |  USER INFO FIELDS
-                             ═══════════════════════════════════════════════════ */}
+                            {/* ═══════════ USER INFO FIELDS ═══════════ */}
                             <div className="space-y-4">
                                 <h3 className="text-sm font-semibold">Account</h3>
-                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                {/* Name */}
-                                <div className="space-y-2">
-                                    <Label>
-                                        Full Name <span className="text-destructive">*</span>
-                                    </Label>
-                                    <Input
-                                        value={form.name}
-                                        onChange={(e) => handleChange('name', e.target.value)}
-                                        placeholder="John Doe"
-                                        className={errors.name ? 'border-destructive' : ''}
-                                    />
-                                    {errors.name && <p className="text-destructive text-sm">{errors.name}</p>}
-                                </div>
+                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                    {/* Name */}
+                                    <div className="space-y-2">
+                                        <Label>
+                                            Full Name <span className="text-destructive">*</span>
+                                        </Label>
+                                        <Input
+                                            value={form.name}
+                                            onChange={(e) => handleChange('name', e.target.value)}
+                                            placeholder="John Doe"
+                                            className={errors.name ? 'border-destructive' : ''}
+                                        />
+                                        {errors.name && <p className="text-destructive text-sm">{errors.name}</p>}
+                                    </div>
 
-                                {/* Username */}
-                                <div className="space-y-2">
-                                    <Label>
-                                        Username <span className="text-destructive">*</span>
-                                    </Label>
-                                    <Input
-                                        value={form.username}
-                                        onChange={(e) => handleChange('username', e.target.value)}
-                                        placeholder="johndoe"
-                                        className={errors.username ? 'border-destructive' : ''}
-                                    />
-                                    {errors.username && <p className="text-destructive text-sm">{errors.username}</p>}
-                                </div>
+                                    {/* Username */}
+                                    <div className="space-y-2">
+                                        <Label>
+                                            Username <span className="text-destructive">*</span>
+                                        </Label>
+                                        <Input
+                                            value={form.username}
+                                            onChange={(e) => handleChange('username', e.target.value)}
+                                            placeholder="johndoe"
+                                            className={errors.username ? 'border-destructive' : ''}
+                                        />
+                                        {errors.username && <p className="text-destructive text-sm">{errors.username}</p>}
+                                    </div>
 
-                                {/* Email */}
-                                <div className="space-y-2">
-                                    <Label>Email</Label>
-                                    <Input
-                                        type="email"
-                                        value={form.email}
-                                        onChange={(e) => handleChange('email', e.target.value)}
-                                        className={errors.email ? 'border-destructive' : ''}
-                                    />
-                                    {errors.email && <p className="text-destructive text-sm">{errors.email}</p>}
-                                </div>
+                                    {/* Email */}
+                                    <div className="space-y-2">
+                                        <Label>Email</Label>
+                                        <Input
+                                            type="email"
+                                            value={form.email}
+                                            onChange={(e) => handleChange('email', e.target.value)}
+                                            className={errors.email ? 'border-destructive' : ''}
+                                        />
+                                        {errors.email && <p className="text-destructive text-sm">{errors.email}</p>}
+                                    </div>
 
-                                {/* Phone */}
-                                <div className="space-y-2">
-                                    <Label>Phone</Label>
-                                    <Input
-                                        value={form.phone}
-                                        onChange={(e) => handleChange('phone', e.target.value)}
-                                        className={errors.phone ? 'border-destructive' : ''}
-                                    />
-                                    {errors.phone && <p className="text-destructive text-sm">{errors.phone}</p>}
+                                    {/* Phone */}
+                                    <div className="space-y-2">
+                                        <Label>Phone</Label>
+                                        <Input
+                                            value={form.phone}
+                                            onChange={(e) => handleChange('phone', e.target.value)}
+                                            className={errors.phone ? 'border-destructive' : ''}
+                                        />
+                                        {errors.phone && <p className="text-destructive text-sm">{errors.phone}</p>}
+                                    </div>
                                 </div>
                             </div>
-                            </div>
 
+                            {/* ═══════════ ROLE AND BRANCH ═══════════ */}
                             <div className="space-y-4 border-t pt-6">
                                 <h3 className="text-sm font-semibold">Role and branch</h3>
-                            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                                {/* Role */}
-                                <div className="space-y-2">
-                                    <Label>
-                                        Role <span className="text-destructive">*</span>
-                                    </Label>
-                                    <Select value={form.role} onValueChange={(v) => handleChange('role', v)}>
-                                        <SelectTrigger className={errors.role ? 'border-destructive' : ''}>
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {Object.entries(roles).map(([key, label]) => (
-                                                <SelectItem key={key} value={key}>
-                                                    {label}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                    {errors.role && <p className="text-destructive text-sm">{errors.role}</p>}
-                                </div>
-
-                                <div className="space-y-2">
-                                    <Label className="flex items-center gap-1">
-                                        Branch
-                                        {isBranchLocked && <Lock className="h-3 w-3 text-amber-500" />}
-                                    </Label>
-                                    {isBranchLocked ? (
-                                        <Input
-                                            readOnly
-                                            value={branches.find((branch) => String(branch.id) === form.branch_id)?.name || 'Your branch'}
-                                        />
-                                    ) : (
-                                        <Select value={form.branch_id} onValueChange={(v) => handleChange('branch_id', v)}>
-                                            <SelectTrigger className={errors.branch_id ? 'border-destructive' : ''}>
-                                                <SelectValue placeholder="Select branch" />
+                                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                                    {/* Role */}
+                                    <div className="space-y-2">
+                                        <Label>
+                                            Role <span className="text-destructive">*</span>
+                                        </Label>
+                                        <Select value={form.role} onValueChange={(v) => handleChange('role', v)}>
+                                            <SelectTrigger className={errors.role ? 'border-destructive' : ''}>
+                                                <SelectValue />
                                             </SelectTrigger>
                                             <SelectContent>
-                                                <SelectItem value="none">No branch</SelectItem>
-                                                {branches.map((branch) => (
-                                                    <SelectItem key={branch.id} value={String(branch.id)}>
-                                                        <div className="flex items-center gap-2">
-                                                            <Building2 className="h-4 w-4" />
-                                                            {branch.name} ({branch.code})
-                                                        </div>
+                                                {Object.entries(roles).map(([key, label]) => (
+                                                    <SelectItem key={key} value={key}>
+                                                        {label}
                                                     </SelectItem>
                                                 ))}
                                             </SelectContent>
                                         </Select>
-                                    )}
-                                    {isBranchLocked && <p className="text-xs text-amber-600">Users are saved on your branch.</p>}
-                                    {errors.branch_id && <p className="text-destructive text-sm">{errors.branch_id}</p>}
-                                </div>
+                                        {errors.role && <p className="text-destructive text-sm">{errors.role}</p>}
+                                    </div>
 
-                                {/* Status */}
-                                <div className="space-y-2">
-                                    <Label>
-                                        Status <span className="text-destructive">*</span>
-                                    </Label>
-                                    <Select value={form.status} onValueChange={(v) => handleChange('status', v as any)}>
-                                        <SelectTrigger className={errors.status ? 'border-destructive' : ''}>
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="active">Active</SelectItem>
-                                            <SelectItem value="inactive">Inactive</SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                    {errors.status && <p className="text-destructive text-sm">{errors.status}</p>}
+                                    {/* Branch */}
+                                    <div className="space-y-2">
+                                        <Label className="flex items-center gap-1">
+                                            Branch
+                                            {isBranchLocked && <Lock className="h-3 w-3 text-amber-500" />}
+                                        </Label>
+                                        {isBranchLocked ? (
+                                            <Input
+                                                readOnly
+                                                value={branches.find((branch) => String(branch.id) === form.branch_id)?.name || 'Your branch'}
+                                            />
+                                        ) : (
+                                            <Select value={form.branch_id} onValueChange={(v) => handleChange('branch_id', v)}>
+                                                <SelectTrigger className={errors.branch_id ? 'border-destructive' : ''}>
+                                                    <SelectValue placeholder="Select branch" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="none">No branch (can be assigned later)</SelectItem>
+                                                    {branches.map((branch) => (
+                                                        <SelectItem key={branch.id} value={String(branch.id)}>
+                                                            <div className="flex items-center gap-2">
+                                                                <Building2 className="h-4 w-4" />
+                                                                {branch.name} ({branch.code})
+                                                            </div>
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                        )}
+                                        {isBranchLocked && <p className="text-xs text-amber-600">Users are saved on your branch.</p>}
+                                        {errors.branch_id && <p className="text-destructive text-sm">{errors.branch_id}</p>}
+
+                                        {/* ⭐ Hint for Branch Manager without branch */}
+                                        {isBranchManagerRole && branchIsEmpty && !isBranchLocked && (
+                                            <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300">
+                                                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                                <span>
+                                                    This user will be a Branch Manager without a branch. You can assign them later from the branch
+                                                    edit page.
+                                                </span>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Status */}
+                                    <div className="space-y-2">
+                                        <Label>
+                                            Status <span className="text-destructive">*</span>
+                                        </Label>
+                                        <Select value={form.status} onValueChange={(v) => handleChange('status', v as any)}>
+                                            <SelectTrigger className={errors.status ? 'border-destructive' : ''}>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="active">Active</SelectItem>
+                                                <SelectItem value="inactive">Inactive</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                        {errors.status && <p className="text-destructive text-sm">{errors.status}</p>}
+                                    </div>
                                 </div>
                             </div>
-                            </div>
 
-                            {/* ═══════════ Actions ═══════════ */}
+                            {/* ═══════════ ACTIONS ═══════════ */}
                             <div className="flex gap-2 border-t pt-4">
                                 <Button type="submit" disabled={loading} className="gap-2">
                                     <Save className="h-4 w-4" />

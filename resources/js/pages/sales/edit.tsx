@@ -11,7 +11,7 @@ import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
-import { AlertTriangle, ArrowLeft, Plus, Save, ShoppingBag, Trash2, UserPlus } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Plus, Save, ShieldCheck, ShoppingBag, Trash2, UserPlus } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 /* ═══════════════════════════════════════════════════════
@@ -71,16 +71,16 @@ interface Sale {
     payment_status: 'unpaid' | 'partial' | 'paid';
     status: 'draft' | 'completed' | 'cancelled';
     notes: string | null;
-    discount_currency: string;
-    tax_currency: string;
+    discount_afn: string;
+    tax_afn: string;
     customer_name_snapshot: string | null;
     customer_phone_snapshot: string | null;
     items: {
         id: number;
         variant_id: number;
         quantity: number;
-        sale_price_currency: string;
-        discount_currency: string;
+        sale_price_afn: string;
+        discount_afn: string;
     }[];
 }
 
@@ -88,8 +88,9 @@ interface Props {
     sale: Sale;
     branches: Branch[];
     customers: Customer[];
-    currencies: Currency[];
+    currencies?: Currency[];
     variants: Variant[];
+    canEditCompleted?: boolean;
     errors?: Record<string, string>;
 }
 
@@ -132,7 +133,7 @@ function variantLabel(v: Variant): string {
  |  Main Component
  ═══════════════════════════════════════════════════════ */
 
-export default function SalesEdit({ sale, branches, customers, variants, errors: initialErrors }: Props) {
+export default function SalesEdit({ sale, branches, customers, variants, canEditCompleted = false, errors: initialErrors }: Props) {
     const { toast } = useToast();
 
     /* ─────────────── Form State ─────────────── */
@@ -140,12 +141,12 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
         branch_id: String(sale.branch_id),
         customer_id: sale.customer_id ? String(sale.customer_id) : 'none',
         exchange_rate: '1',
-        sale_date: sale.sale_date,
+        sale_date: sale.sale_date?.substring(0, 10) || '', // yyyy-mm-dd
         payment_status: sale.payment_status,
         status: sale.status,
         notes: sale.notes || '',
-        discount_currency: sale.discount_currency || '0',
-        tax_currency: sale.tax_currency || '0',
+        discount_currency: sale.discount_afn || '0',
+        tax_currency: sale.tax_afn || '0',
     });
 
     /* ─────────────── Customer Fields ─────────────── */
@@ -163,8 +164,8 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
                   _key: Math.random().toString(36).slice(2),
                   variant_id: String(it.variant_id),
                   quantity: String(it.quantity),
-                  sale_price_currency: (it as { sale_price_afn?: string }).sale_price_afn || it.sale_price_currency || '0',
-                  discount_currency: (it as { discount_afn?: string }).discount_afn || it.discount_currency || '0',
+                  sale_price_currency: it.sale_price_afn || '0',
+                  discount_currency: it.discount_afn || '0',
               }))
             : [newLine()],
     );
@@ -175,6 +176,10 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
 
     const isNewCustomer = form.customer_id === 'new';
     const isCompleted = sale.status === 'completed';
+    const isCancelled = sale.status === 'cancelled';
+
+    // ✅ آیا کاربر فعلی اجازه‌ی ویرایش این فروش را دارد؟
+    const canEdit = !isCancelled && (!isCompleted || canEditCompleted);
 
     /* ─────────────── Effect: fill customer fields ─────────────── */
     useEffect(() => {
@@ -195,7 +200,7 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
 
     /* ─────────────── Computed Totals ─────────────── */
     const totals = useMemo(() => {
-        const exchangeRate = parseFloat(form.exchange_rate) || 0;
+        const exchangeRate = parseFloat(form.exchange_rate) || 1;
         let subtotalCurrency = 0;
         let itemCount = 0;
         let totalQty = 0;
@@ -262,6 +267,17 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
+
+        // ✅ گارد امنیتی: اگر کاربر مجاز نیست، ارسال نکن
+        if (!canEdit) {
+            toast({
+                title: 'Not allowed',
+                description: isCancelled ? 'Cancelled sales cannot be edited.' : 'Completed sales cannot be edited.',
+                variant: 'destructive',
+            });
+            return;
+        }
+
         setLoading(true);
         setErrors({});
 
@@ -273,7 +289,11 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
         });
         if (underCost) {
             setErrors({ items: 'Sale price cannot be negative or less than the purchase price.' });
-            toast({ title: 'Price', description: 'Sale price cannot be negative or less than the purchase price.', variant: 'destructive' });
+            toast({
+                title: 'Price',
+                description: 'Sale price cannot be negative or less than the purchase price.',
+                variant: 'destructive',
+            });
             setLoading(false);
             return;
         }
@@ -286,9 +306,14 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
         }
 
         const payload = {
-            ...form,
+            branch_id: form.branch_id,
             customer_id: form.customer_id === 'none' || form.customer_id === 'new' ? '' : form.customer_id,
+            sale_date: form.sale_date,
+            status: form.status,
+            payment_status: form.payment_status,
+            notes: form.notes,
             discount_afn: parseFloat(form.discount_currency) || 0,
+            tax_afn: parseFloat(form.tax_currency) || 0,
             items: items
                 .filter((it) => it.variant_id)
                 .map((item) => ({
@@ -337,13 +362,38 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
                     </Link>
                 </div>
 
-                {/* ═══════════ Completed Warning ═══════════ */}
-                {isCompleted && (
+                {/* ═══════════ Completed Warning — غیر Super Admin ═══════════ */}
+                {isCompleted && !canEditCompleted && (
                     <div className="flex items-start gap-3 rounded-lg border-2 border-yellow-400 bg-yellow-50 p-4">
                         <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-yellow-600" />
                         <div className="text-sm">
                             <p className="font-semibold text-yellow-800">This sale is already completed.</p>
                             <p className="mt-0.5 text-yellow-700">Editing is not allowed. Create a new sale if needed.</p>
+                        </div>
+                    </div>
+                )}
+
+                {/* ═══════════ Completed Warning — Super Admin ═══════════ */}
+                {isCompleted && canEditCompleted && (
+                    <div className="flex items-start gap-3 rounded-lg border-2 border-blue-400 bg-blue-50 p-4">
+                        <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" />
+                        <div className="text-sm">
+                            <p className="font-semibold text-blue-800">Super Admin Mode</p>
+                            <p className="mt-0.5 text-blue-700">
+                                This sale is completed, but as Super Admin you are allowed to edit it. Changes will affect inventory and customer
+                                balance — proceed with caution.
+                            </p>
+                        </div>
+                    </div>
+                )}
+
+                {/* ═══════════ Cancelled Warning ═══════════ */}
+                {isCancelled && (
+                    <div className="flex items-start gap-3 rounded-lg border-2 border-red-400 bg-red-50 p-4">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
+                        <div className="text-sm">
+                            <p className="font-semibold text-red-800">This sale is cancelled.</p>
+                            <p className="mt-0.5 text-red-700">Editing is not allowed.</p>
                         </div>
                     </div>
                 )}
@@ -359,24 +409,24 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
                     <CardContent className="space-y-6">
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                             {branches.length > 1 && (
-                            <div className="space-y-2">
-                                <Label>
-                                    Branch <span className="text-destructive">*</span>
-                                </Label>
-                                <Select value={form.branch_id} onValueChange={(v) => setForm({ ...form, branch_id: v })}>
-                                    <SelectTrigger className={errors.branch_id ? 'border-destructive' : ''}>
-                                        <SelectValue placeholder="Select branch" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {branches.map((b) => (
-                                            <SelectItem key={b.id} value={String(b.id)}>
-                                                {b.name} ({b.code})
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                                {errors.branch_id && <p className="text-destructive text-sm">{errors.branch_id}</p>}
-                            </div>
+                                <div className="space-y-2">
+                                    <Label>
+                                        Branch <span className="text-destructive">*</span>
+                                    </Label>
+                                    <Select value={form.branch_id} onValueChange={(v) => setForm({ ...form, branch_id: v })} disabled={!canEdit}>
+                                        <SelectTrigger className={errors.branch_id ? 'border-destructive' : ''}>
+                                            <SelectValue placeholder="Select branch" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {branches.map((b) => (
+                                                <SelectItem key={b.id} value={String(b.id)}>
+                                                    {b.name} ({b.code})
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                    {errors.branch_id && <p className="text-destructive text-sm">{errors.branch_id}</p>}
+                                </div>
                             )}
 
                             <div className="space-y-2 md:col-span-2">
@@ -444,16 +494,20 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
                                 <Label>
                                     Sale Date <span className="text-destructive">*</span>
                                 </Label>
-                                <Input type="date" value={form.sale_date} onChange={(e) => setForm({ ...form, sale_date: e.target.value })} />
+                                <Input
+                                    type="date"
+                                    value={form.sale_date}
+                                    onChange={(e) => setForm({ ...form, sale_date: e.target.value })}
+                                    disabled={!canEdit}
+                                />
                                 {errors.sale_date && <p className="text-destructive text-sm">{errors.sale_date}</p>}
                             </div>
-
                         </div>
 
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                             <div className="space-y-2">
                                 <Label>Status</Label>
-                                <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v as any })}>
+                                <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v as any })} disabled={!canEdit}>
                                     <SelectTrigger>
                                         <SelectValue />
                                     </SelectTrigger>
@@ -472,6 +526,7 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
                                     onChange={(e) => setForm({ ...form, notes: e.target.value })}
                                     rows={1}
                                     placeholder="Optional notes..."
+                                    disabled={!canEdit}
                                 />
                             </div>
                         </div>
@@ -487,7 +542,7 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
                             <CardTitle>Items</CardTitle>
                             <CardDescription>Products in this sale.</CardDescription>
                         </div>
-                        <Button type="button" onClick={addItem} className="gap-2">
+                        <Button type="button" onClick={addItem} className="gap-2" disabled={!canEdit}>
                             <Plus className="h-4 w-4" /> Add Item
                         </Button>
                     </CardHeader>
@@ -505,7 +560,11 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
                                     <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
                                         <div className="space-y-2 md:col-span-5">
                                             <Label className="text-xs">Product Variant</Label>
-                                            <Select value={item.variant_id} onValueChange={(v) => updateItem(index, 'variant_id', v)}>
+                                            <Select
+                                                value={item.variant_id}
+                                                onValueChange={(v) => updateItem(index, 'variant_id', v)}
+                                                disabled={!canEdit}
+                                            >
                                                 <SelectTrigger className={errors[`items.${index}.variant_id`] ? 'border-destructive' : ''}>
                                                     <SelectValue placeholder="Select variant">
                                                         {item.variant_id &&
@@ -547,6 +606,7 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
                                                 value={item.quantity}
                                                 onChange={(e) => updateItem(index, 'quantity', e.target.value)}
                                                 className="font-mono"
+                                                disabled={!canEdit}
                                             />
                                         </div>
 
@@ -558,6 +618,7 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
                                                 value={item.sale_price_currency}
                                                 onChange={(e) => updateItem(index, 'sale_price_currency', e.target.value)}
                                                 className="font-mono"
+                                                disabled={!canEdit}
                                             />
                                         </div>
 
@@ -570,6 +631,7 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
                                                 value={item.discount_currency}
                                                 onChange={(e) => updateItem(index, 'discount_currency', e.target.value)}
                                                 className="font-mono"
+                                                disabled={!canEdit}
                                             />
                                         </div>
 
@@ -583,6 +645,7 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
                                                 size="icon"
                                                 onClick={() => removeItem(index)}
                                                 className="text-destructive"
+                                                disabled={!canEdit}
                                             >
                                                 <Trash2 className="h-4 w-4" />
                                             </Button>
@@ -628,6 +691,7 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
                                     value={form.discount_currency}
                                     onChange={(e) => setForm({ ...form, discount_currency: e.target.value })}
                                     className="font-mono"
+                                    disabled={!canEdit}
                                 />
                             </div>
                             <div className="space-y-2">
@@ -639,6 +703,7 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
                                     value={form.tax_currency}
                                     onChange={(e) => setForm({ ...form, tax_currency: e.target.value })}
                                     className="font-mono"
+                                    disabled={!canEdit}
                                 />
                             </div>
                         </div>
@@ -664,7 +729,7 @@ export default function SalesEdit({ sale, branches, customers, variants, errors:
 
                 {/* ═══════════ Actions ═══════════ */}
                 <div className="flex gap-2">
-                    <Button type="submit" disabled={loading || isCompleted} className="gap-2">
+                    <Button type="submit" disabled={loading || !canEdit} className="gap-2">
                         <Save className="h-4 w-4" />
                         {loading ? 'Updating...' : 'Update Sale'}
                     </Button>

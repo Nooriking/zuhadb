@@ -1,14 +1,14 @@
+import { BackButton, FormActions } from '@/components/form-page';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { BackButton, FormActions } from '@/components/form-page';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
 import { Head, router } from '@inertiajs/react';
-import { Building2, CircleDollarSign, Landmark, TrendingUp } from 'lucide-react';
+import { AlertCircle, Building2, CircleDollarSign, Landmark, TrendingUp } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 interface VariantOption {
@@ -56,16 +56,9 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Add stock', href: '/products/receive' },
 ];
 
-const money = (value: number) =>
-    new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(value || 0);
+const money = (value: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(value || 0);
 
-export default function ProductReceive({
-    variants,
-    investors,
-    investments = [],
-    suppliers,
-    errors = {},
-}: Props) {
+export default function ProductReceive({ variants, investors, investments = [], suppliers, errors = {} }: Props) {
     const [form, setForm] = useState({
         variant_id: variants[0] ? String(variants[0].id) : '',
         quantity: '1',
@@ -99,18 +92,74 @@ export default function ProductReceive({
     const totalCostUsd = rate > 0 ? totalCostAfn / rate : 0;
     const totalProfitUsd = profitUsd * qty;
 
+    /* ═══════════ Investor Investments ═══════════ */
     const investorInvestments = useMemo(() => {
         if (!form.investor_id) return [];
-        return investments.filter((row) => String(row.investor_id) === form.investor_id);
+        return investments.filter((row) => String(row.investor_id) === String(form.investor_id));
     }, [investments, form.investor_id]);
 
     const selectedInvestment = useMemo(
-        () => investments.find((row) => String(row.id) === form.investment_id),
+        () => investments.find((row) => String(row.id) === String(form.investment_id)),
         [investments, form.investment_id],
     );
 
     const availableUsd = selectedInvestment ? parseFloat(selectedInvestment.available_amount_afn) || 0 : 0;
     const remainingAfter = availableUsd - totalCostUsd;
+
+    /* ═══════════════════════════════════════════════════════
+     |  ✅ LIVE VALIDATION
+     ═══════════════════════════════════════════════════════ */
+
+    const liveProblems = useMemo(() => {
+        const problems: string[] = [];
+        const salePrice = parseFloat(form.sale_price_afn) || 0;
+
+        if (!form.variant_id) {
+            problems.push('Select a product');
+        }
+
+        if (qty <= 0) {
+            problems.push('Quantity must be at least 1');
+        }
+
+        if (salePrice < purchasePrice) {
+            problems.push('Sale price cannot be less than purchase price');
+        }
+
+        if (isInvestor) {
+            if (!form.investor_id) {
+                problems.push('Select an investor');
+            }
+            if (!form.investment_id) {
+                problems.push('Select an investment pot');
+            }
+            if (rate <= 0) {
+                problems.push('Enter the USD → AFN exchange rate');
+            }
+            if (rate > 0 && totalCostUsd > availableUsd + 0.01) {
+                problems.push(`Insufficient capital (need ${money(totalCostUsd)} USD, have ${money(availableUsd)} USD)`);
+            }
+        }
+
+        return problems;
+    }, [
+        form.variant_id,
+        form.investor_id,
+        form.investment_id,
+        form.sale_price_afn,
+        isInvestor,
+        qty,
+        purchasePrice,
+        rate,
+        totalCostUsd,
+        availableUsd,
+    ]);
+
+    const canSubmit = liveProblems.length === 0;
+
+    /* ═══════════════════════════════════════════════════════
+     |  Handlers — ✅ همه functional setForm
+     ═══════════════════════════════════════════════════════ */
 
     const pickVariant = (id: string) => {
         const variant = list.find((v) => String(v.id) === id);
@@ -144,12 +193,25 @@ export default function ProductReceive({
         }));
     };
 
+    /* ═══════════════════════════════════════════════════════
+     |  ✅ انتخاب سرمایه‌گذار — بازنویسی کامل
+     ═══════════════════════════════════════════════════════ */
+
     const setInvestor = (investorId: string) => {
-        const firstInvestment = investments.find((row) => String(row.investor_id) === investorId);
+        // پیدا کردن اولین investment این سرمایه‌گذار
+        const firstInvestment = investments.find((row) => String(row.investor_id) === String(investorId));
+
         setForm((prev) => ({
             ...prev,
-            investor_id: investorId,
+            investor_id: String(investorId),
             investment_id: firstInvestment ? String(firstInvestment.id) : '',
+        }));
+    };
+
+    const setInvestment = (investmentId: string) => {
+        setForm((prev) => ({
+            ...prev,
+            investment_id: String(investmentId),
         }));
     };
 
@@ -175,38 +237,65 @@ export default function ProductReceive({
         }
     };
 
+    /* ═══════════════════════════════════════════════════════
+     |  SUBMIT
+     ═══════════════════════════════════════════════════════ */
+
     const submit = (e: React.FormEvent) => {
         e.preventDefault();
+        setScanMessage('');
+
         const salePrice = parseFloat(form.sale_price_afn) || 0;
 
+        if (!form.variant_id) {
+            setScanMessage('❌ Please select a product.');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            return;
+        }
+
+        if (qty <= 0) {
+            setScanMessage('❌ Quantity must be at least 1.');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            return;
+        }
+
         if (purchasePrice < 0 || salePrice < 0 || profitAfn < 0) {
-            setScanMessage('Prices cannot be negative.');
+            setScanMessage('❌ Prices cannot be negative.');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
             return;
         }
+
         if (salePrice < purchasePrice) {
-            setScanMessage('Sale price cannot be less than the purchase price.');
+            setScanMessage('❌ Sale price cannot be less than the purchase price.');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
             return;
         }
+
         if (isInvestor) {
             if (!form.investor_id) {
-                setScanMessage('Select an investor.');
+                setScanMessage('❌ Please select an investor.');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
                 return;
             }
             if (!form.investment_id) {
-                setScanMessage('Select which investment capital pays for this stock.');
+                setScanMessage('❌ Please select which investment capital pays for this stock.');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
                 return;
             }
             if (rate <= 0) {
-                setScanMessage('Enter the USD to AFN rate for capital and investor profit.');
+                setScanMessage('❌ Please enter the USD to AFN exchange rate.');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
                 return;
             }
             if (totalCostUsd > availableUsd + 0.01) {
-                setScanMessage(`This stock costs ${money(totalCostUsd)} USD but only ${money(availableUsd)} USD is available.`);
+                setScanMessage(`❌ This stock costs ${money(totalCostUsd)} USD but only ${money(availableUsd)} USD is available.`);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
                 return;
             }
         }
 
         setLoading(true);
+
         router.post(
             '/products/receive',
             {
@@ -217,14 +306,24 @@ export default function ProductReceive({
             },
             {
                 onFinish: () => setLoading(false),
+                onError: (errs) => {
+                    const firstError = Object.values(errs)[0] as string;
+                    setScanMessage(`❌ ${firstError || 'Could not save. Please check the form.'}`);
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                },
             },
         );
     };
+
+    /* ═══════════════════════════════════════════════════════
+     |  Render
+     ═══════════════════════════════════════════════════════ */
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="Add stock" />
             <form onSubmit={submit} className="flex flex-col gap-6 p-6">
+                {/* Header */}
                 <div className="flex flex-wrap items-center gap-3">
                     <BackButton href="/products" />
                     <div>
@@ -233,7 +332,25 @@ export default function ProductReceive({
                     </div>
                 </div>
 
-                <div className="rounded-xl border-2 border-primary bg-primary/5 p-5">
+                {/* ✅ Live Validation Banner */}
+                {liveProblems.length > 0 && (
+                    <div className="rounded-lg border-2 border-amber-400 bg-amber-50 p-4">
+                        <div className="mb-2 flex items-center gap-2">
+                            <AlertCircle className="h-5 w-5 text-amber-700" />
+                            <p className="font-bold text-amber-800">
+                                Cannot submit yet ({liveProblems.length} {liveProblems.length === 1 ? 'issue' : 'issues'})
+                            </p>
+                        </div>
+                        <ul className="list-inside list-disc space-y-1 text-sm text-amber-700">
+                            {liveProblems.map((p, i) => (
+                                <li key={i}>{p}</li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+
+                {/* Scan barcode */}
+                <div className="border-primary bg-primary/5 rounded-xl border-2 p-5">
                     <h2 className="text-lg font-semibold">Scan barcode</h2>
                     <p className="text-muted-foreground mb-3 text-sm">Looks up the product in the database.</p>
                     <div className="flex gap-2">
@@ -247,24 +364,37 @@ export default function ProductReceive({
                                 }
                             }}
                             placeholder="Scan or type, then Enter"
-                            className="h-12 bg-background font-mono text-lg"
+                            className="bg-background h-12 font-mono text-lg"
                             autoFocus
                         />
                         <Button type="button" className="h-12 px-6" onClick={() => void scanBarcode()} disabled={scanning}>
                             {scanning ? 'Looking up…' : 'Find'}
                         </Button>
                     </div>
-                    {scanMessage && <p className="mt-2 text-sm font-medium">{scanMessage}</p>}
+
+                    {scanMessage && (
+                        <div
+                            className={`mt-3 flex items-center gap-2 rounded-lg border-2 p-3 text-sm font-semibold ${
+                                scanMessage.startsWith('❌')
+                                    ? 'border-red-400 bg-red-50 text-red-700'
+                                    : 'border-emerald-400 bg-emerald-50 text-emerald-700'
+                            }`}
+                        >
+                            <AlertCircle className="h-5 w-5 shrink-0" />
+                            <span>{scanMessage}</span>
+                        </div>
+                    )}
                 </div>
 
+                {/* Funding Source */}
                 <Card>
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
                             <Landmark className="h-5 w-5" /> Funding source
                         </CardTitle>
                         <CardDescription>
-                            Office money stays with the shop. Investor capital is deducted from an active investment and
-                            investor profit is tracked per unit.
+                            Office money stays with the shop. Investor capital is deducted from an active investment and investor profit is tracked
+                            per unit.
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
@@ -279,9 +409,7 @@ export default function ProductReceive({
                                 <div className="mb-2 flex items-center gap-2 font-semibold">
                                     <Building2 className="h-5 w-5" /> Office money
                                 </div>
-                                <p className="text-muted-foreground text-sm">
-                                    Paid from shop / company cash. No investor capital or profit share.
-                                </p>
+                                <p className="text-muted-foreground text-sm">Paid from shop / company cash. No investor capital or profit share.</p>
                             </button>
                             <button
                                 type="button"
@@ -303,11 +431,12 @@ export default function ProductReceive({
                         {isInvestor && (
                             <div className="space-y-4 rounded-lg border border-emerald-300 bg-emerald-50/50 p-4 dark:bg-emerald-950/20">
                                 <div className="grid gap-4 md:grid-cols-2">
+                                    {/* ═══ INVESTOR ═══ */}
                                     <div className="space-y-2">
                                         <Label>
                                             Investor <span className="text-destructive">*</span>
                                         </Label>
-                                        <Select value={form.investor_id} onValueChange={setInvestor}>
+                                        <Select value={form.investor_id || ''} onValueChange={setInvestor}>
                                             <SelectTrigger>
                                                 <SelectValue placeholder="Select investor" />
                                             </SelectTrigger>
@@ -322,15 +451,12 @@ export default function ProductReceive({
                                         {errors.investor_id && <p className="text-destructive text-xs">{errors.investor_id}</p>}
                                     </div>
 
+                                    {/* ═══ INVESTMENT ═══ */}
                                     <div className="space-y-2">
                                         <Label>
                                             Investment (capital pot) <span className="text-destructive">*</span>
                                         </Label>
-                                        <Select
-                                            value={form.investment_id}
-                                            onValueChange={(v) => setForm({ ...form, investment_id: v })}
-                                            disabled={!form.investor_id}
-                                        >
+                                        <Select value={form.investment_id || ''} onValueChange={setInvestment} disabled={!form.investor_id}>
                                             <SelectTrigger>
                                                 <SelectValue placeholder={form.investor_id ? 'Select investment' : 'Pick investor first'} />
                                             </SelectTrigger>
@@ -367,7 +493,7 @@ export default function ProductReceive({
                                             min="0"
                                             step="0.01"
                                             value={form.profit_per_unit}
-                                            onChange={(e) => setForm({ ...form, profit_per_unit: e.target.value })}
+                                            onChange={(e) => setForm((prev) => ({ ...prev, profit_per_unit: e.target.value }))}
                                             placeholder="0"
                                         />
                                         <p className="text-muted-foreground text-xs">
@@ -387,7 +513,7 @@ export default function ProductReceive({
                                             min="0"
                                             step="0.01"
                                             value={form.exchange_rate}
-                                            onChange={(e) => setForm({ ...form, exchange_rate: e.target.value })}
+                                            onChange={(e) => setForm((prev) => ({ ...prev, exchange_rate: e.target.value }))}
                                             placeholder="How many AFN for 1 USD"
                                             required={isInvestor}
                                         />
@@ -396,7 +522,7 @@ export default function ProductReceive({
                                 </div>
 
                                 {selectedInvestment && rate > 0 && qty > 0 && (
-                                    <div className="grid gap-3 rounded-lg border bg-background p-3 text-sm sm:grid-cols-4">
+                                    <div className="bg-background grid gap-3 rounded-lg border p-3 text-sm sm:grid-cols-4">
                                         <div>
                                             <p className="text-muted-foreground text-xs">Stock cost</p>
                                             <p className="font-mono font-semibold">{money(totalCostAfn)} AFN</p>
@@ -414,9 +540,7 @@ export default function ProductReceive({
                                         </div>
                                         <div>
                                             <p className="text-muted-foreground text-xs">Investor profit total</p>
-                                            <p className="font-mono font-semibold text-emerald-700">
-                                                {money(totalProfitUsd)} USD
-                                            </p>
+                                            <p className="font-mono font-semibold text-emerald-700">{money(totalProfitUsd)} USD</p>
                                             <p className="text-muted-foreground text-xs">owed when sold</p>
                                         </div>
                                     </div>
@@ -426,6 +550,7 @@ export default function ProductReceive({
                     </CardContent>
                 </Card>
 
+                {/* Product */}
                 <Card>
                     <CardHeader>
                         <CardTitle>Product</CardTitle>
@@ -450,7 +575,7 @@ export default function ProductReceive({
                         </div>
 
                         {selected && (
-                            <div className="grid grid-cols-2 gap-3 rounded-lg border border-primary/40 bg-primary/5 p-4 md:grid-cols-4">
+                            <div className="border-primary/40 bg-primary/5 grid grid-cols-2 gap-3 rounded-lg border p-4 md:grid-cols-4">
                                 <div>
                                     <p className="text-muted-foreground text-xs">Name</p>
                                     <p className="text-sm font-medium">{selected.name}</p>
@@ -481,12 +606,19 @@ export default function ProductReceive({
                     </CardContent>
                 </Card>
 
+                {/* Quantity & Prices */}
                 <div className="rounded-lg border p-4">
                     <h2 className="mb-3 text-sm font-semibold">Quantity & prices</h2>
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                         <div className="space-y-2">
                             <Label>Quantity</Label>
-                            <Input type="number" min="1" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} required />
+                            <Input
+                                type="number"
+                                min="1"
+                                value={form.quantity}
+                                onChange={(e) => setForm((prev) => ({ ...prev, quantity: e.target.value }))}
+                                required
+                            />
                         </div>
                         <div className="space-y-2">
                             <Label>Purchase price (AFN)</Label>
@@ -495,7 +627,7 @@ export default function ProductReceive({
                                 min="0"
                                 step="0.01"
                                 value={form.purchase_price_afn}
-                                onChange={(e) => setForm({ ...form, purchase_price_afn: e.target.value })}
+                                onChange={(e) => setForm((prev) => ({ ...prev, purchase_price_afn: e.target.value }))}
                                 required
                             />
                         </div>
@@ -506,27 +638,36 @@ export default function ProductReceive({
                                 min="0"
                                 step="0.01"
                                 value={form.sale_price_afn}
-                                onChange={(e) => setForm({ ...form, sale_price_afn: e.target.value })}
+                                onChange={(e) => setForm((prev) => ({ ...prev, sale_price_afn: e.target.value }))}
                                 required
                             />
                         </div>
                     </div>
                 </div>
 
+                {/* Bill */}
                 <div className="rounded-lg border p-4">
                     <h2 className="mb-3 text-sm font-semibold">Bill</h2>
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                         <div className="space-y-2">
                             <Label>Invoice number</Label>
-                            <Input value={form.invoice_number} onChange={(e) => setForm({ ...form, invoice_number: e.target.value })} />
+                            <Input value={form.invoice_number} onChange={(e) => setForm((prev) => ({ ...prev, invoice_number: e.target.value }))} />
                         </div>
                         <div className="space-y-2">
                             <Label>Date</Label>
-                            <Input type="date" value={form.purchase_date} onChange={(e) => setForm({ ...form, purchase_date: e.target.value })} required />
+                            <Input
+                                type="date"
+                                value={form.purchase_date}
+                                onChange={(e) => setForm((prev) => ({ ...prev, purchase_date: e.target.value }))}
+                                required
+                            />
                         </div>
                         <div className="space-y-2">
                             <Label>Supplier</Label>
-                            <Select value={form.supplier_id || 'none'} onValueChange={(v) => setForm({ ...form, supplier_id: v === 'none' ? '' : v })}>
+                            <Select
+                                value={form.supplier_id || 'none'}
+                                onValueChange={(v) => setForm((prev) => ({ ...prev, supplier_id: v === 'none' ? '' : v }))}
+                            >
                                 <SelectTrigger>
                                     <SelectValue placeholder="Supplier" />
                                 </SelectTrigger>
@@ -542,7 +683,7 @@ export default function ProductReceive({
                         </div>
                         <div className="space-y-2">
                             <Label>Notes</Label>
-                            <Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={2} />
+                            <Textarea value={form.notes} onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))} rows={2} />
                         </div>
                         {!isInvestor && (
                             <div className="space-y-2">
@@ -552,7 +693,7 @@ export default function ProductReceive({
                                     min="0"
                                     step="0.01"
                                     value={form.exchange_rate}
-                                    onChange={(e) => setForm({ ...form, exchange_rate: e.target.value })}
+                                    onChange={(e) => setForm((prev) => ({ ...prev, exchange_rate: e.target.value }))}
                                     placeholder="USD to AFN"
                                 />
                             </div>
@@ -560,6 +701,7 @@ export default function ProductReceive({
                     </div>
                 </div>
 
+                {/* Actions */}
                 <FormActions backHref="/products" submitLabel="Add stock" loading={loading} />
             </form>
         </AppLayout>

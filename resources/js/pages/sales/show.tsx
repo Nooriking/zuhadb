@@ -3,18 +3,12 @@
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Textarea } from '@/components/ui/textarea';
-import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link, router } from '@inertiajs/react';
-import { ArrowLeft, FileText, Package, Printer, TrendingUp, User, Wallet, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Head, Link } from '@inertiajs/react';
+import { ArrowLeft, FileText, Package, Printer, TrendingUp, User } from 'lucide-react';
 
 /* ═══════════════════════════════════════════════════════
  |  Types
@@ -77,29 +71,24 @@ interface Sale {
     payment_method: string;
     payment_method_label?: string;
 
-    /* Amounts */
     subtotal_afn: string;
     discount_afn: string;
     total_afn: string;
 
-    /* Due Flow */
     previous_due_afn: string;
     new_sale_amount_afn: string;
     grand_total_due_afn: string;
     received_now_afn: string;
     remaining_due_afn: string;
 
-    /* Payments */
     paid_afn: string;
     due_afn: string;
 
-    /* Profit */
     total_cost_afn: string;
     total_profit_afn: string;
     total_investor_profit_afn: string;
     store_profit_afn: string;
 
-    /* Printing */
     printed_count: number;
     last_printed_at: string | null;
 
@@ -116,6 +105,8 @@ interface Sale {
 
 interface Props {
     sale: Sale;
+    canEdit?: boolean;
+    canEditCompleted?: boolean;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -157,31 +148,11 @@ const getStatusBadge = (status: string) => {
     return <Badge variant={item.variant}>{item.label}</Badge>;
 };
 
-const PAYMENT_METHODS = [
-    { value: 'cash', label: 'Cash' },
-    { value: 'card', label: 'Card' },
-    { value: 'bank', label: 'Bank Transfer' },
-    { value: 'mobile', label: 'Mobile Money' },
-    { value: 'credit', label: 'Credit' },
-    { value: 'other', label: 'Other' },
-];
-
 /* ═══════════════════════════════════════════════════════
  |  Component
  ═══════════════════════════════════════════════════════ */
 
 export default function SalesShow({ sale }: Props) {
-    const { toast } = useToast();
-
-    const [showPaymentModal, setShowPaymentModal] = useState(false);
-    const [paymentForm, setPaymentForm] = useState({
-        amount_afn: '',
-        payment_method: 'cash',
-        reference_number: '',
-        notes: '',
-    });
-    const [paymentLoading, setPaymentLoading] = useState(false);
-
     const breadcrumbs: BreadcrumbItem[] = [
         { title: 'Dashboard', href: '/dashboard' },
         { title: 'Sales', href: '/sales' },
@@ -193,8 +164,6 @@ export default function SalesShow({ sale }: Props) {
     const grandTotal = parseFloat(sale.grand_total_due_afn || sale.total_afn || '0');
     const paidAfn = parseFloat(sale.paid_afn || '0');
     const remaining = parseFloat(sale.remaining_due_afn || '0');
-    const hasRemaining = remaining > 0.01;
-    const canAddPayment = hasRemaining && sale.status === 'completed';
 
     /* ═══════════════════════════════════════════════════════
      |  Handlers
@@ -202,61 +171,6 @@ export default function SalesShow({ sale }: Props) {
 
     const handlePrint = () => {
         window.open(`/sales/${sale.id}/receipt`, '_blank', 'noopener,noreferrer');
-    };
-
-    const handlePaymentSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        const amount = parseFloat(paymentForm.amount_afn || '0');
-
-        if (amount <= 0) {
-            toast({ title: 'Error', description: 'Amount must be greater than zero.', variant: 'destructive' });
-            return;
-        }
-
-        if (amount > remaining + 0.01) {
-            toast({
-                title: 'Error',
-                description: `Amount is larger than the remaining due (${formatPrice(remaining)} AFN).`,
-                variant: 'destructive',
-            });
-            return;
-        }
-
-        setPaymentLoading(true);
-
-        router.post(
-            `/sales/${sale.id}/payments`,
-            {
-                amount_afn: amount,
-                payment_method: paymentForm.payment_method,
-                reference_number: paymentForm.reference_number || null,
-                notes: paymentForm.notes || null,
-            },
-            {
-                preserveScroll: true,
-                onSuccess: () => {
-                    toast({ title: 'Success', description: 'Payment recorded.' });
-                    setShowPaymentModal(false);
-                    setPaymentForm({ amount_afn: '', payment_method: 'cash', reference_number: '', notes: '' });
-                    setPaymentLoading(false);
-                },
-                onError: (err) => {
-                    const msg = Object.values(err).join(' ') || 'Could not record the payment.';
-                    toast({ title: 'Error', description: msg, variant: 'destructive' });
-                    setPaymentLoading(false);
-                },
-            },
-        );
-    };
-
-    const openPaymentModal = () => {
-        setPaymentForm({
-            amount_afn: remaining.toFixed(2),
-            payment_method: 'cash',
-            reference_number: '',
-            notes: '',
-        });
-        setShowPaymentModal(true);
     };
 
     /* ═══════════════════════════════════════════════════════
@@ -291,11 +205,9 @@ export default function SalesShow({ sale }: Props) {
                         <Button variant="outline" onClick={handlePrint} className="gap-2">
                             <Printer className="h-4 w-4" /> Print
                         </Button>
-                        {canAddPayment && (
-                            <Button onClick={openPaymentModal} className="gap-2">
-                                <Wallet className="h-4 w-4" /> Add Payment
-                            </Button>
-                        )}
+
+                        {/* ✅ دکمه Add Payment حذف شد */}
+
                         <Link href="/sales">
                             <Button variant="outline" className="gap-2">
                                 <ArrowLeft className="h-4 w-4" /> Back
@@ -311,7 +223,7 @@ export default function SalesShow({ sale }: Props) {
                             {previousDue > 0 && (
                                 <div>
                                     <p className="text-muted-foreground text-xs uppercase">Previous Due</p>
-                                    <p className="mt-1 font-mono text-2xl font-bold text-foreground">
+                                    <p className="text-foreground mt-1 font-mono text-2xl font-bold">
                                         {formatPrice(previousDue)} <span className="text-sm">AFN</span>
                                     </p>
                                 </div>
@@ -330,7 +242,7 @@ export default function SalesShow({ sale }: Props) {
                             </div>
                             <div>
                                 <p className="text-muted-foreground text-xs uppercase">Paid</p>
-                                <p className="mt-1 font-mono text-2xl font-bold text-foreground">
+                                <p className="text-foreground mt-1 font-mono text-2xl font-bold">
                                     {formatPrice(paidAfn)} <span className="text-sm">AFN</span>
                                 </p>
                             </div>
@@ -338,9 +250,7 @@ export default function SalesShow({ sale }: Props) {
                                 <Separator />
                                 <div className="mt-3 flex items-center justify-between">
                                     <span className="text-sm font-semibold">Remaining Due:</span>
-                                    <span className="font-mono text-3xl font-bold">
-                                        {formatPrice(remaining)} AFN
-                                    </span>
+                                    <span className="font-mono text-3xl font-bold">{formatPrice(remaining)} AFN</span>
                                 </div>
                             </div>
                         </div>
@@ -371,7 +281,7 @@ export default function SalesShow({ sale }: Props) {
                                     <Separator />
                                     <div className="grid grid-cols-2 gap-1 text-xs">
                                         <span className="text-muted-foreground">Current Due:</span>
-                                        <span className="text-right font-mono font-semibold text-foreground">
+                                        <span className="text-foreground text-right font-mono font-semibold">
                                             {formatPrice(sale.customer.current_due_afn)} AFN
                                         </span>
                                         {parseFloat(sale.customer.credit_limit_afn) > 0 && (
@@ -380,6 +290,13 @@ export default function SalesShow({ sale }: Props) {
                                                 <span className="text-right font-mono">{formatPrice(sale.customer.credit_limit_afn)} AFN</span>
                                             </>
                                         )}
+                                    </div>
+                                    <div className="pt-2">
+                                        <Link href={`/customers/${sale.customer.id}`}>
+                                            <Button variant="outline" size="sm" className="w-full">
+                                                View Customer & Pay Dues
+                                            </Button>
+                                        </Link>
                                     </div>
                                 </>
                             ) : (
@@ -448,13 +365,15 @@ export default function SalesShow({ sale }: Props) {
                                 <span className="text-right font-mono text-xs">{formatPrice(sale.total_cost_afn)} AFN</span>
 
                                 <span className="text-muted-foreground">Total Profit:</span>
-                                <span className="text-right font-mono font-semibold text-foreground">{formatPrice(sale.total_profit_afn)} AFN</span>
+                                <span className="text-foreground text-right font-mono font-semibold">{formatPrice(sale.total_profit_afn)} AFN</span>
 
                                 <span className="text-muted-foreground">Investor Share:</span>
-                                <span className="text-right font-mono text-xs text-muted-foreground">{formatPrice(sale.total_investor_profit_afn)} AFN</span>
+                                <span className="text-muted-foreground text-right font-mono text-xs">
+                                    {formatPrice(sale.total_investor_profit_afn)} AFN
+                                </span>
 
                                 <span className="text-muted-foreground">Store Share:</span>
-                                <span className="text-right font-mono text-xs text-muted-foreground">{formatPrice(sale.store_profit_afn)} AFN</span>
+                                <span className="text-muted-foreground text-right font-mono text-xs">{formatPrice(sale.store_profit_afn)} AFN</span>
                             </div>
                         </CardContent>
                     </Card>
@@ -511,18 +430,18 @@ export default function SalesShow({ sale }: Props) {
                                             <TableCell className="text-center font-mono">{item.quantity}</TableCell>
                                             <TableCell className="text-right font-mono text-xs">{formatPrice(item.cost_price_afn)}</TableCell>
                                             <TableCell className="text-right font-mono text-xs">{formatPrice(item.sale_price_afn)}</TableCell>
-                                            <TableCell className="text-right font-mono text-xs text-foreground">
+                                            <TableCell className="text-foreground text-right font-mono text-xs">
                                                 {parseFloat(item.discount_afn) > 0 ? `-${formatPrice(item.discount_afn)}` : '—'}
                                             </TableCell>
                                             <TableCell className="text-right font-mono text-sm font-semibold">
                                                 {formatPrice(item.line_total_afn)}
                                             </TableCell>
                                             <TableCell className="text-right">
-                                                <div className="font-mono text-xs font-semibold text-foreground">
+                                                <div className="text-foreground font-mono text-xs font-semibold">
                                                     {formatPrice(item.store_profit_afn)}
                                                 </div>
                                                 {parseFloat(item.investor_profit_afn) > 0 && (
-                                                    <div className="font-mono text-[10px] text-muted-foreground">
+                                                    <div className="text-muted-foreground font-mono text-[10px]">
                                                         Inv: {formatPrice(item.investor_profit_afn)}
                                                     </div>
                                                 )}
@@ -540,7 +459,7 @@ export default function SalesShow({ sale }: Props) {
                                 <span className="text-right font-mono">{formatPrice(sale.subtotal_afn)} AFN</span>
 
                                 <span className="text-muted-foreground">Discount:</span>
-                                <span className="text-right font-mono text-foreground">-{formatPrice(sale.discount_afn)} AFN</span>
+                                <span className="text-foreground text-right font-mono">-{formatPrice(sale.discount_afn)} AFN</span>
 
                                 <span className="col-span-2 my-1 border-t" />
 
@@ -551,23 +470,14 @@ export default function SalesShow({ sale }: Props) {
                     </CardContent>
                 </Card>
 
-                {/* ═══════════ Payments Table ═══════════ */}
+                {/* ═══════════ Payments Table — نمایش فقط (بدون دکمه Add) ═══════════ */}
                 <Card>
                     <CardHeader>
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <CardTitle className="flex items-center gap-2">
-                                    <Wallet className="h-5 w-5" /> Payments
-                                    <Badge variant="secondary">{sale.payments.length}</Badge>
-                                </CardTitle>
-                                <CardDescription>All payments on this sale and the due after each payment</CardDescription>
-                            </div>
-                            {canAddPayment && (
-                                <Button onClick={openPaymentModal} className="gap-2" size="sm">
-                                    <Plus className="h-4 w-4" /> Add Payment
-                                </Button>
-                            )}
-                        </div>
+                        <CardTitle className="flex items-center gap-2">
+                            <Package className="h-5 w-5" /> Payment History
+                            <Badge variant="secondary">{sale.payments.length}</Badge>
+                        </CardTitle>
+                        <CardDescription>All payments recorded for this sale. To record a new payment, go to the customer page.</CardDescription>
                     </CardHeader>
                     <CardContent>
                         <div className="overflow-x-auto rounded-md border">
@@ -588,7 +498,7 @@ export default function SalesShow({ sale }: Props) {
                                     {sale.payments.length === 0 ? (
                                         <TableRow>
                                             <TableCell colSpan={8} className="text-muted-foreground h-20 text-center">
-                                                No payments yet.
+                                                No payments recorded yet for this sale.
                                             </TableCell>
                                         </TableRow>
                                     ) : (
@@ -620,15 +530,11 @@ export default function SalesShow({ sale }: Props) {
                                                             <span className="text-muted-foreground">—</span>
                                                         )}
                                                     </TableCell>
-                                                    <TableCell className="text-right font-mono text-sm font-semibold text-foreground">
+                                                    <TableCell className="text-foreground text-right font-mono text-sm font-semibold">
                                                         {formatPrice(p.amount_afn)}
                                                     </TableCell>
                                                     <TableCell className="text-right">
-                                                        <span
-                                                            className="font-mono text-sm font-bold"
-                                                        >
-                                                            {formatPrice(pRemaining)} AFN
-                                                        </span>
+                                                        <span className="font-mono text-sm font-bold">{formatPrice(pRemaining)} AFN</span>
                                                     </TableCell>
                                                     <TableCell className="text-xs">{p.receiver?.name || '—'}</TableCell>
                                                 </TableRow>
@@ -645,7 +551,7 @@ export default function SalesShow({ sale }: Props) {
                                 {previousDue > 0 && (
                                     <>
                                         <span className="text-gray-600">Previous Due:</span>
-                                        <span className="text-right font-mono font-semibold text-foreground">{formatPrice(previousDue)} AFN</span>
+                                        <span className="text-foreground text-right font-mono font-semibold">{formatPrice(previousDue)} AFN</span>
 
                                         <span className="text-gray-600">This Sale:</span>
                                         <span className="text-right font-mono font-semibold">{formatPrice(newSale)} AFN</span>
@@ -658,154 +564,33 @@ export default function SalesShow({ sale }: Props) {
                                 <span className="text-right font-mono font-bold">{formatPrice(grandTotal)} AFN</span>
 
                                 <span className="text-gray-600">Total Paid:</span>
-                                <span className="text-right font-mono font-semibold text-foreground">{formatPrice(paidAfn)} AFN</span>
+                                <span className="text-foreground text-right font-mono font-semibold">{formatPrice(paidAfn)} AFN</span>
 
                                 <span className="col-span-2 my-1 border-t border-emerald-300" />
 
                                 <span className="font-bold text-gray-700">Remaining Due:</span>
-                                <span className="text-right font-mono font-bold">
-                                    {formatPrice(remaining)} AFN
-                                </span>
+                                <span className="text-right font-mono font-bold">{formatPrice(remaining)} AFN</span>
                             </div>
+
+                            {/* ✅ راهنما برای پرداخت */}
+                            {remaining > 0.01 && sale.customer && (
+                                <div className="mt-4 rounded-lg border border-blue-300 bg-blue-50 p-3 text-sm text-blue-800">
+                                    <p className="font-semibold">💡 To record a payment for this due:</p>
+                                    <p className="mt-1">
+                                        Go to{' '}
+                                        <Link href={`/customers/${sale.customer.id}`} className="font-semibold underline">
+                                            {sale.customer.name}'s page
+                                        </Link>{' '}
+                                        → Add Payment
+                                    </p>
+                                </div>
+                            )}
                         </div>
                     </CardContent>
                 </Card>
             </div>
 
-            {/* ═══════════ Payment Modal ═══════════ */}
-            {showPaymentModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowPaymentModal(false)}>
-                    <div className="bg-background w-full max-w-md rounded-lg border shadow-lg" onClick={(e) => e.stopPropagation()}>
-                        <form onSubmit={handlePaymentSubmit}>
-                            <div className="flex items-center justify-between border-b p-4">
-                                <div>
-                                    <h3 className="flex items-center gap-2 text-lg font-semibold">
-                                        <Wallet className="h-5 w-5" /> Add Payment
-                                    </h3>
-                                    <p className="text-muted-foreground mt-1 text-xs">Current remaining: {formatPrice(remaining)} AFN</p>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={() => setShowPaymentModal(false)}
-                                    className="text-muted-foreground hover:text-foreground"
-                                >
-                                    <X className="h-5 w-5" />
-                                </button>
-                            </div>
-
-                            <div className="space-y-4 p-4">
-                                <div className="space-y-2">
-                                    <Label>
-                                        Amount (AFN) <span className="text-destructive">*</span>
-                                    </Label>
-                                    <Input
-                                        type="number"
-                                        step="0.01"
-                                        min="0.01"
-                                        max={remaining}
-                                        value={paymentForm.amount_afn}
-                                        onChange={(e) => setPaymentForm({ ...paymentForm, amount_afn: e.target.value })}
-                                        className="font-mono text-lg"
-                                        autoFocus
-                                    />
-                                    <div className="flex gap-2">
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={() => setPaymentForm({ ...paymentForm, amount_afn: remaining.toFixed(2) })}
-                                        >
-                                            Full ({formatPrice(remaining)})
-                                        </Button>
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={() =>
-                                                setPaymentForm({
-                                                    ...paymentForm,
-                                                    amount_afn: (remaining / 2).toFixed(2),
-                                                })
-                                            }
-                                        >
-                                            Half
-                                        </Button>
-                                    </div>
-                                </div>
-
-                                <div className="space-y-2">
-                                    <Label>Payment Method</Label>
-                                    <Select
-                                        value={paymentForm.payment_method}
-                                        onValueChange={(v) => setPaymentForm({ ...paymentForm, payment_method: v })}
-                                    >
-                                        <SelectTrigger>
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {PAYMENT_METHODS.map((m) => (
-                                                <SelectItem key={m.value} value={m.value}>
-                                                    {m.label}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-
-                                <div className="space-y-2">
-                                    <Label>Reference (Optional)</Label>
-                                    <Input
-                                        value={paymentForm.reference_number}
-                                        onChange={(e) => setPaymentForm({ ...paymentForm, reference_number: e.target.value })}
-                                        placeholder="TXN-..."
-                                        className="font-mono text-sm"
-                                    />
-                                </div>
-
-                                <div className="space-y-2">
-                                    <Label>Notes (Optional)</Label>
-                                    <Textarea
-                                        value={paymentForm.notes}
-                                        onChange={(e) => setPaymentForm({ ...paymentForm, notes: e.target.value })}
-                                        rows={2}
-                                        placeholder="..."
-                                    />
-                                </div>
-
-                                {paymentForm.amount_afn && (
-                                    <div className="rounded-lg border bg-blue-50 p-3 text-sm">
-                                        <div className="grid grid-cols-2 gap-1">
-                                            <span className="text-muted-foreground">Current Due:</span>
-                                            <span className="text-right font-mono">{formatPrice(remaining)} AFN</span>
-
-                                            <span className="text-muted-foreground">Payment:</span>
-                                            <span className="text-right font-mono text-foreground">-{formatPrice(paymentForm.amount_afn)}</span>
-
-                                            <span className="col-span-2 border-t pt-1 font-semibold">New Due:</span>
-                                            <span className="col-span-2 text-right font-mono font-bold">
-                                                {formatPrice(Math.max(0, remaining - parseFloat(paymentForm.amount_afn || '0')))} AFN
-                                            </span>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="flex justify-end gap-2 border-t p-4">
-                                <Button type="button" variant="outline" onClick={() => setShowPaymentModal(false)}>
-                                    Cancel
-                                </Button>
-                                <Button
-                                    type="submit"
-                                    disabled={paymentLoading || !paymentForm.amount_afn}
-                                    className="bg-emerald-600 hover:bg-emerald-700"
-                                >
-                                    {paymentLoading ? 'Saving...' : 'Save Payment'}
-                                </Button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            )}
+            {/* ✅ Modal پرداخت و دکمه Add Payment کاملاً حذف شدند */}
         </AppLayout>
     );
 }

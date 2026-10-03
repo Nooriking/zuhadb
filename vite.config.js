@@ -1,8 +1,8 @@
+import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import laravel from 'laravel-vite-plugin';
 import path from 'node:path';
 import { defineConfig } from 'vite';
-import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
     plugins: [
@@ -19,18 +19,10 @@ export default defineConfig({
             '@': path.resolve('resources/js'),
             'ziggy-js': path.resolve('vendor/tightenco/ziggy'),
             // recharts imports both of these; package is CJS-only
-            'use-sync-external-store/with-selector.js': path.resolve(
-                'resources/js/shims/use-sync-external-store-with-selector.js',
-            ),
-            'use-sync-external-store/with-selector': path.resolve(
-                'resources/js/shims/use-sync-external-store-with-selector.js',
-            ),
-            'use-sync-external-store/shim/with-selector.js': path.resolve(
-                'resources/js/shims/use-sync-external-store-with-selector.js',
-            ),
-            'use-sync-external-store/shim/with-selector': path.resolve(
-                'resources/js/shims/use-sync-external-store-with-selector.js',
-            ),
+            'use-sync-external-store/with-selector.js': path.resolve('resources/js/shims/use-sync-external-store-with-selector.js'),
+            'use-sync-external-store/with-selector': path.resolve('resources/js/shims/use-sync-external-store-with-selector.js'),
+            'use-sync-external-store/shim/with-selector.js': path.resolve('resources/js/shims/use-sync-external-store-with-selector.js'),
+            'use-sync-external-store/shim/with-selector': path.resolve('resources/js/shims/use-sync-external-store-with-selector.js'),
         },
     },
     esbuild: {
@@ -48,14 +40,7 @@ export default defineConfig({
         },
     },
     optimizeDeps: {
-        include: [
-            'react',
-            'react-dom',
-            '@inertiajs/react',
-            'axios',
-            'recharts',
-            'use-sync-external-store/with-selector',
-        ],
+        include: ['react', 'react-dom', '@inertiajs/react', 'axios', 'recharts', 'use-sync-external-store/with-selector'],
         exclude: ['sweetalert2'],
     },
     build: {
@@ -70,23 +55,15 @@ export default defineConfig({
                     if (!id.includes('node_modules') && !id.includes('vendor/tightenco/ziggy')) {
                         return;
                     }
-                    if (id.includes('recharts') || id.includes('d3-') || id.includes('victory')) {
-                        return 'charts';
-                    }
+                    // Only split optional/heavy libs that do not import React at
+                    // module top-level in a way that creates circular chunks.
+                    // Do NOT split react / react-dom / inertia / recharts — that
+                    // caused circular imports and a blank white screen in prod.
                     if (id.includes('sweetalert2')) {
                         return 'swal';
                     }
-                    if (id.includes('@inertiajs') || id.includes('ziggy') || id.includes('tightenco')) {
-                        return 'inertia';
-                    }
-                    if (id.includes('react-dom') || id.includes('/react/') || id.includes('\\react\\')) {
-                        return 'react-vendor';
-                    }
                     if (id.includes('lucide-react')) {
                         return 'icons';
-                    }
-                    if (id.includes('@radix-ui') || id.includes('@headlessui')) {
-                        return 'ui';
                     }
                 },
             },

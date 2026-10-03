@@ -1,15 +1,16 @@
 // resources/js/pages/sales/index.tsx
 
 import { FilterField, IndexFilters } from '@/components/index-filters';
-import { EditAction, PrintAction, RowActions, ViewAction } from '@/components/row-actions';
+import { DeleteAction, EditAction, PrintAction, RowActions, ViewAction } from '@/components/row-actions';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import AppLayout from '@/layouts/app-layout';
+import { getSwal } from '@/lib/swal';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
-import { Banknote, DollarSign, Plus, ShoppingBag, Trash2, TrendingDown, TrendingUp } from 'lucide-react';
+import { Banknote, BarChart3, DollarSign, Plus, ShoppingBag, Trash2, TrendingDown, TrendingUp } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 /* ═══════════════════════════════════════════════════════
@@ -72,6 +73,7 @@ interface Props {
         avg_usd_rate?: number;
         latest_usd_rate?: number;
     };
+    canEditCompleted?: boolean;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -116,7 +118,7 @@ const getStatusBadge = (status: string) => {
  |  Component
  ═══════════════════════════════════════════════════════ */
 
-export default function SalesIndex({ sales, branches, customers, filters, stats, monthlyRates = [] }: Props) {
+export default function SalesIndex({ sales, branches, customers, filters, stats, monthlyRates = [], canEditCompleted = false }: Props) {
     const [search, setSearch] = useState(filters.search || '');
     const [branchFilter, setBranchFilter] = useState(filters.branch_id || 'all');
     const [customerFilter, setCustomerFilter] = useState(filters.customer_id || 'all');
@@ -173,9 +175,61 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
         if (url) router.get(url, {}, { preserveState: true, preserveScroll: true });
     };
 
-    /* ⭐ Print Receipt — ثبت چاپ + باز کردن در تب جدید */
+    /* ⭐ Print Receipt */
     const handlePrint = (sale: Sale) => {
         window.open(`/sales/${sale.id}/receipt`, '_blank', 'noopener,noreferrer');
+    };
+
+    /* ⭐ Delete Sale — با تأیید SweetAlert */
+    const handleDelete = async (sale: Sale) => {
+        const Swal = await getSwal();
+        const result = await Swal.fire({
+            icon: 'warning',
+            title: 'Delete this sale?',
+            html: `Are you sure you want to delete invoice <strong>${sale.invoice_number}</strong>?<br><span style="color:#b91c1c;">This will move it to trash.</span>`,
+            showCancelButton: true,
+            confirmButtonText: 'Yes, delete',
+            cancelButtonText: 'Cancel',
+            confirmButtonColor: '#dc2626',
+            cancelButtonColor: '#6b7280',
+        });
+
+        if (!result.isConfirmed) return;
+
+        router.delete(`/sales/${sale.id}`, {
+            preserveScroll: true,
+            onSuccess: () => {
+                Swal.fire({
+                    icon: 'success',
+                    title: 'Deleted',
+                    text: `Sale "${sale.invoice_number}" moved to trash.`,
+                    timer: 1800,
+                    showConfirmButton: false,
+                });
+            },
+            onError: () => {
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Error',
+                    text: 'Could not delete this sale.',
+                    confirmButtonColor: '#dc2626',
+                });
+            },
+        });
+    };
+
+    /* ⭐ Sales Report — باز کردن گزارش در تب جدید */
+    const handleOpenReport = () => {
+        const params = new URLSearchParams();
+        if (search) params.append('search', search);
+        if (branchFilter !== 'all') params.append('branch_id', branchFilter);
+        if (customerFilter !== 'all') params.append('customer_id', customerFilter);
+        if (paymentFilter !== 'all') params.append('payment_status', paymentFilter);
+        if (statusFilter !== 'all') params.append('status', statusFilter);
+        if (onlyDue) params.append('only_due', '1');
+
+        const query = params.toString();
+        window.open(`/sales/report${query ? `?${query}` : ''}`, '_blank', 'noopener,noreferrer');
     };
 
     /* ═══════════════════════════════════════════════════════
@@ -194,7 +248,12 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                         <h1 className="text-2xl font-bold tracking-tight">Sales</h1>
                         <Badge variant="outline">{sales.total} Sales</Badge>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
+                        {/* ⭐ Sales Report */}
+                        <Button variant="outline" className="gap-2" onClick={handleOpenReport}>
+                            <BarChart3 className="h-4 w-4" /> Sales Report
+                        </Button>
+
                         <Link href="/sales/trash">
                             <Button variant="outline" className="gap-2">
                                 <Trash2 className="h-4 w-4" /> Trash
@@ -243,7 +302,7 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                             <p className="text-muted-foreground text-xs">Avg USD→AFN</p>
                             <DollarSign className="text-muted-foreground h-4 w-4" />
                         </div>
-                        <p className="mt-1 text-2xl font-bold font-mono">
+                        <p className="mt-1 font-mono text-2xl font-bold">
                             {stats.avg_usd_rate && stats.avg_usd_rate > 0 ? formatPrice(stats.avg_usd_rate, 2) : '—'}
                         </p>
                         <p className="text-muted-foreground mt-0.5 text-[10px]">
@@ -261,101 +320,101 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                     placeholder="Search invoice, receipt, or customer phone..."
                 >
                     {branches.length > 1 && (
-                    <FilterField label="Branch">
-                    <Select
-                        value={branchFilter}
-                        onValueChange={(v) => {
-                            setBranchFilter(v);
-                            setTimeout(() => handleSearch(), 0);
-                        }}
-                    >
-                        <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Branch" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">All Branches</SelectItem>
-                            {branches.map((b) => (
-                                <SelectItem key={b.id} value={String(b.id)}>
-                                    {b.name}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                    </FilterField>
+                        <FilterField label="Branch">
+                            <Select
+                                value={branchFilter}
+                                onValueChange={(v) => {
+                                    setBranchFilter(v);
+                                    setTimeout(() => handleSearch(), 0);
+                                }}
+                            >
+                                <SelectTrigger className="w-full">
+                                    <SelectValue placeholder="Branch" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">All Branches</SelectItem>
+                                    {branches.map((b) => (
+                                        <SelectItem key={b.id} value={String(b.id)}>
+                                            {b.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </FilterField>
                     )}
                     <FilterField label="Customer">
-                    <Select
-                        value={customerFilter}
-                        onValueChange={(v) => {
-                            setCustomerFilter(v);
-                            setTimeout(() => handleSearch(), 0);
-                        }}
-                    >
-                        <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Customer" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">All Customers</SelectItem>
-                            {customers.map((c) => (
-                                <SelectItem key={c.id} value={String(c.id)}>
-                                    {c.name}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
+                        <Select
+                            value={customerFilter}
+                            onValueChange={(v) => {
+                                setCustomerFilter(v);
+                                setTimeout(() => handleSearch(), 0);
+                            }}
+                        >
+                            <SelectTrigger className="w-full">
+                                <SelectValue placeholder="Customer" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Customers</SelectItem>
+                                {customers.map((c) => (
+                                    <SelectItem key={c.id} value={String(c.id)}>
+                                        {c.name}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
                     </FilterField>
                     <FilterField label="Payment">
-                    <Select
-                        value={paymentFilter}
-                        onValueChange={(v) => {
-                            setPaymentFilter(v);
-                            setTimeout(() => handleSearch(), 0);
-                        }}
-                    >
-                        <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Payment" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">All Payment</SelectItem>
-                            <SelectItem value="unpaid">Unpaid</SelectItem>
-                            <SelectItem value="partial">Partial</SelectItem>
-                            <SelectItem value="paid">Paid</SelectItem>
-                        </SelectContent>
-                    </Select>
+                        <Select
+                            value={paymentFilter}
+                            onValueChange={(v) => {
+                                setPaymentFilter(v);
+                                setTimeout(() => handleSearch(), 0);
+                            }}
+                        >
+                            <SelectTrigger className="w-full">
+                                <SelectValue placeholder="Payment" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Payment</SelectItem>
+                                <SelectItem value="unpaid">Unpaid</SelectItem>
+                                <SelectItem value="partial">Partial</SelectItem>
+                                <SelectItem value="paid">Paid</SelectItem>
+                            </SelectContent>
+                        </Select>
                     </FilterField>
                     <FilterField label="Status">
-                    <Select
-                        value={statusFilter}
-                        onValueChange={(v) => {
-                            setStatusFilter(v);
-                            setTimeout(() => handleSearch(), 0);
-                        }}
-                    >
-                        <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Status" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">All Status</SelectItem>
-                            <SelectItem value="draft">Draft</SelectItem>
-                            <SelectItem value="completed">Completed</SelectItem>
-                            <SelectItem value="cancelled">Cancelled</SelectItem>
-                        </SelectContent>
-                    </Select>
+                        <Select
+                            value={statusFilter}
+                            onValueChange={(v) => {
+                                setStatusFilter(v);
+                                setTimeout(() => handleSearch(), 0);
+                            }}
+                        >
+                            <SelectTrigger className="w-full">
+                                <SelectValue placeholder="Status" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Status</SelectItem>
+                                <SelectItem value="draft">Draft</SelectItem>
+                                <SelectItem value="completed">Completed</SelectItem>
+                                <SelectItem value="cancelled">Cancelled</SelectItem>
+                            </SelectContent>
+                        </Select>
                     </FilterField>
                     <FilterField label="Due">
-                    <Button
-                        type="button"
-                        variant={onlyDue ? 'default' : 'outline'}
-                        onClick={() => {
-                            const next = !onlyDue;
-                            setOnlyDue(next);
-                            setTimeout(() => handleSearch({ only_due: next }), 0);
-                        }}
-                        className="w-full gap-2"
-                    >
-                        <Banknote className="h-4 w-4" />
-                        Only with Due
-                    </Button>
+                        <Button
+                            type="button"
+                            variant={onlyDue ? 'default' : 'outline'}
+                            onClick={() => {
+                                const next = !onlyDue;
+                                setOnlyDue(next);
+                                setTimeout(() => handleSearch({ only_due: next }), 0);
+                            }}
+                            className="w-full gap-2"
+                        >
+                            <Banknote className="h-4 w-4" />
+                            Only with Due
+                        </Button>
                     </FilterField>
                 </IndexFilters>
 
@@ -364,7 +423,10 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                         {monthlyRates.map((row) => (
                             <div key={`${row.year}-${row.month}`} className="rounded-md border px-3 py-2 text-sm">
                                 <span className="text-muted-foreground">
-                                    {new Date(row.year, row.month - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' })}
+                                    {new Date(row.year, row.month - 1, 1).toLocaleString('en-US', {
+                                        month: 'long',
+                                        year: 'numeric',
+                                    })}
                                 </span>
                                 <span className="ml-2 font-mono font-semibold">{row.average_rate}</span>
                                 <span className="text-muted-foreground ml-1 text-xs">avg USD to AFN</span>
@@ -387,7 +449,7 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                                 <TableHead className="text-right">Paid</TableHead>
                                 <TableHead className="text-right">Remaining</TableHead>
                                 <TableHead>Payment</TableHead>
-                                <TableHead className="w-[148px] px-1 text-center whitespace-nowrap">Actions</TableHead>
+                                <TableHead className="w-[178px] px-1 text-center whitespace-nowrap">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -400,6 +462,7 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                             ) : (
                                 sales.data.map((sale, index) => {
                                     const remaining = parseFloat(sale.remaining_due_afn || '0');
+                                    const canDelete = sale.status !== 'completed' || canEditCompleted;
 
                                     return (
                                         <TableRow key={sale.id}>
@@ -443,11 +506,13 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                                                 </div>
                                             </TableCell>
 
+                                            {/* ⭐ Actions — شامل Delete */}
                                             <TableCell className="px-1 text-center whitespace-nowrap">
                                                 <RowActions>
                                                     <ViewAction href={`/sales/${sale.id}`} />
                                                     <EditAction href={`/sales/${sale.id}/edit`} />
                                                     <PrintAction onClick={() => handlePrint(sale)} />
+                                                    {canDelete && <DeleteAction onClick={() => handleDelete(sale)} />}
                                                 </RowActions>
                                             </TableCell>
                                         </TableRow>

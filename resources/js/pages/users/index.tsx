@@ -9,7 +9,7 @@ import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
-import { Building2, Edit, Eye, Lock, Plus, Shield, ToggleLeft, ToggleRight, Trash2, Users, X } from 'lucide-react';
+import { Building2, Edit, Eye, Lock, Plus, Shield, ToggleLeft, ToggleRight, Users, X } from 'lucide-react';
 import { useState } from 'react';
 
 /* =========================================================
@@ -42,10 +42,6 @@ interface Permissions {
     users_update: boolean;
     users_block: boolean;
     users_unblock: boolean;
-    users_delete: boolean;
-    users_restore: boolean;
-    users_force_delete: boolean;
-    users_trash_view: boolean;
     branches_view: boolean;
     branches_create: boolean;
     branches_update: boolean;
@@ -216,7 +212,7 @@ export default function UsersIndex({ users, branches, roles, filters, permission
     };
 
     /* =========================================================
-     |  ⭐ Row Actions Permission Logic — Mirror بک‌اند
+     |  Row Actions Permission Logic
      ========================================================= */
 
     const canViewUser = (_user: User) => {
@@ -226,19 +222,16 @@ export default function UsersIndex({ users, branches, roles, filters, permission
     const canEditUser = (user: User) => {
         if (!permissions.users_update) return false;
 
-        // ⛔ Super Admin فقط توسط Super Admin قابل ویرایش است
         if (user.role === 'super_admin') {
             return permissions.is_super_admin;
         }
 
-        // ⛔ Admin فقط توسط Super Admin قابل ویرایش است
         if (user.role === 'admin') {
             return permissions.is_super_admin;
         }
 
-        // Branch Manager فقط کاربران شعبه خودش
         if (permissions.is_branch_manager) {
-            return true; // بک‌اند خودش شعبه را چک می‌کند
+            return true;
         }
 
         return true;
@@ -248,10 +241,8 @@ export default function UsersIndex({ users, branches, roles, filters, permission
         if (!permissions.users_block) return false;
         if (user.status === 'blocked') return false;
 
-        // ⛔ Super Admin هرگز بلاک نمی‌شود — حتی توسط Super Admin دیگر
         if (user.role === 'super_admin') return false;
 
-        // ⛔ Admin فقط توسط Super Admin قابل بلاک است
         if (user.role === 'admin') {
             return permissions.is_super_admin;
         }
@@ -263,10 +254,8 @@ export default function UsersIndex({ users, branches, roles, filters, permission
         if (!permissions.users_unblock) return false;
         if (user.status !== 'blocked') return false;
 
-        // ⛔ Super Admin هرگز آنبلاک نمی‌شود
         if (user.role === 'super_admin') return false;
 
-        // ⛔ Admin فقط توسط Super Admin قابل آنبلاک است
         if (user.role === 'admin') {
             return permissions.is_super_admin;
         }
@@ -293,13 +282,7 @@ export default function UsersIndex({ users, branches, roles, filters, permission
                         </Badge>
                     </div>
                     <div className="flex gap-2">
-                        {permissions.users_trash_view && (
-                            <Link href="/users/trash">
-                                <Button variant="outline" className="gap-2">
-                                    <Trash2 className="h-4 w-4" /> Trash
-                                </Button>
-                            </Link>
-                        )}
+                        {/* ❌ دکمه Trash حذف شد */}
 
                         {permissions.users_create && (
                             <Link href="/users/create">
@@ -311,12 +294,7 @@ export default function UsersIndex({ users, branches, roles, filters, permission
                     </div>
                 </div>
 
-                <IndexFilters
-                    search={search}
-                    onSearchChange={setSearch}
-                    onSearch={handleSearch}
-                    placeholder="Search by name, username, email..."
-                >
+                <IndexFilters search={search} onSearchChange={setSearch} onSearch={handleSearch} placeholder="Search by name, username, email...">
                     <FilterField label="Role">
                         <Select
                             value={roleFilter}

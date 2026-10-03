@@ -36,9 +36,7 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
         remember: false,
     });
     const [showPassword, setShowPassword] = useState(false);
-    const [lockSecondsLeft, setLockSecondsLeft] = useState(() =>
-        lockoutSeconds && lockoutSeconds > 0 ? lockoutSeconds : 0,
-    );
+    const [lockSecondsLeft, setLockSecondsLeft] = useState(() => (lockoutSeconds && lockoutSeconds > 0 ? lockoutSeconds : 0));
 
     const serverLockSeconds = useMemo(() => {
         const raw = (errors as Record<string, string>).lockout;
@@ -64,7 +62,7 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
         }, 1000);
 
         return () => window.clearInterval(timer);
-    }, [lockSecondsLeft > 0]); // eslint-disable-line react-hooks/exhaustive-deps -- only restart when lock starts/ends
+    }, [lockSecondsLeft > 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const isLocked = lockSecondsLeft > 0;
 
@@ -97,9 +95,7 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                     <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
                     <div>
                         <p className="font-semibold">Sign-in locked</p>
-                        <p className="text-red-200/90">
-                            Too many failed attempts. Wait {formatCountdown(lockSecondsLeft)} before trying again.
-                        </p>
+                        <p className="text-red-200/90">Too many failed attempts. Wait {formatCountdown(lockSecondsLeft)} before trying again.</p>
                     </div>
                 </div>
             )}
@@ -127,7 +123,8 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                             required
                             autoFocus
                             tabIndex={1}
-                            autoComplete="username"
+                            autoComplete="off"
+                            name="zuha-login-email"
                             value={data.email}
                             onChange={(e) => setData('email', e.target.value)}
                             placeholder="email@example.com or username"
@@ -143,11 +140,7 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                             Password
                         </Label>
                         {canResetPassword && (
-                            <TextLink
-                                href={route('password.request')}
-                                className="ml-auto text-sm text-[#D4AF37] hover:text-[#F0D78C]"
-                                tabIndex={5}
-                            >
+                            <TextLink href={route('password.request')} className="ml-auto text-sm text-[#D4AF37] hover:text-[#F0D78C]" tabIndex={5}>
                                 Forgot password?
                             </TextLink>
                         )}
@@ -159,7 +152,8 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                             type={showPassword ? 'text' : 'password'}
                             required
                             tabIndex={2}
-                            autoComplete="current-password"
+                            autoComplete="new-password"
+                            name="zuha-login-password"
                             value={data.password}
                             onChange={(e) => setData('password', e.target.value)}
                             placeholder="••••••••"

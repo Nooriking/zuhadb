@@ -35,10 +35,22 @@ class ExpenseController extends Controller
             ->paginate(20)
             ->withQueryString();
 
+        // ✅ آمار — شامل مصارف امروز
         $stats = [
-            'total'      => Expense::notTrashed()->count(),
-            'this_month' => (float) Expense::notTrashed()->whereMonth('expense_date', now()->month)->sum('amount_afn'),
-            'total_afn'  => (float) Expense::notTrashed()->sum('amount_afn'),
+            'total'       => Expense::notTrashed()->count(),
+            'this_month'  => (float) Expense::notTrashed()
+                ->whereMonth('expense_date', now()->month)
+                ->whereYear('expense_date', now()->year)
+                ->sum('amount_afn'),
+            'total_afn'   => (float) Expense::notTrashed()->sum('amount_afn'),
+
+            // ✅ جدید: مصارف امروز
+            'today_afn'   => (float) Expense::notTrashed()
+                ->whereDate('expense_date', today())
+                ->sum('amount_afn'),
+            'today_count' => Expense::notTrashed()
+                ->whereDate('expense_date', today())
+                ->count(),
         ];
 
         return Inertia::render('expenses/index', [

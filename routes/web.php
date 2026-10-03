@@ -36,7 +36,7 @@ use App\Http\Controllers\StockTransferController;
 use App\Http\Controllers\SupplierController;
 use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
-
+use App\Http\Controllers\ProfitReportController;
 /*
 |--------------------------------------------------------------------------
 | Public Routes
@@ -431,7 +431,7 @@ Route::middleware(['auth', 'verified', 'lock.records'])->group(function () {
 
         Route::get('/lookup-barcode', [SaleController::class, 'lookupBarcode'])
             ->middleware('permission:sales.create')->name('lookupBarcode');
-
+Route::get('/report', [SaleController::class, 'report'])->name('sales.report');
         Route::post('/preview-cost', [SaleController::class, 'previewCost'])
             ->middleware('permission:sales.create')->name('previewCost');
 
@@ -633,6 +633,36 @@ Route::middleware(['auth', 'verified', 'lock.records'])->group(function () {
         Route::get('/by-variant/{variant}', [ProductPriceHistoryController::class, 'byVariant'])->name('byVariant');
         Route::get('/{history}', [ProductPriceHistoryController::class, 'show'])->name('show');
     });
+});
+
+
+// ... بقیه routes
+
+// ... داخل گروه middleware(['auth'])
+
+
+
+Route::middleware(['auth'])->group(function () {
+    // ✅ Profit Report routes — قبل از هر چیز
+    Route::prefix('reports/profit')->name('reports.profit.')->group(function () {
+        Route::get('/', [ProfitReportController::class, 'index'])->name('index');
+
+        // PDF (اول)
+        Route::get('/pdf', [ProfitReportController::class, 'exportPdf'])->name('pdf');
+
+        // CSV
+        Route::get('/export', [ProfitReportController::class, 'export'])->name('export');
+        Route::get('/export-summary', [ProfitReportController::class, 'exportSummary'])->name('export.summary');
+        Route::get('/export-breakdown', [ProfitReportController::class, 'exportBreakdown'])->name('export.breakdown');
+        Route::get('/export-per-investor', [ProfitReportController::class, 'exportPerInvestor'])->name('export.per-investor');
+        Route::get('/export-exchange-rates', [ProfitReportController::class, 'exportExchangeRates'])->name('export.exchange-rates');
+
+        // Detail pages (آخر)
+        Route::get('/investor/{investorId}', [ProfitReportController::class, 'investorDetail'])->name('investor.detail');
+        Route::get('/store', [ProfitReportController::class, 'storeDetail'])->name('store.detail');
+    });
+    
+    // ... بقیه routes (dashboard, products, sales, ...)
 });
 
 /*

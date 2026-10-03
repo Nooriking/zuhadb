@@ -2,17 +2,17 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Requests\StoreBranchRequest;
-use App\Http\Requests\UpdateBranchRequest;
-use App\Models\Branch;
-use App\Models\User;
+use App\Http\Requests\StoreBrandRequest;
+use App\Http\Requests\UpdateBrandRequest;
+use App\Models\Brand;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 use Inertia\Response;
 
-class BranchController extends Controller
+class BrandController extends Controller
 {
     /* =========================================================
      |  INDEX
@@ -20,51 +20,29 @@ class BranchController extends Controller
 
     public function index(Request $request): Response
     {
-        /** @var User $authUser */
-        $authUser = Auth::user();
+        $search = $request->query('search');
+        $status = $request->query('status');
 
-        if (! $authUser->canManageBranches() && ! $authUser->isBranchManager()) {
-            abort(403, 'You do not have permission to access branches.');
-        }
-
-        $query = Branch::query()
-            ->with(['manager:id,name,email', 'user:id,name'])
+        $brands = Brand::query()
+            ->with('creator:id,name')
+            ->withCount('products')
             ->notTrashed()
-            ->visibleTo($authUser)
-            ->latest();
+            ->when($search, function ($query, $search) {
+                $query->where(function ($q) use ($search) {
+                    $q->where('name', 'like', "%{$search}%")
+                      ->orWhere('country', 'like', "%{$search}%");
+                });
+            })
+            ->when($status, fn ($q, $s) => $q->where('status', $s))
+            ->orderBy('name')
+            ->paginate(15)
+            ->withQueryString();
 
-        // Search filter
-        if ($request->filled('search')) {
-            $search = $request->input('search');
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                  ->orWhere('code', 'like', "%{$search}%")
-                  ->orWhere('email', 'like', "%{$search}%")
-                  ->orWhere('phone', 'like', "%{$search}%");
-            });
-        }
-
-        // Status filter
-        if ($request->filled('status')) {
-            $query->where('status', $request->input('status'));
-        }
-
-        $branches = $query->paginate(10)->withQueryString();
-
-        return Inertia::render('branches/Index', [
-            'branches' => $branches,
-            'filters'  => [
-                'search' => $request->input('search'),
-                'status' => $request->input('status'),
-            ],
-            'permissions' => [
-                'branches_view'      => $authUser->canManageBranches() || $authUser->isBranchManager(),
-                'branches_create'    => $authUser->canManageBranches(),
-                'branches_update'    => $authUser->canManageBranches(),
-                'branches_deactivate'=> $authUser->isSuperAdmin(),
-                'is_super_admin'     => $authUser->isSuperAdmin(),
-                'is_admin'           => $authUser->isAdmin(),
-                'is_branch_manager'  => $authUser->isBranchManager(),
+        return Inertia::render('brands/index', [
+            'brands'  => $brands,
+            'filters' => [
+                'search' => $search,
+                'status' => $status,
             ],
         ]);
     }
@@ -75,80 +53,48 @@ class BranchController extends Controller
 
     public function create(): Response
     {
-        /** @var User $authUser */
-        $authUser = Auth::user();
-
-        if (! $authUser->canManageBranches()) {
-            abort(403, 'You are not allowed to create branches.');
-        }
-
-        return Inertia::render('branches/Create', [
-            'managers' => User::where('status', 'active')
-                ->whereIn('role', [User::ROLE_BRANCH_MANAGER, User::ROLE_ADMIN])
-                ->select('id', 'name', 'email')
-                ->get(),
-        ]);
+        return Inertia::render('brands/create');
     }
 
     /* =========================================================
      |  STORE
      ========================================================= */
 
-    public function store(StoreBranchRequest $request): RedirectResponse
+    public function store(StoreBrandRequest $request): RedirectResponse
     {
-        /** @var User $authUser */
-        $authUser = Auth::user();
+        $data = $request->validated();
+        $data['user_id'] = Auth::id();
 
-        if (! $authUser->canManageBranches()) {
-            abort(403, 'You are not allowed to create branches.');
+        if ($request->hasFile('logo')) {
+            $data['logo'] = $request->file('logo')->store('brands/logos', 'public');
         }
 
-        $data = $request->validated();
-        $data['user_id'] = $authUser->id;
-        $data['status']  = $data['status'] ?? 'active';
-
-        Branch::create($data);
+        $brand = Brand::create($data);
 
         return redirect()
-            ->route('branches.index')
-            ->with('success', "Branch {$data['name']} was created successfully.");
+            ->route('brands.index')
+            ->with('success', "Brand \"{$brand->name}\" was created successfully.");
     }
 
     /* =========================================================
      |  SHOW
      ========================================================= */
 
-    public function show(Branch $branch): Response
+    public function show(Brand $brand): Response
     {
-        /** @var User $authUser */
-        $authUser = Auth::user();
-
-        if ($branch->trash) {
+        if ($brand->trash) {
             abort(404);
         }
 
-        if (! $authUser->canManageBranches() && $authUser->branch_id !== $branch->id) {
-            abort(403, 'You do not have permission to view this branch.');
-        }
-
-        $branch->load([
-            'manager:id,name,email',
-            'user:id,name,email',
-            'users:id,name,username,email,status,branch_id',
+        $brand->load([
+            'creator:id,name,email',
+            'products' => fn ($q) => $q->notTrashed()->limit(20),
         ]);
 
-        return Inertia::render('branches/Show', [
-            'branch' => $branch,
-            'stats'  => [
-                'total_users'     => $branch->users()->count(),
-                'total_sales'     => 0,
-                'total_purchases' => 0,
-                'total_expenses'  => 0,
-            ],
-            'permissions' => [
-                'branches_update'     => $authUser->canManageBranches(),
-                'branches_deactivate' => $authUser->isSuperAdmin(),
-                'is_super_admin'      => $authUser->isSuperAdmin(),
+        return Inertia::render('brands/show', [
+            'brand' => $brand,
+            'stats' => [
+                'total_products' => $brand->products()->notTrashed()->count(),
             ],
         ]);
     }
@@ -157,30 +103,14 @@ class BranchController extends Controller
      |  EDIT
      ========================================================= */
 
-    public function edit(Branch $branch): Response
+    public function edit(Brand $brand): Response
     {
-        /** @var User $authUser */
-        $authUser = Auth::user();
-
-        if ($branch->trash) {
+        if ($brand->trash) {
             abort(404);
         }
 
-        if (! $authUser->canManageBranches()) {
-            abort(403, 'You are not allowed to edit branches.');
-        }
-
-        return Inertia::render('branches/Edit', [
-            'branch'   => $branch,
-            'managers' => User::where('status', 'active')
-                ->whereIn('role', [User::ROLE_BRANCH_MANAGER, User::ROLE_ADMIN])
-                ->select('id', 'name', 'email')
-                ->get(),
-            'permissions' => [
-                'branches_update'     => $authUser->canManageBranches(),
-                'branches_deactivate' => $authUser->isSuperAdmin(),
-                'is_super_admin'      => $authUser->isSuperAdmin(),
-            ],
+        return Inertia::render('brands/edit', [
+            'brand' => $brand,
         ]);
     }
 
@@ -188,91 +118,108 @@ class BranchController extends Controller
      |  UPDATE
      ========================================================= */
 
-    public function update(UpdateBranchRequest $request, Branch $branch): RedirectResponse
+    public function update(UpdateBrandRequest $request, Brand $brand): RedirectResponse
     {
-        /** @var User $authUser */
-        $authUser = Auth::user();
-
-        if ($branch->trash) {
-            abort(404);
-        }
-
-        if (! $authUser->canManageBranches()) {
-            abort(403, 'You are not allowed to update branches.');
-        }
-
         $data = $request->validated();
-        $data['user_id'] = $authUser->id;
+        $data['user_id'] = Auth::id();
 
-        $branch->update($data);
+        if ($request->hasFile('logo')) {
+            if ($brand->logo && Storage::disk('public')->exists($brand->logo)) {
+                Storage::disk('public')->delete($brand->logo);
+            }
+            $data['logo'] = $request->file('logo')->store('brands/logos', 'public');
+        }
+
+        $brand->update($data);
 
         return redirect()
-            ->route('branches.index')
-            ->with('success', "Branch {$branch->name} was updated successfully.");
+            ->route('brands.index')
+            ->with('success', "Brand \"{$brand->name}\" was updated successfully.");
     }
 
     /* =========================================================
-     |  DEACTIVATE  (⭐ فقط Super Admin)
+     |  DESTROY — move to trash
      ========================================================= */
 
-    public function deactivate(Branch $branch): RedirectResponse
+    public function destroy(Brand $brand): RedirectResponse
     {
-        /** @var User $authUser */
-        $authUser = Auth::user();
+        $name = $brand->name;
 
-        // ⛔ فقط Super Admin
-        if (! $authUser->isSuperAdmin()) {
-            return back()->with('error', 'Only Super Admin can deactivate branches.');
-        }
-
-        if ($branch->trash) {
-            return back()->with('error', 'Cannot deactivate a trashed branch.');
-        }
-
-        if ($branch->status === 'inactive') {
-            return back()->with('error', 'Branch is already inactive.');
-        }
-
-        $branch->update([
-            'status'  => 'inactive',
-            'user_id' => $authUser->id,
+        $brand->update([
+            'trash'   => true,
+            'user_id' => Auth::id(),
         ]);
 
-        return back()->with('success', "Branch \"{$branch->name}\" has been deactivated.");
+        return redirect()
+            ->route('brands.index')
+            ->with('success', "Brand \"{$name}\" was moved to trash.");
     }
 
     /* =========================================================
-     |  ACTIVATE  (⭐ فقط Super Admin)
+     |  RESTORE
      ========================================================= */
 
-    public function activate(Branch $branch): RedirectResponse
+    public function restore(int $id): RedirectResponse
     {
-        /** @var User $authUser */
-        $authUser = Auth::user();
+        $brand = Brand::inTrash()->findOrFail($id);   // ✅ اصلاح شد
 
-        // ⛔ فقط Super Admin
-        if (! $authUser->isSuperAdmin()) {
-            return back()->with('error', 'Only Super Admin can activate branches.');
-        }
-
-        if ($branch->trash) {
-            return back()->with('error', 'Cannot activate a trashed branch.');
-        }
-
-        if ($branch->status === 'active') {
-            return back()->with('error', 'Branch is already active.');
-        }
-
-        $branch->update([
-            'status'  => 'active',
-            'user_id' => $authUser->id,
+        $brand->update([
+            'trash'   => false,
+            'user_id' => Auth::id(),
         ]);
 
-        return back()->with('success', "Branch \"{$branch->name}\" has been activated.");
+        return redirect()
+            ->route('brands.index')
+            ->with('success', "Brand \"{$brand->name}\" was restored.");
     }
 
     /* =========================================================
-     |  ⛔ DESTROY / RESTORE / FORCE DELETE / TRASH
-     |  به دلایل امنیتی حذف شدند — Branch فقط غیرفعال می‌شود
+     |  FORCE DELETE
      ========================================================= */
+
+    public function forceDelete(int $id): RedirectResponse
+    {
+        $brand = Brand::inTrash()->findOrFail($id);   // ✅ اصلاح شد
+
+        if ($brand->logo && Storage::disk('public')->exists($brand->logo)) {
+            Storage::disk('public')->delete($brand->logo);
+        }
+
+        $name = $brand->name;
+        $brand->forceDelete();
+
+        return redirect()
+            ->route('brands.index')
+            ->with('success', "Brand \"{$name}\" was permanently deleted.");
+    }
+
+    /* =========================================================
+     |  TRASH LIST  ✅ اصلاح‌شده
+     ========================================================= */
+
+    public function trash(): Response
+    {
+        $brands = Brand::inTrash()   // ✅ به جای onlyTrashed
+            ->with('creator:id,name')
+            ->orderByDesc('updated_at')
+            ->paginate(15);
+
+        return Inertia::render('brands/trash', [
+            'brands' => $brands,
+        ]);
+    }
+
+    /* =========================================================
+     |  TOGGLE STATUS
+     ========================================================= */
+
+    public function toggleStatus(Brand $brand): RedirectResponse
+    {
+        $brand->update([
+            'status'  => $brand->status === 'active' ? 'inactive' : 'active',
+            'user_id' => Auth::id(),
+        ]);
+
+        return back()->with('success', "Brand status changed to {$brand->status}.");
+    }
 }

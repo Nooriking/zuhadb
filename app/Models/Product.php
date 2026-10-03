@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\SoftDeletingScope;
 
 class Product extends Model
 {
@@ -18,7 +19,7 @@ class Product extends Model
     protected $primaryKey = 'id';
 
     /* =========================================================
-     |  Fillable — بدون image, currency_id, purchase_number, unit_cost
+     |  Fillable
      ========================================================= */
 
     protected $fillable = [
@@ -29,26 +30,29 @@ class Product extends Model
         'gender',
         'status',
         'description',
-        // ❌ 'image' حذف شد
 
         // Purchase info
         'variant_id',
         'investor_id',
         'supplier_id',
-        // ❌ 'currency_id' حذف شد
-        // ❌ 'purchase_number' حذف شد
         'invoice_number',
         'purchase_date',
         'exchange_rate',
         'quantity',
         'remaining_quantity',
-        // ❌ 'unit_cost' حذف شد
         'purchase_price_afn',
         'wholesale_price_afn',
         'wholesale_min_qty',
+
+        // ✅ Investor profit
         'profit_per_unit',
         'line_total',
         'line_profit',
+
+        // ✅ Store profit (جدید)
+        'store_profit_per_unit',
+        'line_store_profit',
+
         'bill_image',
         'notes',
         'payment_status',
@@ -62,20 +66,27 @@ class Product extends Model
      ========================================================= */
 
     protected $casts = [
-        'trash'               => 'boolean',
-        'purchase_date'       => 'date',
-        'exchange_rate'       => 'decimal:4',
-        'quantity'            => 'integer',
-        'remaining_quantity'  => 'integer',
-        'purchase_price_afn'  => 'decimal:2',
-        'wholesale_price_afn' => 'decimal:2',
-        'wholesale_min_qty'   => 'integer',
-        'profit_per_unit'     => 'decimal:2',
-        'line_total'          => 'decimal:2',
-        'line_profit'         => 'decimal:2',
-        'created_at'          => 'datetime',
-        'updated_at'          => 'datetime',
-        'deleted_at'          => 'datetime',
+        'trash'                  => 'boolean',
+        'purchase_date'          => 'date',
+        'exchange_rate'          => 'decimal:4',
+        'quantity'               => 'integer',
+        'remaining_quantity'     => 'integer',
+        'purchase_price_afn'     => 'decimal:2',
+        'wholesale_price_afn'    => 'decimal:2',
+        'wholesale_min_qty'      => 'integer',
+
+        // ✅ Investor profit
+        'profit_per_unit'        => 'decimal:2',
+        'line_total'             => 'decimal:2',
+        'line_profit'            => 'decimal:2',
+
+        // ✅ Store profit (جدید)
+        'store_profit_per_unit'  => 'decimal:2',
+        'line_store_profit'      => 'decimal:2',
+
+        'created_at'             => 'datetime',
+        'updated_at'             => 'datetime',
+        'deleted_at'             => 'datetime',
     ];
 
     protected $appends = [
@@ -113,8 +124,6 @@ class Product extends Model
     {
         return $this->belongsTo(Supplier::class, 'supplier_id');
     }
-
-    // ❌ currency() حذف شد
 
     public function variants(): HasMany
     {
@@ -155,9 +164,15 @@ class Product extends Model
         return $query->where('trash', false);
     }
 
-    public function scopeTrashed(Builder $query): Builder
+    /**
+     * ✅ scope اصلاح‌شده — نام از trashed به onlyTrash تغییر یافت
+     * تا با SoftDeletes تداخل نکند.
+     */
+    public function scopeOnlyTrash(Builder $query): Builder
     {
-        return $query->withoutGlobalScope(\Illuminate\Database\Eloquent\SoftDeletingScope::class)->where('trash', true);
+        return $query
+            ->withoutGlobalScope(SoftDeletingScope::class)
+            ->where('trash', true);
     }
 
     public function scopeActive(Builder $query): Builder
@@ -211,6 +226,27 @@ class Product extends Model
                      ->whereNotNull('variant_id');
     }
 
+    public function scopeWithUnpaidPurchases(Builder $query): Builder
+    {
+        return $query->whereNotNull('variant_id')
+            ->where(function ($q) {
+                $q->where('payment_status', '!=', 'paid')
+                  ->orWhereNull('payment_status');
+            });
+    }
+
+    /** ✅ فقط purchase row هایی که مال دوکان هستند (بدون investor) */
+    public function scopeStoreOwned(Builder $query): Builder
+    {
+        return $query->whereNotNull('variant_id')->whereNull('investor_id');
+    }
+
+    /** ✅ فقط purchase row هایی که مال سرمایه‌گذار هستند */
+    public function scopeInvestorOwned(Builder $query): Builder
+    {
+        return $query->whereNotNull('variant_id')->whereNotNull('investor_id');
+    }
+
     public static function supplierCredits(): array
     {
         $rows = SupplierInvoice::query()
@@ -246,15 +282,6 @@ class Product extends Model
                 'invoice' => $row->invoice_no,
             ])->values(),
         ];
-    }
-
-    public function scopeWithUnpaidPurchases(Builder $query): Builder
-    {
-        return $query->whereNotNull('variant_id')
-            ->where(function ($q) {
-                $q->where('payment_status', '!=', 'paid')
-                  ->orWhereNull('payment_status');
-            });
     }
 
     /* =========================================================
@@ -326,6 +353,20 @@ class Product extends Model
             ->whereNotNull('variant_id')
             ->where('trash', false)
             ->sum('line_profit');
+    }
+
+    // ✅ سود کل دوکان (جدید)
+    public function getTotalStoreProfitAfnAttribute(): float
+    {
+        if ($this->variant_id !== null) {
+            return (float) $this->line_store_profit;
+        }
+
+        return (float) Product::where('name', $this->name)
+            ->where('brand_id', $this->brand_id)
+            ->whereNotNull('variant_id')
+            ->where('trash', false)
+            ->sum('line_store_profit');
     }
 
     public function getPurchaseCountAttribute(): int

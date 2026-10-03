@@ -11,11 +11,13 @@ return new class extends Migration
         Schema::create('investors', function (Blueprint $table) {
             $table->id();
 
+            // ✅ user_id با unique — یک user نمی‌تواند چند investor فعال داشته باشد
             $table->foreignId('user_id')
                 ->nullable()
+                ->unique('investors_user_id_unique')   // ✅ جلوگیری از تکرار
                 ->constrained('users')
                 ->nullOnDelete()
-                ->comment('If the investor also has a system login account');
+                ->comment('If the investor also has a system login account. Unique: one user = one investor.');
 
             $table->string('full_name');
             $table->string('phone', 50)->nullable();
@@ -34,7 +36,9 @@ return new class extends Migration
             $table->timestamps();
             $table->softDeletes();
 
-            $table->index('user_id');
+            // ❌ index('user_id') لازم نیست چون unique خودش index می‌سازد
+            // $table->index('user_id');   ← حذف شد
+
             $table->index('status');
             $table->index('trash');
             $table->index('full_name');

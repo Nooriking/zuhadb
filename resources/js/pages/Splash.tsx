@@ -23,7 +23,7 @@ export default function Splash({ app }: SplashProps) {
             <div
                 className="relative min-h-screen bg-cover bg-center bg-no-repeat"
                 style={{
-                    backgroundImage: "url('/images/zuha-splash.png')",
+                    backgroundImage: "url('/images/zuha-splash.svg')",
                 }}
             >
                 {/* Dark Overlay */}

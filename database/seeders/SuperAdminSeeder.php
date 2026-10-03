@@ -13,15 +13,14 @@ class SuperAdminSeeder extends Seeder
             ['username' => 'superadmin'],
             [
                 'branch_id' => null,
-                'name' => 'Super Admin',
-                'email' => 'zuhaperfume.af@gmail.com',
-                'phone' => '0744442863',
-                'password' => 'Super@123',
-                'role' => User::ROLE_SUPER_ADMIN,
-                'employee_code' => 'EMP-0001',
-                'status' => 'active',
-                'trash' => false,
-                'user_id' => null,
+                'name'      => 'Super Admin',
+                'email'     => 'zuhaperfume.af@gmail.com',
+                'phone'     => '0744442863',
+                'password'  => 'Super@123',
+                'role'      => User::ROLE_SUPER_ADMIN,
+                'status'    => 'active',
+                'trash'     => false,
+                'user_id'   => null,
             ]
         );
 

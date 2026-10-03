@@ -218,72 +218,76 @@ class UpdateProductRequest extends FormRequest
     /**
      * Validation rules.
      */
-    public function rules(): array
-    {
-        $productId = $this->route('product')?->id;
+   public function rules(): array
+{
+    $productId = $this->route('product')?->id;
 
-        return [
-            /* ─────────────── Product ─────────────── */
-            'name'        => ['required', 'string', 'max:255'],
-            'brand_id'    => ['nullable', 'integer', 'exists:brands,id'],
-            'gender'      => ['required', Rule::in(['male', 'female', 'unisex'])],
-            'status'      => ['required', Rule::in(['active', 'inactive'])],
-            'description' => ['nullable', 'string', 'max:5000'],
-            'image'       => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
+    return [
+        /* ─────────────── Product ─────────────── */
+        'name'        => ['required', 'string', 'max:255'],
+        'brand_id'    => ['nullable', 'integer', 'exists:brands,id'],
+        'gender'      => ['required', Rule::in(['male', 'female', 'unisex'])],
+        'status'      => ['required', Rule::in(['active', 'inactive'])],
+        'description' => ['nullable', 'string', 'max:5000'],
+        'image'       => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
 
-            /* ─────────────── Variants ─────────────── */
-            'variants'                       => ['required', 'array', 'min:1'],
-            'variants.*.id'                  => [
-                'nullable', 'integer',
-                Rule::exists('product_variants', 'id')->where('product_id', $productId),
-            ],
-            'variants.*.description'         => ['nullable', 'string', 'max:5000'],
-            'variants.*.image'               => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
-            'variants.*.volume_ml'           => ['nullable', 'integer', 'min:0', 'max:100000'],
-            'variants.*.concentration'       => ['nullable', Rule::in([
-                'parfum', 'edp', 'edt', 'edc',
-                'edt_legere', 'body_mist', 'attar', 'oud', 'other',
-            ])],
-            'variants.*.purchase_price_afn'  => ['nullable', 'numeric', 'min:0'],
-            'variants.*.sale_price_afn'      => ['required', 'numeric', 'min:0'],
-            'variants.*.wholesale_price_afn' => ['nullable', 'numeric', 'min:0'],
-            'variants.*.wholesale_min_qty'   => ['nullable', 'integer', 'min:0'],
-            'variants.*.profit_per_unit'     => ['nullable', 'numeric', 'min:0'],
-            'variants.*.minimum_stock'       => ['nullable', 'integer', 'min:0'],
-            'variants.*.stock_quantity'      => ['nullable', 'integer', 'min:0'],
+        /* ─────────────── Variants ─────────────── */
+        'variants'                       => ['required', 'array', 'min:1'],
+        'variants.*.id'                  => [
+            'nullable', 'integer',
+            Rule::exists('product_variants', 'id')->where('product_id', $productId),
+        ],
+        'variants.*.description'         => ['nullable', 'string', 'max:5000'],
+        'variants.*.image'               => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
+        'variants.*.volume_ml'           => ['nullable', 'integer', 'min:0', 'max:100000'],
+        'variants.*.concentration'       => ['nullable', Rule::in([
+            'parfum', 'edp', 'edt', 'edc',
+            'edt_legere', 'body_mist', 'attar', 'oud', 'other',
+        ])],
+        'variants.*.purchase_price_afn'  => ['nullable', 'numeric', 'min:0'],
+        'variants.*.sale_price_afn'      => ['required', 'numeric', 'min:0'],
+        'variants.*.wholesale_price_afn' => ['nullable', 'numeric', 'min:0'],
+        'variants.*.wholesale_min_qty'   => ['nullable', 'integer', 'min:0'],
+        'variants.*.profit_per_unit'     => ['nullable', 'numeric', 'min:0'],
+        'variants.*.minimum_stock'       => ['nullable', 'integer', 'min:0'],
+        'variants.*.stock_quantity'      => ['nullable', 'integer', 'min:0'],
 
-            /* ─────────────── Barcodes ─────────────── */
-            'variants.*.barcodes'                => ['nullable', 'array'],
-            'variants.*.barcodes.*.barcode'      => ['required', 'string', 'max:100', 'distinct'],
-            'variants.*.barcodes.*.barcode_type' => ['nullable', Rule::in([
-                'EAN13', 'EAN8', 'UPC', 'CODE128', 'CODE39', 'QR', 'other',
-            ])],
-            'variants.*.barcodes.*.is_primary'   => ['nullable', 'boolean'],
-            'variants.*.barcodes.*.status'       => ['nullable', Rule::in(['active', 'inactive'])],
-            'variants.*.barcodes.*.current_stock'=> ['nullable', 'integer', 'min:0'],
+        /* ─────────────── Barcodes ─────────────── */
+        'variants.*.barcodes'                => ['nullable', 'array'],
+        'variants.*.barcodes.*.barcode'      => ['required', 'string', 'max:100', 'distinct'],
+        'variants.*.barcodes.*.barcode_type' => ['nullable', Rule::in([
+            'EAN13', 'EAN8', 'UPC', 'CODE128', 'CODE39', 'QR', 'other',
+        ])],
+        'variants.*.barcodes.*.is_primary'   => ['nullable', 'boolean'],
+        'variants.*.barcodes.*.status'       => ['nullable', Rule::in(['active', 'inactive'])],
+        'variants.*.barcodes.*.current_stock'=> ['nullable', 'integer', 'min:0'],
 
-            /* ─────────────── Purchases ─────────────── */
-            'purchases'                       => ['nullable', 'array'],
-            'purchases.*.id'                  => [
-                'nullable', 'integer',
-                Rule::exists('product_purchases', 'id')->where('product_id', $productId),
-            ],
-            'purchases.*.variant_index'       => ['required', 'integer', 'min:0'],
-            'purchases.*.investor_id'         => ['nullable', 'integer', 'exists:investors,id'],
-            'purchases.*.supplier_id'         => ['nullable', 'integer', 'exists:suppliers,id'],
-            'purchases.*.quantity'            => ['required', 'integer', 'min:1'],
-            'purchases.*.profit_per_unit'     => ['nullable', 'numeric', 'min:0'],
-            'purchases.*.line_total'          => ['nullable', 'numeric', 'min:0'],
-            'purchases.*.line_profit'         => ['nullable', 'numeric', 'min:0'],
-            'purchases.*.invoice_number'      => ['nullable', 'string', 'max:100'],
-            'purchases.*.purchase_date'       => ['nullable', 'date'],
-            'purchases.*.exchange_rate'       => ['nullable', 'numeric', 'min:0.01'],
-            'purchases.*.paid_now'            => ['nullable', 'numeric', 'min:0'],
-            'purchases.*.payment_status'      => ['nullable', Rule::in(['paid', 'unpaid', 'partial', 'credit'])],
-            'purchases.*.notes'               => ['nullable', 'string', 'max:5000'],
-            'purchases.*.bill_image'          => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
-        ];
-    }
+        /* ─────────────── Purchases ─────────────── */
+        'purchases'                       => ['nullable', 'array'],
+
+        // ✅ اصلاح شد — خریدها در جدول products هستند
+        'purchases.*.id'                  => [
+            'nullable',
+            'integer',
+            Rule::exists('products', 'id')->whereNotNull('variant_id'),
+        ],
+
+        'purchases.*.variant_index'       => ['required', 'integer', 'min:0'],
+        'purchases.*.investor_id'         => ['nullable', 'integer', 'exists:investors,id'],
+        'purchases.*.supplier_id'         => ['nullable', 'integer', 'exists:suppliers,id'],
+        'purchases.*.quantity'            => ['required', 'integer', 'min:1'],
+        'purchases.*.profit_per_unit'     => ['nullable', 'numeric', 'min:0'],
+        'purchases.*.line_total'          => ['nullable', 'numeric', 'min:0'],
+        'purchases.*.line_profit'         => ['nullable', 'numeric', 'min:0'],
+        'purchases.*.invoice_number'      => ['nullable', 'string', 'max:100'],
+        'purchases.*.purchase_date'       => ['nullable', 'date'],
+        'purchases.*.exchange_rate'       => ['nullable', 'numeric', 'min:0.01'],
+        'purchases.*.paid_now'            => ['nullable', 'numeric', 'min:0'],
+        'purchases.*.payment_status'      => ['nullable', Rule::in(['paid', 'unpaid', 'partial', 'credit'])],
+        'purchases.*.notes'               => ['nullable', 'string', 'max:5000'],
+        'purchases.*.bill_image'          => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
+    ];
+}
 
     /**
      * Validation error messages.

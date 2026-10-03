@@ -10,22 +10,15 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link, router } from '@inertiajs/react';
-import { ArrowLeft, Building2, Save } from 'lucide-react';
+import { Head, router } from '@inertiajs/react';
+import { Building2, Save } from 'lucide-react';
 import { useState } from 'react';
 
 /* ═══════════════════════════════════════════════════════
  |  Types
  ═══════════════════════════════════════════════════════ */
 
-interface Manager {
-    id: number;
-    name: string;
-    email: string;
-}
-
 interface Props {
-    managers: Manager[];
     errors?: Record<string, string>;
 }
 
@@ -39,10 +32,10 @@ const breadcrumbs: BreadcrumbItem[] = [
  |  Component
  ═══════════════════════════════════════════════════════ */
 
-export default function BranchesCreate({ managers, errors: initialErrors }: Props) {
+export default function BranchesCreate({ errors: initialErrors }: Props) {
     const { toast } = useToast();
+
     const [form, setForm] = useState({
-        manager_user_id: 'none',
         name: '',
         code: '',
         phone: '',
@@ -53,6 +46,7 @@ export default function BranchesCreate({ managers, errors: initialErrors }: Prop
         address: '',
         status: 'active' as 'active' | 'inactive',
     });
+
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
     const [loading, setLoading] = useState(false);
 
@@ -61,12 +55,8 @@ export default function BranchesCreate({ managers, errors: initialErrors }: Prop
         setLoading(true);
         setErrors({});
 
-        const payload = {
-            ...form,
-            manager_user_id: form.manager_user_id === 'none' ? '' : form.manager_user_id,
-        };
-
-        router.post('/branches', payload, {
+        // ⭐ no manager_user_id at all — branch is created without manager
+        router.post('/branches', form, {
             onSuccess: () => {
                 toast({
                     title: 'Success',
@@ -114,30 +104,9 @@ export default function BranchesCreate({ managers, errors: initialErrors }: Prop
                     <Card>
                         <CardHeader>
                             <CardTitle>Branch Information</CardTitle>
-                            <CardDescription>Enter the required information to create a new branch.</CardDescription>
+                            <CardDescription>Enter the required information to create a new branch. You can assign a manager later.</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-6">
-                            {/* Manager */}
-                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                <div className="space-y-2">
-                                    <Label>Branch Manager</Label>
-                                    <Select value={form.manager_user_id} onValueChange={(v) => handleChange('manager_user_id', v)}>
-                                        <SelectTrigger className={errors.manager_user_id ? 'border-destructive' : ''}>
-                                            <SelectValue placeholder="Select a manager" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="none">No Manager</SelectItem>
-                                            {managers.map((m) => (
-                                                <SelectItem key={m.id} value={String(m.id)}>
-                                                    {m.name} ({m.email})
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                    {errors.manager_user_id && <p className="text-destructive text-sm">{errors.manager_user_id}</p>}
-                                </div>
-                            </div>
-
                             {/* Name + Code */}
                             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                                 <div className="space-y-2">
@@ -171,7 +140,7 @@ export default function BranchesCreate({ managers, errors: initialErrors }: Prop
                             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                                 <div className="space-y-2">
                                     <Label>Phone</Label>
-                                    <Input value={form.phone} onChange={(e) => handleChange('phone', e.target.value)} placeholder="+1 234 567 8900" />
+                                    <Input value={form.phone} onChange={(e) => handleChange('phone', e.target.value)} placeholder="+93 700 000 000" />
                                 </div>
 
                                 <div className="space-y-2">

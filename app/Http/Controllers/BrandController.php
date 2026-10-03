@@ -161,7 +161,7 @@ class BrandController extends Controller
 
     public function restore(int $id): RedirectResponse
     {
-        $brand = Brand::onlyTrashed()->findOrFail($id);
+        $brand = Brand::inTrash()->findOrFail($id);
 
         $brand->update([
             'trash'   => false,
@@ -179,14 +179,14 @@ class BrandController extends Controller
 
     public function forceDelete(int $id): RedirectResponse
     {
-        $brand = Brand::onlyTrashed()->findOrFail($id);
+        $brand = Brand::inTrash()->findOrFail($id);
 
         if ($brand->logo && Storage::disk('public')->exists($brand->logo)) {
             Storage::disk('public')->delete($brand->logo);
         }
 
         $name = $brand->name;
-        $brand->forceDelete();
+        $brand->delete();   // ✅ اصلاح شد (قبلاً forceDelete بود)
 
         return redirect()
             ->route('brands.index')
@@ -194,12 +194,12 @@ class BrandController extends Controller
     }
 
     /* =========================================================
-     |  TRASH LIST
+     |  TRASH LIST  ✅ اصلاح شد
      ========================================================= */
 
     public function trash(): Response
     {
-        $brands = Brand::onlyTrashed()
+        $brands = Brand::inTrash()   // ✅ اصلاح شد (قبلاً onlyTrashed بود)
             ->with('creator:id,name')
             ->orderByDesc('updated_at')
             ->paginate(15);

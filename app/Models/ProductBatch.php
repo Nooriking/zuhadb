@@ -7,12 +7,17 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Eloquent\Builder;
 
 class ProductBatch extends Model
 {
     use HasFactory, SoftDeletes;
 
     protected $table = 'product_batches';
+
+    /* =========================================================
+     |  Fillable
+     ========================================================= */
 
     protected $fillable = [
         'branch_id',
@@ -25,23 +30,37 @@ class ProductBatch extends Model
         'unit_cost_afn',
         'total_cost_afn',
         'profit_per_unit_afn',
+
+        // ✅ جدید
+        'sale_price_afn',
+        'store_profit_per_unit_afn',
+
         'received_date',
         'status',
         'user_id',
         'trash',
     ];
 
+    /* =========================================================
+     |  Casts
+     ========================================================= */
+
     protected $casts = [
-        'quantity'             => 'integer',
-        'remaining_quantity'   => 'integer',
-        'unit_cost_afn'        => 'decimal:2',
-        'total_cost_afn'       => 'decimal:2',
-        'profit_per_unit_afn'  => 'decimal:2',
-        'received_date'             => 'date',
-        'trash'                     => 'boolean',
-        'created_at'                => 'datetime',
-        'updated_at'                => 'datetime',
-        'deleted_at'                => 'datetime',
+        'quantity'                    => 'integer',
+        'remaining_quantity'          => 'integer',
+        'unit_cost_afn'               => 'decimal:2',
+        'total_cost_afn'              => 'decimal:2',
+        'profit_per_unit_afn'         => 'decimal:2',
+
+        // ✅ جدید
+        'sale_price_afn'              => 'decimal:2',
+        'store_profit_per_unit_afn'   => 'decimal:2',
+
+        'received_date'               => 'date',
+        'trash'                       => 'boolean',
+        'created_at'                  => 'datetime',
+        'updated_at'                  => 'datetime',
+        'deleted_at'                  => 'datetime',
     ];
 
     /* =========================================================
@@ -59,8 +78,8 @@ class ProductBatch extends Model
     }
 
     /**
-     * ⭐ purchase_item_id به جدول products اشاره میکند
-     * (چون purchase rows در products ذخیره میشوند)
+     * ⭐ purchase_item_id به جدول products اشاره می‌کند
+     * (چون purchase rows در products ذخیره می‌شوند)
      */
     public function purchaseItem(): BelongsTo
     {
@@ -126,6 +145,12 @@ class ProductBatch extends Model
         return $query->whereNotNull('investor_id');
     }
 
+    /** ✅ فقط batch های مال دوکان (بدون investor) */
+    public function scopeStoreOwned($query)
+    {
+        return $query->whereNull('investor_id');
+    }
+
     public function scopeAvailableForSale($query, int $branchId, int $variantId)
     {
         return $query->where('branch_id', $branchId)
@@ -166,6 +191,10 @@ class ProductBatch extends Model
         return ! is_null($this->investor_id);
     }
 
+    /* =========================================================
+     |  Accessors
+     ========================================================= */
+
     public function getSoldQuantityAttribute(): int
     {
         return $this->quantity - $this->remaining_quantity;
@@ -180,6 +209,40 @@ class ProductBatch extends Model
     {
         return (float) $this->profit_per_unit_afn * $this->sold_quantity;
     }
+
+    // ✅ جدید
+    public function getIsStoreOwnedAttribute(): bool
+    {
+        return $this->investor_id === null;
+    }
+
+    // ✅ جدید
+    public function getTotalStoreProfitAfnAttribute(): float
+    {
+        return (float) $this->store_profit_per_unit_afn * $this->quantity;
+    }
+
+    // ✅ جدید
+    public function getRealizedStoreProfitAfnAttribute(): float
+    {
+        return (float) $this->store_profit_per_unit_afn * $this->sold_quantity;
+    }
+
+    // ✅ جدید
+    public function getRemainingCostAfnAttribute(): float
+    {
+        return (float) $this->remaining_quantity * (float) $this->unit_cost_afn;
+    }
+
+    // ✅ جدید
+    public function getExpectedStoreProfitAfnAttribute(): float
+    {
+        return (float) $this->remaining_quantity * (float) $this->store_profit_per_unit_afn;
+    }
+
+    /* =========================================================
+     |  Stock Operations
+     ========================================================= */
 
     /**
      * کم کردن موجودی Batch هنگام فروش
@@ -224,7 +287,8 @@ class ProductBatch extends Model
      *         cost_per_unit_afn: float,
      *         line_cost_afn: float,
      *         investor_id: int|null,
-     *         profit_per_unit_afn: float
+     *         profit_per_unit_afn: float,
+     *         store_profit_per_unit_afn: float
      *     }>
      * }
      *
@@ -262,13 +326,15 @@ class ProductBatch extends Model
             $totalCost += $lineCost;
 
             $breakdown[] = [
-                'batch_id'            => $batch->id,
-                'batch_code'          => $batch->batch_code,
-                'qty'                 => $take,
-                'cost_per_unit_afn'   => $costPerUnit,
-                'line_cost_afn'       => $lineCost,
-                'investor_id'         => $batch->investor_id,
-                'profit_per_unit_afn' => (float) $batch->profit_per_unit_afn,
+                'batch_id'                  => $batch->id,
+                'batch_code'                => $batch->batch_code,
+                'qty'                       => $take,
+                'cost_per_unit_afn'         => $costPerUnit,
+                'line_cost_afn'             => $lineCost,
+                'investor_id'               => $batch->investor_id,
+                'profit_per_unit_afn'       => (float) $batch->profit_per_unit_afn,
+                'store_profit_per_unit_afn' => (float) $batch->store_profit_per_unit_afn,  // ✅ جدید
+                'sale_price_afn'            => (float) $batch->sale_price_afn,              // ✅ جدید
             ];
 
             $remaining -= $take;

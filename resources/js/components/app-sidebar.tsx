@@ -7,6 +7,7 @@ import { Link, usePage } from '@inertiajs/react';
 import {
     ArrowLeftRight,
     Banknote,
+    BarChart3,
     BookOpen,
     DatabaseBackup,
     FileClock,
@@ -122,7 +123,7 @@ const transactionNavItems: NavItem[] = [
 ];
 
 /* =========================================================
- |  CUSTOMERS  ⭐ NEW SECTION
+ |  CUSTOMERS
  ========================================================= */
 
 const customerNavItems: NavItem[] = [
@@ -185,6 +186,19 @@ const financialNavItems: NavItem[] = [
 ];
 
 /* =========================================================
+ |  ✅ REPORTS — Profit Report و گزارش‌های دیگر
+ ========================================================= */
+
+const reportNavItems: NavItem[] = [
+    {
+        title: 'Profit Report',
+        url: '/reports/profit',
+        icon: BarChart3,
+        module: 'reports',
+    },
+];
+
+/* =========================================================
  |  SETTINGS
  ========================================================= */
 
@@ -229,6 +243,7 @@ export function AppSidebar() {
     const customers = allowedItems(customerNavItems, modules, showAll);
     const investments = allowedItems(investmentNavItems, modules, showAll);
     const financial = allowedItems(financialNavItems, modules, showAll);
+    const reports = allowedItems(reportNavItems, modules, showAll);
     const settings = allowedItems(settingsNavItems, modules, showAll);
 
     return (
@@ -296,6 +311,16 @@ export function AppSidebar() {
                             <h3 className="text-muted-foreground mb-1 text-[11px] font-semibold tracking-wider uppercase">Financial Management</h3>
                         </div>
                         <NavMain items={financial} />
+                    </div>
+                )}
+
+                {/* ✅ NEW: Reports Section */}
+                {reports.length > 0 && (
+                    <div className="mt-4">
+                        <div className="px-3 py-2">
+                            <h3 className="text-muted-foreground mb-1 text-[11px] font-semibold tracking-wider uppercase">Reports</h3>
+                        </div>
+                        <NavMain items={reports} />
                     </div>
                 )}
 

@@ -5,6 +5,7 @@ import { DeleteAction, EditAction, RowActions, ViewAction } from '@/components/r
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
+import { Activity, CalendarDays, TrendingDown, Wallet } from 'lucide-react';
 import { useState } from 'react';
 
 interface Expense {
@@ -34,7 +35,13 @@ interface Props {
     branches: { id: number; name: string; code: string }[];
     categories: Record<string, string>;
     filters: any;
-    stats: { total: number; this_month: string; total_afn: string };
+    stats: {
+        total: number;
+        this_month: string;
+        total_afn: string;
+        today_afn: string;
+        today_count: number;
+    };
 }
 
 const breadcrumbs: BreadcrumbItem[] = [
@@ -89,18 +96,48 @@ export default function ExpensesIndex({ expenses, branches, categories, filters,
                     </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-4">
+                {/* ═══════════ 📊 Stats Cards ═══════════ */}
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    {/* Total */}
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
-                        <p className="text-xs text-gray-500">Total</p>
-                        <p className="text-2xl font-bold">{stats.total}</p>
+                        <div className="flex items-center justify-between">
+                            <p className="text-xs font-medium text-gray-500 uppercase">Total</p>
+                            <Activity className="h-4 w-4 text-gray-400" />
+                        </div>
+                        <p className="mt-2 text-2xl font-bold">{stats.total}</p>
+                        <p className="mt-1 text-xs text-gray-400">All expenses</p>
                     </div>
-                    <div className="rounded-lg border bg-white p-4 shadow-sm">
-                        <p className="text-xs text-gray-500">This Month (AFN)</p>
-                        <p className="text-2xl font-bold text-orange-600">{formatPrice(stats.this_month)}</p>
+
+                    {/* ✅ Today — کارت جدید */}
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 shadow-sm">
+                        <div className="flex items-center justify-between">
+                            <p className="text-xs font-medium text-blue-700 uppercase">Today (AFN)</p>
+                            <CalendarDays className="h-4 w-4 text-blue-600" />
+                        </div>
+                        <p className="mt-2 text-2xl font-bold text-blue-700">{formatPrice(stats.today_afn)}</p>
+                        <p className="mt-1 text-xs text-blue-600">
+                            {stats.today_count} {stats.today_count === 1 ? 'expense' : 'expenses'} today
+                        </p>
                     </div>
+
+                    {/* This Month */}
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
-                        <p className="text-xs text-gray-500">Total (AFN)</p>
-                        <p className="text-2xl font-bold text-red-600">{formatPrice(stats.total_afn)}</p>
+                        <div className="flex items-center justify-between">
+                            <p className="text-xs font-medium text-gray-500 uppercase">This Month (AFN)</p>
+                            <TrendingDown className="h-4 w-4 text-orange-500" />
+                        </div>
+                        <p className="mt-2 text-2xl font-bold text-orange-600">{formatPrice(stats.this_month)}</p>
+                        <p className="mt-1 text-xs text-gray-400">Current month</p>
+                    </div>
+
+                    {/* Total AFN */}
+                    <div className="rounded-lg border bg-white p-4 shadow-sm">
+                        <div className="flex items-center justify-between">
+                            <p className="text-xs font-medium text-gray-500 uppercase">Total (AFN)</p>
+                            <Wallet className="h-4 w-4 text-red-500" />
+                        </div>
+                        <p className="mt-2 text-2xl font-bold text-red-600">{formatPrice(stats.total_afn)}</p>
+                        <p className="mt-1 text-xs text-gray-400">Grand total</p>
                     </div>
                 </div>
 
@@ -174,10 +211,7 @@ export default function ExpensesIndex({ expenses, branches, categories, filters,
                                     </td>
                                     <td className="px-4 py-3 text-xs">{new Date(expense.expense_date).toLocaleDateString('en-US')}</td>
                                     <td className="px-4 py-3 text-right">
-                                        <div className="font-mono font-semibold">
-                                            {formatPrice(expense.amount_afn)} AFN
-                                        </div>
-                                        <div className="text-xs text-gray-500">{formatPrice(expense.amount_afn)} AFN</div>
+                                        <div className="font-mono font-semibold">{formatPrice(expense.amount_afn)} AFN</div>
                                     </td>
                                     <td className="px-4 py-3 text-xs capitalize">{expense.payment_method}</td>
                                     <td className="px-4 py-3">

@@ -10,11 +10,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
+import { getSwal } from '@/lib/swal';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link, router } from '@inertiajs/react';
+import { Head, router } from '@inertiajs/react';
 import {
     AlertCircle,
-    ArrowLeft,
     Barcode,
     CheckCircle2,
     Package,
@@ -23,13 +23,14 @@ import {
     Save,
     Scan,
     Star,
+    Store,
     Trash2,
     TrendingUp,
     User,
+    Wallet,
     X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getSwal } from '@/lib/swal';
 
 /* ═══════════════════════════════════════════════════════
  |  Types
@@ -198,6 +199,8 @@ const toNum = (v: string | number | undefined | null): number => {
     return Number.isFinite(n) ? n : 0;
 };
 
+const fmt = (v: number): string => new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(v || 0);
+
 const preventNegative = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === '-' || e.key === 'e' || e.key === 'E') {
         e.preventDefault();
@@ -206,6 +209,26 @@ const preventNegative = (e: React.KeyboardEvent<HTMLInputElement>) => {
 
 const isInvestorPurchase = (investorId: string): boolean => {
     return investorId !== 'store' && investorId !== 'none' && investorId !== '';
+};
+
+/**
+ * ✅ محاسبه‌ی سود تفکیک‌شده
+ *
+ * storeProfit = max(0, sale - cost - investor)
+ */
+const calcProfits = (purchasePricePerUnit: number, salePricePerUnit: number, investorProfitPerUnit: number, qty: number) => {
+    const totalPerUnit = Math.max(0, salePricePerUnit - purchasePricePerUnit);
+    const storePerUnit = Math.max(0, totalPerUnit - investorProfitPerUnit);
+    const investorPerUnit = Math.max(0, Math.min(investorProfitPerUnit, totalPerUnit));
+
+    return {
+        totalPerUnit,
+        investorPerUnit,
+        storePerUnit,
+        investorLine: investorPerUnit * qty,
+        storeLine: storePerUnit * qty,
+        totalLine: totalPerUnit * qty,
+    };
 };
 
 /* ═══════════════════════════════════════════════════════
@@ -252,7 +275,6 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
             return copy;
         });
 
-        // ✅ اگر purchase_price_afn یا sale_price_afn تغییر کرد، purchases را دوباره محاسبه کن
         if (field === 'purchase_price_afn' || field === 'sale_price_afn') {
             setPurchases((prev) =>
                 prev.map((p) => {
@@ -400,15 +422,17 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                 updateVariant(vIndex, 'barcodes', updated);
 
                 if (data.exists) {
-                    void getSwal().then((Swal) => Swal.fire({
-                        icon: 'error',
-                        title: '❌ Barcode Already Exists',
-                        html: data.product_name
-                            ? `This barcode is already used by:<br><strong>${data.product_name}</strong>`
-                            : 'This barcode is already registered in the system.',
-                        confirmButtonText: 'OK',
-                        confirmButtonColor: '#dc2626',
-                    }));
+                    void getSwal().then((Swal) =>
+                        Swal.fire({
+                            icon: 'error',
+                            title: '❌ Barcode Already Exists',
+                            html: data.product_name
+                                ? `This barcode is already used by:<br><strong>${data.product_name}</strong>`
+                                : 'This barcode is already registered in the system.',
+                            confirmButtonText: 'OK',
+                            confirmButtonColor: '#dc2626',
+                        }),
+                    );
                 }
 
                 return data.exists === true;
@@ -458,17 +482,11 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
             return copy;
         });
 
-        // ✅ اگر quantity تغییر کرد، line_total را دوباره محاسبه کن
-        if (field === 'quantity') {
+        if (field === 'quantity' || field === 'investor_id' || field === 'profit_per_unit') {
             recalcPurchase(index);
         }
     };
 
-    /**
-     * ✅ محاسبه خودکار line_total و line_profit
-     * line_total = variant.purchase_price_afn × quantity
-     * line_profit = profit_per_unit × quantity
-     */
     const recalcPurchase = (index: number) => {
         setPurchases((prev) => {
             const copy = [...prev];
@@ -479,10 +497,8 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
             const unitPrice = toNum(variant?.purchase_price_afn);
             const profit = toNum(p.profit_per_unit);
 
-            // ✅ line_total = قیمت خرید واحد × تعداد
             p.line_total = (unitPrice * qty).toFixed(2);
 
-            // ✅ line_profit = سود واحد × تعداد (فقط برای investor)
             if (isInvestorPurchase(p.investor_id)) {
                 p.line_profit = (qty * profit).toFixed(2);
             } else {
@@ -513,7 +529,9 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
         /* ─── 1. Duplicate barcodes within form ─── */
         const duplicates = allBarcodesInForm.filter((b, i, arr) => arr.indexOf(b) !== i);
         if (duplicates.length > 0) {
-            await (await getSwal()).fire({
+            await (
+                await getSwal()
+            ).fire({
                 icon: 'error',
                 title: 'Duplicate Barcodes in Form',
                 html: `These barcodes are duplicated:<br><strong>${[...new Set(duplicates)].join('<br>')}</strong>`,
@@ -552,7 +570,9 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                     })
                     .join('');
 
-                await (await getSwal()).fire({
+                await (
+                    await getSwal()
+                ).fire({
                     icon: 'error',
                     title: '❌ Barcode Already Registered',
                     html: `<p style="margin-bottom:10px;">Cannot save. The following barcodes already exist in the system:</p>
@@ -601,21 +621,33 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
             if (toNum(p.quantity) <= 0) {
                 clientErrors[`purchases.${i}.quantity`] = 'Quantity must be greater than 0';
             }
-            if (!isInvestorPurchase(p.investor_id)) {
-                clientErrors[`purchases.${i}.investor_id`] = 'Each purchase must be linked to an investor';
+
+            if (!p.investor_id || p.investor_id === '' || p.investor_id === 'none') {
+                clientErrors[`purchases.${i}.investor_id`] = 'Please select an owner (Shop or an investor)';
             }
-            if (isInvestorPurchase(p.investor_id) && toNum(p.profit_per_unit) <= 0) {
-                clientErrors[`purchases.${i}.profit_per_unit`] = 'Investor profit per unit (USD) is required';
+
+            if (toNum(p.exchange_rate) <= 0) {
+                clientErrors[`purchases.${i}.exchange_rate`] = 'USD to AFN rate is required';
             }
-            if (isInvestorPurchase(p.investor_id) && toNum(p.exchange_rate) <= 0) {
-                clientErrors[`purchases.${i}.exchange_rate`] = 'USD to AFN rate is required for investor purchases';
+
+            if (isInvestorPurchase(p.investor_id)) {
+                const variant = variants[p.variant_index];
+                const totalProfit = toNum(variant?.sale_price_afn) - toNum(variant?.purchase_price_afn);
+
+                if (toNum(p.profit_per_unit) <= 0) {
+                    clientErrors[`purchases.${i}.profit_per_unit`] = 'Investor profit per unit is required';
+                } else if (toNum(p.profit_per_unit) > totalProfit) {
+                    clientErrors[`purchases.${i}.profit_per_unit`] = `Investor profit cannot exceed total profit (${fmt(totalProfit)} AFN)`;
+                }
             }
         });
 
         if (Object.keys(clientErrors).length > 0) {
             setErrors(clientErrors);
             setLoading(false);
-            await (await getSwal()).fire({
+            await (
+                await getSwal()
+            ).fire({
                 icon: 'warning',
                 title: 'Validation Failed',
                 text: Object.values(clientErrors)[0],
@@ -663,9 +695,10 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
         purchases.forEach((p, i) => {
             formData.append(`purchases[${i}][variant_index]`, String(p.variant_index));
 
-            if (p.investor_id && p.investor_id !== 'store' && p.investor_id !== 'none') {
+            if (p.investor_id && p.investor_id !== 'none') {
                 formData.append(`purchases[${i}][investor_id]`, p.investor_id);
             }
+
             if (p.supplier_id && p.supplier_id !== 'none') {
                 formData.append(`purchases[${i}][supplier_id]`, p.supplier_id);
             }
@@ -680,7 +713,11 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                 formData.append(`purchases[${i}][invoice_number]`, p.invoice_number);
             }
             formData.append(`purchases[${i}][purchase_date]`, p.purchase_date || today());
-            if (p.exchange_rate) formData.append(`purchases[${i}][exchange_rate]`, p.exchange_rate);
+
+            if (p.exchange_rate) {
+                formData.append(`purchases[${i}][exchange_rate]`, p.exchange_rate);
+            }
+
             if (p.paid_now) formData.append(`purchases[${i}][paid_now]`, p.paid_now);
             if (p.notes) {
                 formData.append(`purchases[${i}][notes]`, p.notes);
@@ -714,13 +751,15 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                     })
                     .join('');
 
-                void getSwal().then((Swal) => Swal.fire({
-                    icon: 'error',
-                    title: `Validation Error (${errorCount})`,
-                    html: `<ul style="padding-right:20px;max-height:300px;overflow-y:auto;">${errorListHtml}</ul>`,
-                    confirmButtonText: 'OK',
-                    confirmButtonColor: '#dc2626',
-                }));
+                void getSwal().then((Swal) =>
+                    Swal.fire({
+                        icon: 'error',
+                        title: `Validation Error (${errorCount})`,
+                        html: `<ul style="padding-right:20px;max-height:300px;overflow-y:auto;">${errorListHtml}</ul>`,
+                        confirmButtonText: 'OK',
+                        confirmButtonColor: '#dc2626',
+                    }),
+                );
 
                 setTimeout(() => {
                     const errorEl = document.querySelector('[data-error="true"]');
@@ -793,18 +832,18 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                     </CardHeader>
                     <CardContent className="space-y-6">
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                        <div className="space-y-2 md:col-span-2">
-                            <Label>
-                                Product Name <span className="text-destructive">*</span>
-                            </Label>
-                            <Input
-                                value={form.name}
-                                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                                placeholder="e.g. Sauvage"
-                                className={errors.name ? 'border-destructive' : ''}
-                            />
-                            {errors.name && <p className="text-destructive text-sm">{errors.name}</p>}
-                        </div>
+                            <div className="space-y-2 md:col-span-2">
+                                <Label>
+                                    Product Name <span className="text-destructive">*</span>
+                                </Label>
+                                <Input
+                                    value={form.name}
+                                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                                    placeholder="e.g. Sauvage"
+                                    className={errors.name ? 'border-destructive' : ''}
+                                />
+                                {errors.name && <p className="text-destructive text-sm">{errors.name}</p>}
+                            </div>
 
                             <div className="space-y-2">
                                 <Label>Brand</Label>
@@ -891,8 +930,8 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                     )}
                                 </div>
 
-                                {/* BARCODES — اولین فیلد */}
-                                <div className="order-3 rounded-lg border bg-muted/30 p-4">
+                                {/* ═══════════ BARCODES (TOP) ═══════════ */}
+                                <div className="bg-muted/30 rounded-lg border p-4">
                                     <div className="mb-3 flex items-center justify-between">
                                         <div className="flex items-center gap-2">
                                             <Barcode className="h-4 w-4 text-blue-600" />
@@ -972,41 +1011,41 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                                                 )}
                                                             </div>
                                                             <div className="min-w-0">
-                                                            <Label className="mb-1 block text-xs">Type</Label>
-                                                            <Select
-                                                                value={b.barcode_type}
-                                                                onValueChange={(val) => updateBarcode(vIndex, bIndex, 'barcode_type', val)}
-                                                            >
-                                                                <SelectTrigger className="w-full">
-                                                                    <SelectValue />
-                                                                </SelectTrigger>
-                                                                <SelectContent>
-                                                                    {BARCODE_TYPES.map((t) => (
-                                                                        <SelectItem key={t.value} value={t.value}>
-                                                                            {t.label}
-                                                                        </SelectItem>
-                                                                    ))}
-                                                                </SelectContent>
-                                                            </Select>
+                                                                <Label className="mb-1 block text-xs">Type</Label>
+                                                                <Select
+                                                                    value={b.barcode_type}
+                                                                    onValueChange={(val) => updateBarcode(vIndex, bIndex, 'barcode_type', val)}
+                                                                >
+                                                                    <SelectTrigger className="w-full">
+                                                                        <SelectValue />
+                                                                    </SelectTrigger>
+                                                                    <SelectContent>
+                                                                        {BARCODE_TYPES.map((t) => (
+                                                                            <SelectItem key={t.value} value={t.value}>
+                                                                                {t.label}
+                                                                            </SelectItem>
+                                                                        ))}
+                                                                    </SelectContent>
+                                                                </Select>
                                                             </div>
                                                             <div className="flex gap-1">
-                                                            <Button
-                                                                type="button"
-                                                                variant={b.is_primary ? 'default' : 'ghost'}
-                                                                size="icon"
-                                                                title={b.is_primary ? 'Primary barcode' : 'Set as primary'}
-                                                                onClick={() => updateBarcode(vIndex, bIndex, 'is_primary', true)}
-                                                            >
-                                                                <Star className={`h-4 w-4 ${b.is_primary ? 'fill-current' : ''}`} />
-                                                            </Button>
-                                                            <Button
-                                                                type="button"
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                onClick={() => removeBarcode(vIndex, bIndex)}
-                                                            >
-                                                                <X className="h-4 w-4" />
-                                                            </Button>
+                                                                <Button
+                                                                    type="button"
+                                                                    variant={b.is_primary ? 'default' : 'ghost'}
+                                                                    size="icon"
+                                                                    title={b.is_primary ? 'Primary barcode' : 'Set as primary'}
+                                                                    onClick={() => updateBarcode(vIndex, bIndex, 'is_primary', true)}
+                                                                >
+                                                                    <Star className={`h-4 w-4 ${b.is_primary ? 'fill-current' : ''}`} />
+                                                                </Button>
+                                                                <Button
+                                                                    type="button"
+                                                                    variant="ghost"
+                                                                    size="icon"
+                                                                    onClick={() => removeBarcode(vIndex, bIndex)}
+                                                                >
+                                                                    <X className="h-4 w-4" />
+                                                                </Button>
                                                             </div>
                                                         </div>
 
@@ -1030,150 +1069,52 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                     )}
                                 </div>
 
-                                {/* Specs */}
-                                <div className="order-1 space-y-3 rounded-lg border p-4">
-                                    <h4 className="text-sm font-semibold">Size</h4>
-                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                    <div className="space-y-2">
-                                        <Label>Volume (ml)</Label>
-                                        <Input
-                                            type="number"
-                                            min="0"
-                                            onKeyDown={preventNegative}
-                                            value={v.volume_ml}
-                                            onChange={(e) => {
-                                                const val = e.target.value;
-                                                if (toNum(val) < 0) return;
-                                                updateVariant(vIndex, 'volume_ml', val);
-                                            }}
-                                            placeholder="100"
-                                            className={errors[`variants.${vIndex}.volume_ml`] ? 'border-destructive' : ''}
-                                        />
-                                        {errors[`variants.${vIndex}.volume_ml`] && (
-                                            <p className="text-destructive text-xs">{errors[`variants.${vIndex}.volume_ml`]}</p>
-                                        )}
-                                    </div>
-                                    <div className="space-y-2">
-                                        <Label>Concentration</Label>
-                                        <Select value={v.concentration} onValueChange={(val) => updateVariant(vIndex, 'concentration', val)}>
-                                            <SelectTrigger>
-                                                <SelectValue placeholder="Select" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {CONCENTRATIONS.map((c) => (
-                                                    <SelectItem key={c.value} value={c.value}>
-                                                        {c.label}
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                </div>
-                                </div>
-
-                                <div className="order-2 space-y-3 rounded-lg border p-4">
-                                    <h4 className="text-sm font-semibold">Prices and rates</h4>
-                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                    <div className="space-y-2">
-                                        <Label>Purchase Price (AFN)</Label>
-                                        <Input
-                                            type="number"
-                                            min="0"
-                                            onKeyDown={preventNegative}
-                                            value={v.purchase_price_afn}
-                                            onChange={(e) => {
-                                                const val = e.target.value;
-                                                if (toNum(val) < 0) return;
-                                                updateVariant(vIndex, 'purchase_price_afn', val);
-                                            }}
-                                            placeholder="6500"
-                                            className={errors[`variants.${vIndex}.purchase_price_afn`] ? 'border-destructive' : ''}
-                                        />
-                                        {errors[`variants.${vIndex}.purchase_price_afn`] && (
-                                            <p className="text-destructive text-xs">{errors[`variants.${vIndex}.purchase_price_afn`]}</p>
-                                        )}
-                                    </div>
-                                    <div className="space-y-2">
-                                        <Label>
-                                            Sale Price (AFN) <span className="text-destructive">*</span>
-                                        </Label>
-                                        <Input
-                                            type="number"
-                                            min="0"
-                                            onKeyDown={preventNegative}
-                                            value={v.sale_price_afn}
-                                            onChange={(e) => {
-                                                const val = e.target.value;
-                                                if (toNum(val) < 0) return;
-                                                updateVariant(vIndex, 'sale_price_afn', val);
-                                            }}
-                                            placeholder="9750"
-                                            className={errors[`variants.${vIndex}.sale_price_afn`] ? 'border-destructive' : ''}
-                                        />
-                                        {errors[`variants.${vIndex}.sale_price_afn`] && (
-                                            <p className="text-destructive text-xs">{errors[`variants.${vIndex}.sale_price_afn`]}</p>
-                                        )}
-                                    </div>
-                                    <div className="space-y-2">
-                                        <Label>Wholesale Price (AFN)</Label>
-                                        <Input
-                                            type="number"
-                                            min="0"
-                                            onKeyDown={preventNegative}
-                                            value={v.wholesale_price_afn}
-                                            onChange={(e) => {
-                                                const val = e.target.value;
-                                                if (toNum(val) < 0) return;
-                                                updateVariant(vIndex, 'wholesale_price_afn', val);
-                                            }}
-                                            placeholder="8500"
-                                            className={errors[`variants.${vIndex}.wholesale_price_afn`] ? 'border-destructive' : ''}
-                                        />
-                                        {errors[`variants.${vIndex}.wholesale_price_afn`] && (
-                                            <p className="text-destructive text-xs">{errors[`variants.${vIndex}.wholesale_price_afn`]}</p>
-                                        )}
-                                    </div>
-                                    <div className="space-y-2">
-                                        <Label>Wholesale Min Qty</Label>
-                                        <Input
-                                            type="number"
-                                            min="0"
-                                            onKeyDown={preventNegative}
-                                            value={v.wholesale_min_qty}
-                                            onChange={(e) => {
-                                                const val = e.target.value;
-                                                if (toNum(val) < 0) return;
-                                                updateVariant(vIndex, 'wholesale_min_qty', val);
-                                            }}
-                                            placeholder="10"
-                                            className={errors[`variants.${vIndex}.wholesale_min_qty`] ? 'border-destructive' : ''}
-                                        />
-                                        {errors[`variants.${vIndex}.wholesale_min_qty`] && (
-                                            <p className="text-destructive text-xs">{errors[`variants.${vIndex}.wholesale_min_qty`]}</p>
-                                        )}
-                                    </div>
-                                </div>
-                                    {purchases.filter((p) => p.variant_index === vIndex).map((p) => {
-                                        const pIndex = purchases.findIndex((row) => row._key === p._key);
-                                        const investorBuy = isInvestorPurchase(p.investor_id);
-                                        return (
-                                            <div key={p._key} className="grid grid-cols-1 gap-4 border-t pt-4 md:grid-cols-2">
-                                                <div className="space-y-2">
-                                                    <Label>USD to AFN</Label>
-                                                    <Input
-                                                        type="number"
-                                                        min="0.01"
-                                                        step="0.01"
-                                                        value={p.exchange_rate}
-                                                        onChange={(e) => updatePurchase(pIndex, 'exchange_rate', e.target.value)}
-                                                        placeholder="e.g. 64"
-                                                    />
-                                                    <p className="text-muted-foreground text-xs">Dollar rate for this purchase</p>
-                                                </div>
-                                                {investorBuy && (
+                                {/* ═══════════ OWNER & INVESTOR PROFIT (TOP) ═══════════ */}
+                                <div className="bg-muted/30 rounded-lg border p-4">
+                                    <h4 className="mb-3 flex items-center gap-1 text-sm font-semibold">
+                                        <User className="h-4 w-4" /> Owner & Investor Profit
+                                    </h4>
+                                    {purchases
+                                        .filter((p) => p.variant_index === vIndex)
+                                        .map((p) => {
+                                            const pIndex = purchases.findIndex((row) => row._key === p._key);
+                                            const investorBuy = isInvestorPurchase(p.investor_id);
+                                            return (
+                                                <div key={p._key} className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                                    {/* Owner Selection */}
                                                     <div className="space-y-2">
-                                                        <Label>
-                                                            Investor profit / unit (AFN) <span className="text-destructive">*</span>
+                                                        <Label className="flex items-center gap-1">
+                                                            <User className="h-3 w-3" />
+                                                            Owner <span className="text-destructive">*</span>
+                                                        </Label>
+                                                        <Select
+                                                            value={p.investor_id || 'store'}
+                                                            onValueChange={(val) => updatePurchase(pIndex, 'investor_id', val)}
+                                                        >
+                                                            <SelectTrigger
+                                                                className={errors[`purchases.${pIndex}.investor_id`] ? 'border-destructive' : ''}
+                                                            >
+                                                                <SelectValue placeholder="Select owner" />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                <SelectItem value="store">🏪 Shop (Store-owned)</SelectItem>
+                                                                {investors.map((inv) => (
+                                                                    <SelectItem key={inv.id} value={String(inv.id)}>
+                                                                        👤 {inv.name}
+                                                                    </SelectItem>
+                                                                ))}
+                                                            </SelectContent>
+                                                        </Select>
+                                                        {errors[`purchases.${pIndex}.investor_id`] && (
+                                                            <p className="text-destructive text-xs">{errors[`purchases.${pIndex}.investor_id`]}</p>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Investor Profit */}
+                                                    <div className="space-y-2">
+                                                        <Label className="flex items-center gap-1">
+                                                            <Wallet className="h-3 w-3 text-blue-600" />
+                                                            Investor profit / unit (AFN) {investorBuy && <span className="text-destructive">*</span>}
                                                         </Label>
                                                         <Input
                                                             type="number"
@@ -1184,15 +1125,171 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                                                 const val = e.target.value;
                                                                 if (toNum(val) < 0) return;
                                                                 updatePurchase(pIndex, 'profit_per_unit', val);
-                                                                recalcPurchase(pIndex);
                                                             }}
+                                                            disabled={!investorBuy}
                                                             className={errors[`purchases.${pIndex}.profit_per_unit`] ? 'border-destructive' : ''}
                                                         />
+                                                        {investorBuy && (
+                                                            <p className="text-muted-foreground text-xs">
+                                                                Max allowed:{' '}
+                                                                {fmt(Math.max(0, toNum(v?.sale_price_afn) - toNum(v?.purchase_price_afn)))} AFN
+                                                            </p>
+                                                        )}
+
+                                                        {errors[`purchases.${pIndex}.profit_per_unit`] && (
+                                                            <p className="text-destructive text-xs">
+                                                                {errors[`purchases.${pIndex}.profit_per_unit`]}
+                                                            </p>
+                                                        )}
                                                     </div>
-                                                )}
-                                            </div>
-                                        );
-                                    })}
+
+                                                    <div className="space-y-2 md:col-span-2">
+                                                        <Label>
+                                                            USD to AFN <span className="text-destructive">*</span>
+                                                        </Label>
+                                                        <Input
+                                                            type="number"
+                                                            min="0.01"
+                                                            step="0.01"
+                                                            value={p.exchange_rate}
+                                                            onChange={(e) => updatePurchase(pIndex, 'exchange_rate', e.target.value)}
+                                                            placeholder="e.g. 64"
+                                                            className={errors[`purchases.${pIndex}.exchange_rate`] ? 'border-destructive' : ''}
+                                                        />
+                                                        <p className="text-muted-foreground text-xs">Dollar rate for this purchase</p>
+                                                        {errors[`purchases.${pIndex}.exchange_rate`] && (
+                                                            <p className="text-destructive text-xs">{errors[`purchases.${pIndex}.exchange_rate`]}</p>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                </div>
+
+                                {/* ═══════════ SIZE ═══════════ */}
+                                <div className="space-y-3 rounded-lg border p-4">
+                                    <h4 className="text-sm font-semibold">Size</h4>
+                                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                        <div className="space-y-2">
+                                            <Label>Volume (ml)</Label>
+                                            <Input
+                                                type="number"
+                                                min="0"
+                                                onKeyDown={preventNegative}
+                                                value={v.volume_ml}
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    if (toNum(val) < 0) return;
+                                                    updateVariant(vIndex, 'volume_ml', val);
+                                                }}
+                                                placeholder="100"
+                                                className={errors[`variants.${vIndex}.volume_ml`] ? 'border-destructive' : ''}
+                                            />
+                                            {errors[`variants.${vIndex}.volume_ml`] && (
+                                                <p className="text-destructive text-xs">{errors[`variants.${vIndex}.volume_ml`]}</p>
+                                            )}
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label>Concentration</Label>
+                                            <Select value={v.concentration} onValueChange={(val) => updateVariant(vIndex, 'concentration', val)}>
+                                                <SelectTrigger>
+                                                    <SelectValue placeholder="Select" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    {CONCENTRATIONS.map((c) => (
+                                                        <SelectItem key={c.value} value={c.value}>
+                                                            {c.label}
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* ═══════════ PRICES ═══════════ */}
+                                <div className="space-y-3 rounded-lg border p-4">
+                                    <h4 className="text-sm font-semibold">Prices and rates</h4>
+                                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                        <div className="space-y-2">
+                                            <Label>Purchase Price (AFN)</Label>
+                                            <Input
+                                                type="number"
+                                                min="0"
+                                                onKeyDown={preventNegative}
+                                                value={v.purchase_price_afn}
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    if (toNum(val) < 0) return;
+                                                    updateVariant(vIndex, 'purchase_price_afn', val);
+                                                }}
+                                                placeholder="6500"
+                                                className={errors[`variants.${vIndex}.purchase_price_afn`] ? 'border-destructive' : ''}
+                                            />
+                                            {errors[`variants.${vIndex}.purchase_price_afn`] && (
+                                                <p className="text-destructive text-xs">{errors[`variants.${vIndex}.purchase_price_afn`]}</p>
+                                            )}
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label>
+                                                Sale Price (AFN) <span className="text-destructive">*</span>
+                                            </Label>
+                                            <Input
+                                                type="number"
+                                                min="0"
+                                                onKeyDown={preventNegative}
+                                                value={v.sale_price_afn}
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    if (toNum(val) < 0) return;
+                                                    updateVariant(vIndex, 'sale_price_afn', val);
+                                                }}
+                                                placeholder="9750"
+                                                className={errors[`variants.${vIndex}.sale_price_afn`] ? 'border-destructive' : ''}
+                                            />
+                                            {errors[`variants.${vIndex}.sale_price_afn`] && (
+                                                <p className="text-destructive text-xs">{errors[`variants.${vIndex}.sale_price_afn`]}</p>
+                                            )}
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label>Wholesale Price (AFN)</Label>
+                                            <Input
+                                                type="number"
+                                                min="0"
+                                                onKeyDown={preventNegative}
+                                                value={v.wholesale_price_afn}
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    if (toNum(val) < 0) return;
+                                                    updateVariant(vIndex, 'wholesale_price_afn', val);
+                                                }}
+                                                placeholder="8500"
+                                                className={errors[`variants.${vIndex}.wholesale_price_afn`] ? 'border-destructive' : ''}
+                                            />
+                                            {errors[`variants.${vIndex}.wholesale_price_afn`] && (
+                                                <p className="text-destructive text-xs">{errors[`variants.${vIndex}.wholesale_price_afn`]}</p>
+                                            )}
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label>Wholesale Min Qty</Label>
+                                            <Input
+                                                type="number"
+                                                min="0"
+                                                onKeyDown={preventNegative}
+                                                value={v.wholesale_min_qty}
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    if (toNum(val) < 0) return;
+                                                    updateVariant(vIndex, 'wholesale_min_qty', val);
+                                                }}
+                                                placeholder="10"
+                                                className={errors[`variants.${vIndex}.wholesale_min_qty`] ? 'border-destructive' : ''}
+                                            />
+                                            {errors[`variants.${vIndex}.wholesale_min_qty`] && (
+                                                <p className="text-destructive text-xs">{errors[`variants.${vIndex}.wholesale_min_qty`]}</p>
+                                            )}
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         ))}
@@ -1227,6 +1324,13 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                             const variant = variants[p.variant_index];
                             const unitPrice = toNum(variant?.purchase_price_afn);
 
+                            const profits = calcProfits(
+                                toNum(variant?.purchase_price_afn),
+                                toNum(variant?.sale_price_afn),
+                                isInvestor ? toNum(p.profit_per_unit) : 0,
+                                toNum(p.quantity),
+                            );
+
                             return (
                                 <div
                                     key={p._key}
@@ -1251,30 +1355,10 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                         )}
                                     </div>
 
-                                    {/* Ownership & Quantity */}
+                                    {/* Quantity */}
                                     <div className="bg-muted/30 mb-4 rounded-lg border p-4">
-                                        <h4 className="mb-3 text-sm font-semibold">Owner and quantity</h4>
+                                        <h4 className="mb-3 text-sm font-semibold">Quantity</h4>
                                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                            <div className="space-y-2">
-                                                <Label className="flex items-center gap-1">
-                                                    <User className="h-3 w-3" />
-                                                    Investor <span className="text-destructive">*</span>
-                                                </Label>
-                                                <Select value={p.investor_id || undefined} onValueChange={(val) => updatePurchase(pIndex, 'investor_id', val)}>
-                                                    <SelectTrigger>
-                                                        <SelectValue placeholder="Select investor" />
-                                                    </SelectTrigger>
-                                                    <SelectContent>
-                                                        <SelectItem value="store">Shop</SelectItem>
-                                                        {investors.map((inv) => (
-                                                            <SelectItem key={inv.id} value={String(inv.id)}>
-                                                                {inv.name}
-                                                            </SelectItem>
-                                                        ))}
-                                                    </SelectContent>
-                                                </Select>
-                                            </div>
-
                                             <div className="space-y-2">
                                                 <Label>Quantity</Label>
                                                 <Input
@@ -1296,60 +1380,96 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                         </div>
                                     </div>
 
-                                    {/* Profit & Summary */}
+                                    {/* ✅ Profit Breakdown & Summary */}
                                     <div className="mb-4 rounded-lg border p-4">
                                         <h4 className="mb-3 flex items-center gap-1 text-sm font-semibold">
                                             <TrendingUp className="h-3 w-3" />
-                                            Totals
+                                            Totals & Profit Split
                                         </h4>
 
-                                        {isInvestor ? (
-                                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                                <div className="space-y-2">
-                                                    <Label>Line Total (auto)</Label>
-                                                    <div className="bg-muted/30 flex h-10 items-center rounded-md border border-dashed px-3 font-mono text-sm">
-                                                        {p.line_total} <span className="text-muted-foreground ml-1 text-xs">AFN</span>
-                                                    </div>
-                                                    <p className="text-muted-foreground text-xs">
-                                                        = {unitPrice.toLocaleString()} × {p.quantity} AFN
-                                                        {toNum(p.exchange_rate) > 0
-                                                            ? ` · ${((toNum(p.line_total) || unitPrice * toNum(p.quantity)) / toNum(p.exchange_rate)).toFixed(2)} USD`
-                                                            : ''}
-                                                    </p>
-                                                </div>
+                                        {/* ─── Header line: total profit per unit ─── */}
+                                        <div className="mb-3 rounded-lg border border-dashed bg-slate-50/60 p-3 dark:bg-slate-900/20">
+                                            <p className="text-xs text-slate-700 dark:text-slate-300">
+                                                <strong>Profit breakdown per unit:</strong> Sale {fmt(toNum(variant?.sale_price_afn))} − Cost{' '}
+                                                {fmt(toNum(variant?.purchase_price_afn))} = <strong>{fmt(profits.totalPerUnit)} AFN total</strong> →{' '}
+                                                {isInvestor ? (
+                                                    <>
+                                                        Investor <strong className="text-blue-700">{fmt(profits.investorPerUnit)} AFN</strong> + Store{' '}
+                                                        <strong className="text-emerald-700">{fmt(profits.storePerUnit)} AFN</strong>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        Store <strong className="text-emerald-700">100% ({fmt(profits.storePerUnit)} AFN)</strong>
+                                                    </>
+                                                )}
+                                            </p>
+                                        </div>
 
-                                                {/* ✅ Line Profit — خودکار */}
-                                                <div className="space-y-2">
-                                                    <Label>Line Profit (auto)</Label>
-                                                    <div className="flex h-10 items-center rounded-md border border-dashed bg-emerald-50 px-3 font-mono text-sm text-emerald-700">
-                                                        {p.line_profit} <span className="ml-1 text-xs">AFN</span>
-                                                    </div>
-                                                    <p className="text-muted-foreground text-xs">
-                                                        = {p.profit_per_unit} × {p.quantity}
-                                                    </p>
+                                        {/* ─── 3-column grid: Line Total | Investor Profit | Store Profit ─── */}
+                                        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                                            {/* Line Total */}
+                                            <div className="space-y-2">
+                                                <Label className="flex items-center gap-1 text-xs">
+                                                    <Receipt className="h-3 w-3" /> Line Total (auto)
+                                                </Label>
+                                                <div className="bg-muted/30 flex h-10 items-center rounded-md border border-dashed px-3 font-mono text-sm">
+                                                    {p.line_total} <span className="text-muted-foreground ml-1 text-xs">AFN</span>
                                                 </div>
+                                                <p className="text-muted-foreground text-xs">
+                                                    = {fmt(unitPrice)} × {p.quantity}
+                                                    {toNum(p.exchange_rate) > 0
+                                                        ? ` · ${((toNum(p.line_total) || unitPrice * toNum(p.quantity)) / toNum(p.exchange_rate)).toFixed(2)} USD`
+                                                        : ''}
+                                                </p>
                                             </div>
-                                        ) : (
-                                            <div className="space-y-3">
-                                                <div className="rounded-lg border border-dashed border-emerald-300 bg-emerald-50/40 p-3">
-                                                    <p className="text-xs text-emerald-900">
-                                                        <strong>Store-owned purchase:</strong> The store's profit will be automatically calculated
-                                                        from <em>sale price − purchase price</em> on the variant. No manual profit entry is needed.
+
+                                            {/* Investor Profit */}
+                                            {isInvestor ? (
+                                                <div className="space-y-2">
+                                                    <Label className="flex items-center gap-1 text-xs text-blue-700">
+                                                        <Wallet className="h-3 w-3" /> Investor Profit (auto)
+                                                    </Label>
+                                                    <div className="flex h-10 items-center rounded-md border border-dashed bg-blue-50 px-3 font-mono text-sm font-semibold text-blue-700 dark:bg-blue-950/30">
+                                                        {fmt(profits.investorLine)} <span className="ml-1 text-xs">AFN</span>
+                                                    </div>
+                                                    <p className="text-muted-foreground text-xs">
+                                                        = {fmt(profits.investorPerUnit)} × {p.quantity}
                                                     </p>
                                                 </div>
-
-                                                {/* ✅ Line Total — خودکار برای store-owned */}
-                                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                                    <div className="space-y-2">
-                                                        <Label>Line Total (auto)</Label>
-                                                        <div className="bg-muted/30 flex h-10 items-center rounded-md border border-dashed px-3 font-mono text-sm">
-                                                            {p.line_total} <span className="text-muted-foreground ml-1 text-xs">AFN</span>
-                                                        </div>
-                                                        <p className="text-muted-foreground text-xs">
-                                                            = {unitPrice.toLocaleString()} × {p.quantity}
-                                                        </p>
+                                            ) : (
+                                                <div className="space-y-2 opacity-50">
+                                                    <Label className="flex items-center gap-1 text-xs">
+                                                        <Wallet className="h-3 w-3" /> Investor Profit
+                                                    </Label>
+                                                    <div className="bg-muted/30 flex h-10 items-center rounded-md border border-dashed px-3 font-mono text-sm">
+                                                        0 <span className="text-muted-foreground ml-1 text-xs">AFN</span>
                                                     </div>
+                                                    <p className="text-muted-foreground text-xs">Not applicable — store-owned</p>
                                                 </div>
+                                            )}
+
+                                            {/* Store Profit */}
+                                            <div className="space-y-2">
+                                                <Label className="flex items-center gap-1 text-xs text-emerald-700">
+                                                    <Store className="h-3 w-3" /> Store Profit (auto)
+                                                </Label>
+                                                <div className="flex h-10 items-center rounded-md border border-dashed bg-emerald-50 px-3 font-mono text-sm font-semibold text-emerald-700 dark:bg-emerald-950/30">
+                                                    {fmt(profits.storeLine)} <span className="ml-1 text-xs">AFN</span>
+                                                </div>
+                                                <p className="text-muted-foreground text-xs">
+                                                    = {fmt(profits.storePerUnit)} × {p.quantity}
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        {/* Warning if investor profit too high */}
+                                        {isInvestor && toNum(p.profit_per_unit) > profits.totalPerUnit && (
+                                            <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-3 text-xs text-red-800">
+                                                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                                <span>
+                                                    <strong>Warning:</strong> Investor profit ({fmt(toNum(p.profit_per_unit))} AFN) exceeds total
+                                                    profit per unit ({fmt(profits.totalPerUnit)} AFN). Store profit will be <strong>0</strong>.
+                                                </span>
                                             </div>
                                         )}
                                     </div>
@@ -1357,44 +1477,44 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                     {/* Invoice & Date */}
                                     <div className="mb-4 rounded-lg border p-4">
                                         <h4 className="mb-3 text-sm font-semibold">Bill</h4>
-                                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                        <div className="space-y-2">
-                                            <Label>Invoice Number</Label>
-                                            <Input
-                                                value={p.invoice_number}
-                                                onChange={(e) => updatePurchase(pIndex, 'invoice_number', e.target.value)}
-                                                placeholder="e.g. INV-2024-001"
-                                            />
+                                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                            <div className="space-y-2">
+                                                <Label>Invoice Number</Label>
+                                                <Input
+                                                    value={p.invoice_number}
+                                                    onChange={(e) => updatePurchase(pIndex, 'invoice_number', e.target.value)}
+                                                    placeholder="e.g. INV-2024-001"
+                                                />
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label>Purchase Date</Label>
+                                                <Input
+                                                    type="date"
+                                                    value={p.purchase_date}
+                                                    onChange={(e) => updatePurchase(pIndex, 'purchase_date', e.target.value)}
+                                                />
+                                            </div>
                                         </div>
-                                        <div className="space-y-2">
-                                            <Label>Purchase Date</Label>
-                                            <Input
-                                                type="date"
-                                                value={p.purchase_date}
-                                                onChange={(e) => updatePurchase(pIndex, 'purchase_date', e.target.value)}
-                                            />
-                                        </div>
-                                    </div>
 
-                                    {/* Supplier / Payment / Exchange */}
-                                    <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-                                        <div className="space-y-2">
-                                            <Label>Supplier</Label>
-                                            <Select value={p.supplier_id} onValueChange={(val) => updatePurchase(pIndex, 'supplier_id', val)}>
-                                                <SelectTrigger>
-                                                    <SelectValue />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value="none">No Supplier</SelectItem>
-                                                    {suppliers.map((s) => (
-                                                        <SelectItem key={s.id} value={String(s.id)}>
-                                                            {s.name}
-                                                        </SelectItem>
-                                                    ))}
-                                                </SelectContent>
-                                            </Select>
+                                        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                                            <div className="space-y-2">
+                                                <Label>Supplier</Label>
+                                                <Select value={p.supplier_id} onValueChange={(val) => updatePurchase(pIndex, 'supplier_id', val)}>
+                                                    <SelectTrigger>
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="none">No Supplier</SelectItem>
+                                                        {suppliers.map((s) => (
+                                                            <SelectItem key={s.id} value={String(s.id)}>
+                                                                {s.name}
+                                                            </SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
                                         </div>
-                                    </div>
+
                                         <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
                                             <div className="space-y-2">
                                                 <Label>Bill Image</Label>

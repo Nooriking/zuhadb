@@ -40,15 +40,15 @@ class InventoryTransaction extends Model
      ========================================================= */
 
     public const TYPES = [
-        'purchase'     => 'Purchase',
-        'sale'         => 'Sale',
-        'return'       => 'Return',
-        'damage'       => 'Damage',
-        'transfer_in'  => 'Transfer In',
-        'transfer_out' => 'Transfer Out',
-        'adjustment'   => 'Adjustment',
-        'opening'      => 'Opening Stock',
-    ];
+    'purchase'     => 'Purchase',
+    'sale'         => 'Sale',
+    'return'       => 'Return',        // ← فقط 'return'، نه 'sale_return'
+    'damage'       => 'Damage',
+    'transfer_in'  => 'Transfer In',
+    'transfer_out' => 'Transfer Out',
+    'adjustment'   => 'Adjustment',
+    'opening'      => 'Opening Stock',
+];
 
     public function getTypeLabelAttribute(): string
     {

@@ -15,6 +15,11 @@ return new class extends Migration
                 ->constrained('investors')
                 ->cascadeOnDelete();
 
+            // ✅ نوع منبع سرمایه: نقدی یا جنسی
+            $table->enum('source_type', ['cash', 'goods'])
+                ->default('cash')
+                ->comment('cash = investor gave money; goods = investor gave products');
+
             $table->foreignId('parent_investment_id')
                 ->nullable()
                 ->constrained('investments')
@@ -23,25 +28,27 @@ return new class extends Migration
 
             $table->string('investment_number')->unique();
 
+            // ✅ currency_id اختیاری شد (در حالت جنسی ممکن است ارز نداشته باشیم)
             $table->foreignId('currency_id')
+                ->nullable()
                 ->constrained('currencies')
-                ->restrictOnDelete();
+                ->nullOnDelete();
 
             $table->decimal('exchange_rate', 18, 6)->default(1);
 
             // مبلغ سرمایه
-            $table->decimal('capital_amount_currency', 18, 2);
-            $table->decimal('capital_amount_afn', 18, 2);
+            $table->decimal('capital_amount_currency', 18, 2)->nullable();
+            $table->decimal('capital_amount_afn', 18, 2)->default(0);
 
             // موجودی قابل استفاده (بعد از تخصیص به خریدها کم می‌شود)
-            $table->decimal('available_amount_currency', 18, 2)->default(0);
+            $table->decimal('available_amount_currency', 18, 2)->nullable();
             $table->decimal('available_amount_afn', 18, 2)->default(0);
 
             // تخصیص یافته
             $table->decimal('allocated_amount_afn', 18, 2)->default(0);
 
             // سود
-            $table->decimal('profit_amount_currency', 18, 2)->default(0);
+            $table->decimal('profit_amount_currency', 18, 2)->nullable();
             $table->decimal('profit_amount_afn', 18, 2)->default(0);
 
             // برداشت‌ها
@@ -74,7 +81,9 @@ return new class extends Migration
             $table->timestamps();
             $table->softDeletes();
 
+            // ✅ Indexes
             $table->index('investor_id');
+            $table->index('source_type');        // ← جدید
             $table->index('parent_investment_id');
             $table->index('currency_id');
             $table->index('status');

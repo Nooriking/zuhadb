@@ -12,6 +12,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -26,6 +27,7 @@ class InvestmentController extends Controller
         $search     = $request->query('search');
         $investorId = $request->query('investor_id');
         $status     = $request->query('status');
+        $sourceType = $request->query('source_type');
 
         $investments = Investment::query()
             ->with([
@@ -35,13 +37,16 @@ class InvestmentController extends Controller
             ->withCount(['purchaseAllocations', 'productAllocations'])
             ->notTrashed()
             ->when($search, function ($query, $search) {
-                $query->where('investment_number', 'like', "%{$search}%")
-                    ->orWhereHas('investor', function ($q) use ($search) {
-                        $q->where('full_name', 'like', "%{$search}%");
-                    });
+                $query->where(function ($q) use ($search) {
+                    $q->where('investment_number', 'like', "%{$search}%")
+                      ->orWhereHas('investor', function ($sub) use ($search) {
+                          $sub->where('full_name', 'like', "%{$search}%");
+                      });
+                });
             })
             ->when($investorId, fn ($q, $v) => $q->where('investor_id', $v))
             ->when($status, fn ($q, $v) => $q->where('status', $v))
+            ->when($sourceType, fn ($q, $v) => $q->where('source_type', $v))
             ->orderByDesc('investment_date')
             ->orderByDesc('id')
             ->paginate(15)
@@ -50,21 +55,29 @@ class InvestmentController extends Controller
         $stats = [
             'total_investments'   => Investment::notTrashed()->count(),
             'active_investments'  => Investment::notTrashed()->whereIn('status', ['active', 'partially_used'])->count(),
-            'total_capital_afn'   => Investment::notTrashed()->sum('capital_amount_afn'),
-            'total_available_afn' => Investment::notTrashed()->sum('available_amount_afn'),
-            'total_allocated_afn' => Investment::notTrashed()->sum('allocated_amount_afn'),
-            'total_profit_afn'    => Investment::notTrashed()->sum('profit_amount_afn'),
+            'total_capital_afn'   => (float) Investment::notTrashed()->sum('capital_amount_afn'),
+            'total_available_afn' => (float) Investment::notTrashed()->sum('available_amount_afn'),
+            'total_allocated_afn' => (float) Investment::notTrashed()->sum('allocated_amount_afn'),
+            'total_profit_afn'    => (float) Investment::notTrashed()->sum('profit_amount_afn'),
+
+            'cash_investments'    => Investment::notTrashed()->where('source_type', 'cash')->count(),
+            'goods_investments'   => Investment::notTrashed()->where('source_type', 'goods')->count(),
         ];
 
         return Inertia::render('investments/index', [
             'investments' => $investments,
-            'investors'   => Investor::notTrashed()->select('id', 'full_name', 'phone')->orderBy('full_name')->get(),
+            'investors'   => Investor::notTrashed()
+                ->select('id', 'full_name', 'phone')
+                ->orderBy('full_name')
+                ->get(),
             'filters'     => [
                 'search'      => $search,
                 'investor_id' => $investorId,
                 'status'      => $status,
+                'source_type' => $sourceType,
             ],
             'stats' => $stats,
+            'sourceTypes' => Investment::SOURCE_TYPES,
         ]);
     }
 
@@ -82,66 +95,101 @@ class InvestmentController extends Controller
                 ->orderBy('name')
                 ->get(),
             'nextNumber' => Investment::generateInvestmentNumber(),
+            'sourceTypes' => Investment::SOURCE_TYPES,
         ]);
     }
 
     /* =========================================================
-     |  STORE
+     |  STORE — ✅ پشتیبانی از نقدی و جنسی + جلوگیری از تداخل
+     ========================================================= */
+
+      /* =========================================================
+     |  STORE — ✅ پشتیبانی از نقدی و جنسی + جلوگیری از تداخل
      ========================================================= */
 
     public function store(StoreInvestmentRequest $request): RedirectResponse
     {
         $investment = DB::transaction(function () use ($request) {
             $data = $request->validated();
-            $user = User::query()->where('role', User::ROLE_INVESTOR)->findOrFail($data['user_id']);
-            $investor = Investor::query()->firstOrCreate(
-                ['user_id' => $user->id],
+
+            $user = User::query()
+                ->where('role', User::ROLE_INVESTOR)
+                ->findOrFail($data['user_id']);
+
+            // ✅ استفاده از متد امن — investor فعال را برمی‌گرداند،
+            //    یا اگر در trash بود restore می‌کند، یا جدید می‌سازد.
+            $investor = Investor::findOrCreateForUser(
+                (int) $user->id,
                 [
                     'full_name' => $user->name,
-                    'email' => $user->email,
-                    'phone' => $user->phone,
-                    'status' => 'active',
-                    'trash' => false,
-                    'created_by' => Auth::id(),
+                    'phone'     => $user->phone,
+                    'email'     => $user->email,
                 ]
             );
 
+            // مطمئن شو wallet دارد
+            $investor->getOrCreateWallet();
+
             $capitalAfn = (float) ($data['capital_amount_afn'] ?? 0);
+            $sourceType = $data['source_type'] ?? 'cash';
+
+            // ✅ بررسی ناسازگاری: اگر investor قبلاً investment goods دارد،
+            //    نباید investment نقدی جدید برایش ساخته شود و برعکس.
+            $existingSourceTypes = Investment::notTrashed()
+                ->where('investor_id', $investor->id)
+                ->pluck('source_type')
+                ->unique();
+
+            if ($existingSourceTypes->isNotEmpty() && ! $existingSourceTypes->contains($sourceType)) {
+                throw ValidationException::withMessages([
+                    'source_type' => "This investor already has {$existingSourceTypes->first()} investments. Cannot mix cash and goods.",
+                ]);
+            }
+
             $data['investor_id'] = $investor->id;
             unset($data['user_id']);
 
+            // ✅ در حالت جنسی، available = 0 (چون پول نقد نیست)
+            $availableAmount = $sourceType === 'cash' ? $capitalAfn : 0;
+
             $data['investment_number']    = Investment::generateInvestmentNumber();
-            $data['available_amount_afn'] = $capitalAfn;
+            $data['source_type']          = $sourceType;
+            $data['available_amount_afn'] = $availableAmount;
             $data['allocated_amount_afn'] = 0;
             $data['profit_amount_afn']    = 0;
             $data['withdrawn_amount_afn'] = 0;
             $data['status']               = 'active';
             $data['created_by']           = Auth::id();
-            $data['user_id']              = Auth::id();
 
             $investment = Investment::create($data);
 
             if ($capitalAfn > 0) {
                 InvestorTransaction::record(
                     $investment->investor_id,
-                    'capital_deposit',
+                    $sourceType === 'cash' ? 'capital_deposit' : 'goods_deposit',
                     $capitalAfn,
                     'capital',
                     [
-                        'investment_id' => $investment->id,
-                        'description' => 'Capital deposit '.$investment->investment_number,
+                        'investment_id'    => $investment->id,
+                        'description'      => ($sourceType === 'cash' ? 'Capital' : 'Goods') . ' deposit ' . $investment->investment_number,
                         'transaction_date' => $investment->investment_date?->toDateString(),
                     ]
                 );
 
                 $wallet = $investment->investor->getOrCreateWallet();
-                $wallet->update([
-                    'capital_balance_afn' => (float) $wallet->capital_balance_afn + $capitalAfn,
-                    'total_invested_afn'  => (float) $wallet->total_invested_afn + $capitalAfn,
-                    'last_transaction_at' => now(),
-                ]);
-            } else {
-                $investment->investor->getOrCreateWallet();
+
+                if ($sourceType === 'cash') {
+                    $wallet->update([
+                        'capital_balance_afn' => (float) $wallet->capital_balance_afn + $capitalAfn,
+                        'total_invested_afn'  => (float) $wallet->total_invested_afn + $capitalAfn,
+                        'last_transaction_at' => now(),
+                    ]);
+                } else {
+                    $wallet->update([
+                        'total_invested_afn'  => (float) $wallet->total_invested_afn + $capitalAfn,
+                        'last_transaction_at' => now(),
+                    ]);
+                }
             }
 
             return $investment;
@@ -177,9 +225,14 @@ class InvestmentController extends Controller
         $stats = [
             'total_purchases'    => $investment->purchaseAllocations()->count(),
             'total_batches'      => $investment->productAllocations()->count(),
-            'total_profit'       => $investment->profit_amount_afn,
-            'profit_paid'        => $investment->profitEntries()->where('status', 'paid')->sum('profit_amount_afn'),
-            'profit_pending'     => $investment->profitEntries()->where('status', 'pending')->sum('profit_amount_afn'),
+            'total_profit'       => (float) $investment->profit_amount_afn,
+            'profit_paid'        => (float) $investment->profitEntries()->where('status', 'paid')->sum('profit_amount_afn'),
+            'profit_pending'     => (float) $investment->profitEntries()->where('status', 'pending')->sum('profit_amount_afn'),
+
+            'source_type'         => $investment->source_type,
+            'source_type_label'   => $investment->source_type_label,
+            'is_cash'             => $investment->isCashInvestment(),
+            'is_goods'            => $investment->isGoodsInvestment(),
         ];
 
         return Inertia::render('investments/show', [
@@ -200,6 +253,7 @@ class InvestmentController extends Controller
 
         return Inertia::render('investments/edit', [
             'investment' => $investment->load('investor:id,full_name'),
+            'sourceTypes' => Investment::SOURCE_TYPES,
         ]);
     }
 
@@ -210,7 +264,17 @@ class InvestmentController extends Controller
     public function update(UpdateInvestmentRequest $request, Investment $investment): RedirectResponse
     {
         $data = $request->validated();
-        $data['user_id'] = Auth::id();
+
+        // ✅ محافظت: نمی‌توان source_type را تغییر داد اگر allocation دارد
+        if (
+            isset($data['source_type']) &&
+            $data['source_type'] !== $investment->source_type &&
+            $investment->purchaseAllocations()->exists()
+        ) {
+            return back()->with('error', 'Cannot change investment source type after allocations exist.');
+        }
+
+        $data['created_by'] = Auth::id();   // ✅ نام واضح‌تر
 
         $investment->update($data);
 
@@ -225,7 +289,6 @@ class InvestmentController extends Controller
 
     public function destroy(Investment $investment): RedirectResponse
     {
-        // نمی‌توان Investment با تخصیص را حذف کرد
         if ($investment->purchaseAllocations()->exists()) {
             return back()->with('error', 'Cannot delete investment with purchase allocations. Close it instead.');
         }
@@ -233,8 +296,8 @@ class InvestmentController extends Controller
         $number = $investment->investment_number;
 
         $investment->update([
-            'trash'   => true,
-            'user_id' => Auth::id(),
+            'trash'      => true,
+            'created_by' => Auth::id(),
         ]);
 
         return redirect()
@@ -251,8 +314,8 @@ class InvestmentController extends Controller
         $investment = Investment::onlyTrashed()->findOrFail($id);
 
         $investment->update([
-            'trash'   => false,
-            'user_id' => Auth::id(),
+            'trash'      => false,
+            'created_by' => Auth::id(),
         ]);
 
         return redirect()
@@ -298,10 +361,19 @@ class InvestmentController extends Controller
 
     /* =========================================================
      |  WITHDRAW — برداشت از سرمایه
+     |  ✅ فقط برای investment نقدی مجاز است
      ========================================================= */
 
     public function withdraw(Request $request, Investment $investment): RedirectResponse
     {
+        if ($investment->isGoodsInvestment()) {
+            return back()->with('error', 'Goods investments cannot be withdrawn in cash. Sell the products first.');
+        }
+
+        if ($investment->trash) {
+            return back()->with('error', 'Cannot withdraw from a trashed investment.');
+        }
+
         $validated = $request->validate([
             'amount_afn' => ['required', 'numeric', 'min:0.01', 'max:' . $investment->available_amount_afn],
             'notes'      => ['nullable', 'string', 'max:500'],
@@ -311,12 +383,11 @@ class InvestmentController extends Controller
             $amount = (float) $validated['amount_afn'];
 
             $investment->update([
-                'available_amount_afn'  => (float) $investment->available_amount_afn - $amount,
-                'withdrawn_amount_afn'  => (float) $investment->withdrawn_amount_afn + $amount,
-                'user_id'               => Auth::id(),
+                'available_amount_afn' => (float) $investment->available_amount_afn - $amount,
+                'withdrawn_amount_afn' => (float) $investment->withdrawn_amount_afn + $amount,
+                'created_by'           => Auth::id(),
             ]);
 
-            // به‌روزرسانی wallet
             $wallet = $investment->investor->getOrCreateWallet();
             $wallet->update([
                 'capital_balance_afn' => (float) $wallet->capital_balance_afn - $amount,
@@ -324,6 +395,7 @@ class InvestmentController extends Controller
                 'last_transaction_at' => now(),
             ]);
 
+            $investment->refresh();
             $investment->refreshStatus();
         });
 
@@ -340,12 +412,10 @@ class InvestmentController extends Controller
             return back()->with('error', 'Already closed.');
         }
 
-        // بررسی: آیا هنوز موجودی قابل برداشت دارد؟
-        if ((float) $investment->available_amount_afn > 0.01) {
+        if ($investment->isCashInvestment() && (float) $investment->available_amount_afn > 0.01) {
             return back()->with('error', 'Cannot close investment with available capital. Withdraw first.');
         }
 
-        // بررسی: آیا هنوز محصولات فروخته‌نشده دارد؟
         $hasRemaining = $investment->productAllocations()
             ->where('remaining_quantity', '>', 0)
             ->exists();
@@ -355,8 +425,8 @@ class InvestmentController extends Controller
         }
 
         $investment->update([
-            'status'  => 'closed',
-            'user_id' => Auth::id(),
+            'status'     => 'closed',
+            'created_by' => Auth::id(),
         ]);
 
         return back()->with('success', 'Investment closed successfully.');

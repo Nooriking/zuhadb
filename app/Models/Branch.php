@@ -71,6 +71,14 @@ class Branch extends Model
     public function isTrashed(): bool  { return (bool) $this->trash; }
 
     /**
+     * ⭐ آیا این شعبه مدیر دارد؟
+     */
+    public function hasManager(): bool
+    {
+        return $this->manager_user_id !== null;
+    }
+
+    /**
      * ⭐ فقط Super Admin و Admin می‌توانند شعبه را ویرایش کنند.
      */
     public function canBeEditedBy(User $authUser): bool
@@ -94,5 +102,42 @@ class Branch extends Model
     public function canBeDeletedBy(User $authUser): bool
     {
         return false;
+    }
+
+    /* =========================================================
+     |  ⭐ Manager Assignment (Two-way Link)
+     |  منطق:
+     |  - اگر manager قبلی داشت و در حال تغییر است → آزادش کن
+     |  - manager جدید را ست کن
+     |  - user جدید را هم به این شعبه وصل کن (branch_id)
+     |  - ⛔ فقط branch_manager های معتبر پذیرفته می‌شوند
+     ========================================================= */
+
+    public function assignManager(?User $user): void
+    {
+        // ⛔ اعتبارسنجی: اگر user داده شده ولی branch_manager نیست → رد کن
+        if ($user && ! $user->isBranchManager()) {
+            throw new \InvalidArgumentException(
+                "User [{$user->id}] must have role 'branch_manager' to be assigned as a manager."
+            );
+        }
+
+        $oldManagerId = $this->manager_user_id;
+
+        // اگر manager قبلی داشت و در حال تغییر است، آزادش کن
+        if ($oldManagerId && $oldManagerId !== $user?->id) {
+            User::where('id', $oldManagerId)
+                ->where('branch_id', $this->id)  // ⛔ فقط اگر به همین شعبه وصل بود
+                ->update(['branch_id' => null]);
+        }
+
+        // manager جدید را ست کن
+        $this->manager_user_id = $user?->id;
+        $this->save();
+
+        // اگر user جدید داده شد، به این شعبه وصلش کن
+        if ($user) {
+            $user->update(['branch_id' => $this->id]);
+        }
     }
 }

@@ -26,11 +26,17 @@ class StoreInvestorRequest extends FormRequest
                 Rule::exists('users', 'id')->where(fn ($q) => $q->where('role', User::ROLE_INVESTOR)),
             ],
             'full_name' => SafeData::title(true),
-            'phone' => SafeData::phone(),
-            'email' => SafeData::email(),
-            'address' => SafeData::plainText(500),
-            'notes' => SafeData::plainText(SafeData::NOTES_MAX),
-            'status' => ['required', Rule::in(['active', 'inactive'])],
+            'phone'     => SafeData::phone(),
+            'email'     => SafeData::email(),
+            'address'   => SafeData::plainText(500),
+            'notes'     => SafeData::plainText(SafeData::NOTES_MAX),
+            'status'    => ['required', Rule::in(['active', 'inactive'])],
+
+            // ✅ سرمایه اولیه — اختیاری (اگر جنسی است خالی بگذارید)
+            'capital_amount' => ['nullable', 'numeric', 'min:0', 'max:999999999999'],
+
+            // ✅ نرخ ارز — اختیاری (فقط برای نقدی معنی دارد)
+            'exchange_rate'  => ['nullable', 'numeric', 'min:0', 'max:999999'],
         ];
     }
 
@@ -38,8 +44,10 @@ class StoreInvestorRequest extends FormRequest
     {
         return [
             'full_name.required' => 'Investor name is required.',
-            'user_id.exists' => 'Linked user must be an investor account.',
-            'status.in' => 'Status must be either active or inactive.',
+            'user_id.exists'     => 'Linked user must be an investor account.',
+            'status.in'          => 'Status must be either active or inactive.',
+            'capital_amount.min' => 'Capital amount cannot be negative.',
+            'exchange_rate.min'  => 'Exchange rate cannot be negative.',
         ];
     }
 }

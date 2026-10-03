@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\StoreProductRequest;
 use App\Http\Requests\UpdateProductRequest;
+use App\Models\Branch;
 use App\Models\Brand;
 use App\Models\Expense;
 use App\Models\Inventory;
@@ -22,6 +23,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -32,11 +34,28 @@ class ProductController extends Controller
     ) {}
 
     /**
-     * Branch ID از کاربر
+     * Branch ID از کاربر — با چک وجود شعبه و fallback امن
      */
     private function getBranchId(): int
     {
-        return (int) (auth()->user()?->branch_id ?? 1);
+        $branchId = (int) (auth()->user()?->branch_id ?? 0);
+
+        if ($branchId > 0 && Branch::where('id', $branchId)->exists()) {
+            return $branchId;
+        }
+
+        $fallback = Branch::query()
+            ->where('trash', false)
+            ->orderBy('id')
+            ->value('id');
+
+        if (! $fallback) {
+            throw ValidationException::withMessages([
+                'branch_id' => 'هیچ شعبه‌ای در سیستم وجود ندارد. لطفاً ابتدا یک شعبه ایجاد کنید.',
+            ]);
+        }
+
+        return (int) $fallback;
     }
 
     /* =========================================================
@@ -219,14 +238,14 @@ class ProductController extends Controller
         ]);
     }
 
-    public function lookupReceiveBarcode(Request $request): \Illuminate\Http\JsonResponse
+    public function lookupReceiveBarcode(Request $request): JsonResponse
     {
         $barcode = trim((string) $request->query('barcode', ''));
         if ($barcode === '') {
             return response()->json(['found' => false, 'message' => 'Enter a barcode.']);
         }
 
-        $row = \App\Models\ProductBarcode::query()
+        $row = ProductBarcode::query()
             ->with(['variant.product.brand:id,name', 'variant.barcodes:id,variant_id,barcode'])
             ->where('barcode', $barcode)
             ->first();
@@ -261,13 +280,15 @@ class ProductController extends Controller
             $data['profit_per_unit'] = 0;
         }
 
+        $this->getBranchId();
+
         $this->purchases->receiveStock($data, $request->user(), $this->getBranchId());
 
         return redirect()->route('products.index')->with('success', 'New stock was added.');
     }
 
     /* =========================================================
-     |  STORE
+     |  STORE — ✅ با محاسبه سود دوکان
      ========================================================= */
 
     public function store(StoreProductRequest $request): RedirectResponse
@@ -305,6 +326,7 @@ class ProductController extends Controller
                 $variant = ProductVariant::create($variantData);
                 $variantIds[$index] = $variant->id;
 
+                // ✅ اضافه شد: sale_price_afn در map
                 $variantDataMap[$index] = [
                     'purchase_price_afn'  => (float) $variant->purchase_price_afn,
                     'wholesale_price_afn' => (float) $variant->wholesale_price_afn,
@@ -338,6 +360,7 @@ class ProductController extends Controller
                 $investorId = $purchaseData['investor_id'] ?? null;
                 if (empty($investorId) || $investorId === 'store' || $investorId === 'none') {
                     $investorId = null;
+                    $profitUnit = 0;  // ✅ store-owned → investor profit = 0
                 }
 
                 $supplierId = $purchaseData['supplier_id'] ?? null;
@@ -349,13 +372,17 @@ class ProductController extends Controller
                     'purchase_price_afn'  => 0,
                     'wholesale_price_afn' => 0,
                     'wholesale_min_qty'   => 0,
+                    'sale_price_afn'      => 0,
                 ];
 
-                $purchasePriceAfn = $variantInfo['purchase_price_afn'] * $qty;
+                $purchasePricePerUnit = (float) $variantInfo['purchase_price_afn'];
+                $salePricePerUnit     = (float) ($variantInfo['sale_price_afn'] ?? 0);
+                $purchasePriceAfn     = $purchasePricePerUnit * $qty;
 
-                $lineTotal  = $purchasePriceAfn;
-                $lineProfit = $profitUnit * $qty;
-                $profitUsd  = $this->profitAfnToUsd($profitUnit, $exchangeRate, $investorId);
+                /* ✅ محاسبه سودها */
+                $lineProfit      = $profitUnit * $qty;  // سود investor
+                $storeProfitUnit = max(0, $salePricePerUnit - $purchasePricePerUnit - $profitUnit);
+                $lineStoreProfit = $storeProfitUnit * $qty;
 
                 /* ═══ Purchase Row در products ═══ */
                 $purchaseRow = Product::create([
@@ -381,9 +408,14 @@ class ProductController extends Controller
                     'wholesale_price_afn' => $variantInfo['wholesale_price_afn'],
                     'wholesale_min_qty'   => $variantInfo['wholesale_min_qty'],
 
+                    // ✅ Investor profit
                     'profit_per_unit' => $profitUnit,
-                    'line_total'      => $lineTotal,
+                    'line_total'      => $purchasePriceAfn,
                     'line_profit'     => $lineProfit,
+
+                    // ✅ Store profit (جدید)
+                    'store_profit_per_unit' => $storeProfitUnit,
+                    'line_store_profit'     => $lineStoreProfit,
 
                     'bill_image'     => $billImage,
                     'notes'          => $purchaseData['notes'] ?? null,
@@ -391,17 +423,19 @@ class ProductController extends Controller
                 ]);
                 $this->applyPaidNow($purchaseRow, (float) ($purchaseData['paid_now'] ?? 0));
 
-                /* ═══ ⭐ ساخت ProductBatch برای FIFO ═══ */
+                /* ═══ ساخت ProductBatch با فیلدهای جدید ═══ */
                 $this->createProductBatch(
-                    branchId:      $branchId,
-                    variantId:     $variantId,
-                    purchaseRowId: $purchaseRow->id,
-                    investorId:    $investorId,
-                    qty:           (int) $qty,
-                    unitCostAfn:   $variantInfo['purchase_price_afn'],
-                    exchangeRate:  $exchangeRate > 0 ? $exchangeRate : 1,
-                    profitPerUnit: $profitUsd,
-                    receivedDate:  $purchaseData['purchase_date'] ?? now()->toDateString(),
+                    branchId:           $branchId,
+                    variantId:          $variantId,
+                    purchaseRowId:      $purchaseRow->id,
+                    investorId:         $investorId,
+                    qty:                (int) $qty,
+                    unitCostAfn:        $purchasePricePerUnit,
+                    salePriceAfn:       $salePricePerUnit,        // ✅ جدید
+                    exchangeRate:       $exchangeRate > 0 ? $exchangeRate : 1,
+                    profitPerUnit:      $profitUnit,              // سود investor per unit
+                    storeProfitPerUnit: $storeProfitUnit,         // ✅ جدید
+                    receivedDate:       $purchaseData['purchase_date'] ?? now()->toDateString(),
                 );
 
                 $this->rememberDailyRate(
@@ -409,7 +443,6 @@ class ProductController extends Controller
                     $exchangeRate
                 );
 
-                /* ═══ Inventory ═══ */
                 Inventory::increase(
                     branchId: $branchId,
                     variantId: $variantId,
@@ -419,11 +452,10 @@ class ProductController extends Controller
                     referenceType: Product::class,
                     referenceId: $purchaseRow->id,
                     notes: "New purchase — {$product->name}",
-                    unitCostAfn: $variantInfo['purchase_price_afn']
+                    unitCostAfn: $purchasePricePerUnit
                 );
             }
 
-            /* ═══ 4) Refresh cached stock ═══ */
             $this->refreshVariantStock($product);
 
             return $product;
@@ -591,10 +623,12 @@ class ProductController extends Controller
                             reason: 'Product update'
                         );
 
+                        // ✅ sale_price_afn اضافه شد
                         $variantDataMap[$index] = [
                             'purchase_price_afn'  => (float) $variant->purchase_price_afn,
                             'wholesale_price_afn' => (float) $variant->wholesale_price_afn,
                             'wholesale_min_qty'   => (int) $variant->wholesale_min_qty,
+                            'sale_price_afn'      => (float) $variant->sale_price_afn,
                         ];
                     }
                 } else {
@@ -610,6 +644,7 @@ class ProductController extends Controller
                         'purchase_price_afn'  => (float) $variant->purchase_price_afn,
                         'wholesale_price_afn' => (float) $variant->wholesale_price_afn,
                         'wholesale_min_qty'   => (int) $variant->wholesale_min_qty,
+                        'sale_price_afn'      => (float) $variant->sale_price_afn,
                     ];
                 }
             }
@@ -646,7 +681,6 @@ class ProductController extends Controller
 
             $variantIds = $product->variants()->pluck('id')->all();
             if (! empty($variantIds)) {
-                // ⭐ purchase rows
                 $purchaseIds = Product::whereIn('variant_id', $variantIds)
                     ->whereNotNull('variant_id')
                     ->pluck('id')
@@ -655,7 +689,6 @@ class ProductController extends Controller
                 Product::whereIn('id', $purchaseIds)
                     ->update(['trash' => true, 'user_id' => Auth::id()]);
 
-                // ⭐ batches
                 ProductBatch::whereIn('purchase_item_id', $purchaseIds)
                     ->update(['trash' => true, 'user_id' => Auth::id()]);
 
@@ -717,7 +750,6 @@ class ProductController extends Controller
 
             $purchaseIds = $purchaseRows->pluck('id')->all();
 
-            // ⭐ حذف bill images
             foreach ($purchaseRows as $row) {
                 if ($row->bill_image && Storage::disk('public')->exists($row->bill_image)) {
                     Storage::disk('public')->delete($row->bill_image);
@@ -728,13 +760,11 @@ class ProductController extends Controller
 
             ProductPriceHistory::whereIn('variant_id', $variantIds)->forceDelete();
 
-            // ⭐ force-delete product_batches
             ProductBatch::whereIn('purchase_item_id', $purchaseIds)->forceDelete();
             ProductBatch::whereIn('variant_id', $variantIds)->forceDelete();
 
             ProductBarcode::whereIn('variant_id', $variantIds)->forceDelete();
 
-            // ⭐ force-delete purchase rows
             Product::whereIn('id', $purchaseIds)->forceDelete();
 
             ProductVariant::where('product_id', $product->id)->forceDelete();
@@ -746,22 +776,22 @@ class ProductController extends Controller
             ->with('success', 'Product was permanently deleted.');
     }
 
-    public function trash(): Response
-    {
-        $products = Product::trashed()
-            ->whereNull('variant_id')
-            ->with([
-                'brand:id,name',
-                'creator:id,name',
-                'variants' => fn ($q) => $q->notTrashed(),
-            ])
-            ->orderByDesc('updated_at')
-            ->paginate(15);
+   public function trash(): Response
+{
+    $products = Product::onlyTrash()          // ✅ اصلاح شد (قبلاً trashed بود)
+        ->whereNull('variant_id')
+        ->with([
+            'brand:id,name',
+            'creator:id,name',
+            'variants' => fn ($q) => $q->notTrashed(),
+        ])
+        ->orderByDesc('updated_at')
+        ->paginate(15);
 
-        return Inertia::render('products/trash', [
-            'products' => $products,
-        ]);
-    }
+    return Inertia::render('products/trash', [
+        'products' => $products,
+    ]);
+}
 
     public function toggleStatus(Product $product): RedirectResponse
     {
@@ -832,11 +862,7 @@ class ProductController extends Controller
     }
 
     /**
-     * ⭐⭐⭐ ساخت ProductBatch از یک purchase row
-     *
-     * این متد هستهٔ اصلی حل مشکل است:
-     * هر purchase row یک ProductBatch متناظر می‌سازد تا SaleController
-     * بتواند FIFO انجام دهد و سود سرمایه‌گذار را ثبت کند.
+     * ⭐ ساخت ProductBatch از یک purchase row — ✅ نسخه با سود دوکان
      */
     private function createProductBatch(
         int $branchId,
@@ -845,73 +871,105 @@ class ProductController extends Controller
         ?int $investorId,
         int $qty,
         float $unitCostAfn,
+        float $salePriceAfn,           // ✅ جدید
         float $exchangeRate,
-        float $profitPerUnit,
+        float $profitPerUnit,          // سود investor per unit (AFN)
+        float $storeProfitPerUnit,     // ✅ جدید — سود دوکان per unit
         string $receivedDate
     ): ProductBatch {
         unset($exchangeRate);
 
+        if (! Branch::where('id', $branchId)->exists()) {
+            throw ValidationException::withMessages([
+                'branch_id' => "Branch with ID {$branchId} does not exist.",
+            ]);
+        }
+
         $totalCostAfn = $unitCostAfn * $qty;
 
         return ProductBatch::create([
-            'branch_id'            => $branchId,
-            'variant_id'           => $variantId,
-            'purchase_item_id'     => $purchaseRowId,
-            'investor_id'          => $investorId,
-            'batch_code'           => ProductBatch::generateBatchCode(),
+            'branch_id'                  => $branchId,
+            'variant_id'                 => $variantId,
+            'purchase_item_id'           => $purchaseRowId,
+            'investor_id'                => $investorId,
+            'batch_code'                 => ProductBatch::generateBatchCode(),
 
-            'quantity'             => $qty,
-            'remaining_quantity'   => $qty,
+            'quantity'                   => $qty,
+            'remaining_quantity'         => $qty,
 
-            'unit_cost_afn'        => $unitCostAfn,
-            'total_cost_afn'       => $totalCostAfn,
+            'unit_cost_afn'              => $unitCostAfn,
+            'sale_price_afn'             => $salePriceAfn,           // ✅ جدید
+            'total_cost_afn'             => $totalCostAfn,
 
-            'profit_per_unit_afn'  => $profitPerUnit,
+            'profit_per_unit_afn'        => $profitPerUnit,          // سود investor per unit
+            'store_profit_per_unit_afn'  => $storeProfitPerUnit,     // ✅ جدید
 
-            'received_date'        => $receivedDate,
-            'status'               => 'active',
-            'user_id'              => Auth::id(),
-            'trash'                => false,
+            'received_date'              => $receivedDate,
+            'status'                     => 'active',
+            'user_id'                    => Auth::id(),
+            'trash'                      => false,
         ]);
     }
 
     /**
-     * ⭐⭐⭐ آپدیت ProductBatch وقتی purchase تغییر کرد
+     * ⭐ آپدیت ProductBatch وقتی purchase تغییر کرد — ✅ نسخه با سود دوکان
      */
     private function updateProductBatchForPurchase(
         int $purchaseRowId,
+        int $variantId,
+        int $branchId,
         int $newQty,
         int $oldQty,
         float $unitCostAfn,
+        float $salePriceAfn,           // ✅ جدید
         float $exchangeRate,
         float $profitPerUnit,
-        ?int $investorId
+        float $storeProfitPerUnit,     // ✅ جدید
+        ?int $investorId,
+        string $receivedDate
     ): void {
         $batch = ProductBatch::where('purchase_item_id', $purchaseRowId)->first();
-        if (! $batch) return;
 
-        $diff = $newQty - $oldQty;
+        if (! $batch) {
+            if ($newQty > 0) {
+                $this->createProductBatch(
+                    branchId:           $branchId,
+                    variantId:          $variantId,
+                    purchaseRowId:      $purchaseRowId,
+                    investorId:         $investorId,
+                    qty:                $newQty,
+                    unitCostAfn:        $unitCostAfn,
+                    salePriceAfn:       $salePriceAfn,
+                    exchangeRate:       $exchangeRate,
+                    profitPerUnit:      $profitPerUnit,
+                    storeProfitPerUnit: $storeProfitPerUnit,
+                    receivedDate:       $receivedDate,
+                );
+            }
+            return;
+        }
 
-        // اگر تعداد زیاد شد → remaining را هم زیاد کن
-        // اگر کم شد → remaining را کم کن (اما کمتر از 0 نشود)
+        $diff         = $newQty - $oldQty;
         $newRemaining = max(0, $batch->remaining_quantity + $diff);
 
         unset($exchangeRate);
 
         $batch->update([
-            'quantity'            => $newQty,
-            'remaining_quantity'  => $newRemaining,
-            'investor_id'         => $investorId,
-            'unit_cost_afn'       => $unitCostAfn,
-            'total_cost_afn'      => $unitCostAfn * $newQty,
-            'profit_per_unit_afn' => $profitPerUnit,
-            'status'                   => $newRemaining > 0 ? 'active' : 'depleted',
-            'user_id'                  => Auth::id(),
+            'quantity'                   => $newQty,
+            'remaining_quantity'         => $newRemaining,
+            'investor_id'                => $investorId,
+            'unit_cost_afn'              => $unitCostAfn,
+            'sale_price_afn'             => $salePriceAfn,           // ✅ جدید
+            'total_cost_afn'             => $unitCostAfn * $newQty,
+            'profit_per_unit_afn'        => $profitPerUnit,
+            'store_profit_per_unit_afn'  => $storeProfitPerUnit,     // ✅ جدید
+            'status'                     => $newRemaining > 0 ? 'active' : 'depleted',
+            'user_id'                    => Auth::id(),
         ]);
     }
 
     /**
-     * ⭐ ثبت تغییر قیمت
+     * ⭐ ثبت ضرر ناشی از افت قیمت خرید
      */
     private function recordPriceDropLoss(ProductVariant $variant, float $oldPurchase, float $newPurchase): void
     {
@@ -937,17 +995,17 @@ class ProductController extends Controller
         $name = $variant->product?->name ?? 'Product';
 
         Expense::create([
-            'branch_id' => $this->getBranchId(),
+            'branch_id'      => $this->getBranchId(),
             'expense_number' => Expense::generateExpenseNumber(),
-            'title' => 'Price drop loss',
-            'category' => 'other',
-            'amount_afn' => $loss,
-            'expense_date' => now()->toDateString(),
+            'title'          => 'Price drop loss',
+            'category'       => 'other',
+            'amount_afn'     => $loss,
+            'expense_date'   => now()->toDateString(),
             'payment_method' => 'other',
-            'description' => "{$name}: purchase price fell from {$oldPurchase} to {$newPurchase} AFN on {$qty} pieces still in stock.",
-            'created_by' => Auth::id(),
-            'user_id' => Auth::id(),
-            'trash' => false,
+            'description'    => "{$name}: purchase price fell from {$oldPurchase} to {$newPurchase} AFN on {$qty} pieces still in stock.",
+            'created_by'     => Auth::id(),
+            'user_id'        => Auth::id(),
+            'trash'          => false,
         ]);
     }
 
@@ -964,12 +1022,12 @@ class ProductController extends Controller
         }
 
         ProductPriceHistory::record(
-            variantId: $variant->id,
-            oldPurchaseAfn: $oldPurchase,
-            newPurchaseAfn: $newPurchase,
-            oldSaleAfn: $oldSale,
-            newSaleAfn: $newSale,
-            reason: $reason
+            variantId:       $variant->id,
+            oldPurchaseAfn:  $oldPurchase,
+            newPurchaseAfn:  $newPurchase,
+            oldSaleAfn:      $oldSale,
+            newSaleAfn:      $newSale,
+            reason:          $reason
         );
     }
 
@@ -1019,7 +1077,7 @@ class ProductController extends Controller
             ->keyBy('barcode');
 
         $incoming = collect($barcodes)
-            ->filter(fn ($b) => ! empty($b['barcode']))
+            ->filter(fn ($b) => is_array($b) && ! empty($b['barcode']))
             ->keyBy('barcode');
 
         foreach ($existing as $barcode => $row) {
@@ -1057,7 +1115,7 @@ class ProductController extends Controller
                 $messages[] = "Barcode \"{$barcode}\" is already used by: {$usedBy}";
             }
 
-            throw \Illuminate\Validation\ValidationException::withMessages([
+            throw ValidationException::withMessages([
                 'barcodes' => $messages,
             ]);
         }
@@ -1082,7 +1140,7 @@ class ProductController extends Controller
     }
 
     /**
-     * ⭐ Sync purchases + batch + inventory
+     * ⭐ Sync purchases + batch + inventory — ✅ با سود دوکان
      */
     private function syncPurchases(
         Product $product,
@@ -1121,6 +1179,7 @@ class ProductController extends Controller
             $investorId = $purchaseData['investor_id'] ?? null;
             if (empty($investorId) || $investorId === 'store' || $investorId === 'none') {
                 $investorId = null;
+                $profitUnit = 0;  // ✅ store-owned
             }
 
             $supplierId = $purchaseData['supplier_id'] ?? null;
@@ -1132,27 +1191,29 @@ class ProductController extends Controller
                 'purchase_price_afn'  => 0,
                 'wholesale_price_afn' => 0,
                 'wholesale_min_qty'   => 0,
+                'sale_price_afn'      => 0,
             ];
 
-            if ($variantInfo['purchase_price_afn'] <= 0) {
+            if (($variantInfo['purchase_price_afn'] ?? 0) <= 0) {
                 $variant = ProductVariant::find($variantId);
                 if ($variant) {
                     $variantInfo = [
                         'purchase_price_afn'  => (float) $variant->purchase_price_afn,
                         'wholesale_price_afn' => (float) $variant->wholesale_price_afn,
                         'wholesale_min_qty'   => (int) $variant->wholesale_min_qty,
+                        'sale_price_afn'      => (float) $variant->sale_price_afn,
                     ];
                 }
             }
 
-            $purchasePriceAfn = $variantInfo['purchase_price_afn'] * $qty;
-            $purchasePriceUsd = $exchangeRate > 0
-                ? round($purchasePriceAfn / $exchangeRate, 2)
-                : 0;
+            $purchasePricePerUnit = (float) $variantInfo['purchase_price_afn'];
+            $salePricePerUnit     = (float) ($variantInfo['sale_price_afn'] ?? 0);
+            $purchasePriceAfn     = $purchasePricePerUnit * $qty;
 
-            $lineTotal  = $purchasePriceAfn;
-            $lineProfit = $profitUnit * $qty;
-            $profitUsd  = $this->profitAfnToUsd($profitUnit, $exchangeRate, $investorId);
+            // ✅ محاسبه سودها
+            $lineProfit      = $profitUnit * $qty;
+            $storeProfitUnit = max(0, $salePricePerUnit - $purchasePricePerUnit - $profitUnit);
+            $lineStoreProfit = $storeProfitUnit * $qty;
 
             $rowData = [
                 'name'        => $product->name,
@@ -1176,9 +1237,14 @@ class ProductController extends Controller
                 'wholesale_price_afn' => $variantInfo['wholesale_price_afn'],
                 'wholesale_min_qty'   => $variantInfo['wholesale_min_qty'],
 
+                // ✅ Investor profit
                 'profit_per_unit' => $profitUnit,
-                'line_total'      => $lineTotal,
+                'line_total'      => $purchasePriceAfn,
                 'line_profit'     => $lineProfit,
+
+                // ✅ Store profit (جدید)
+                'store_profit_per_unit' => $storeProfitUnit,
+                'line_store_profit'     => $lineStoreProfit,
 
                 'notes'          => $purchaseData['notes'] ?? null,
                 'payment_status' => $purchaseData['payment_status'] ?? 'unpaid',
@@ -1210,15 +1276,20 @@ class ProductController extends Controller
                     );
                     $existingIds[] = $existing->id;
 
-                    /* ⭐ آپدیت ProductBatch مرتبط */
+                    /* ⭐ آپدیت ProductBatch با فیلدهای جدید */
                     $this->updateProductBatchForPurchase(
-                        purchaseRowId: $existing->id,
-                        newQty:        $newQty,
-                        oldQty:        $oldQty,
-                        unitCostAfn:   $variantInfo['purchase_price_afn'],
-                        exchangeRate:  $exchangeRate > 0 ? $exchangeRate : 1,
-                        profitPerUnit: $profitUsd,
-                        investorId:    $investorId,
+                        purchaseRowId:      $existing->id,
+                        variantId:          $variantId,
+                        branchId:           $branchId,
+                        newQty:             $newQty,
+                        oldQty:             $oldQty,
+                        unitCostAfn:        $purchasePricePerUnit,
+                        salePriceAfn:       $salePricePerUnit,        // ✅ جدید
+                        exchangeRate:       $exchangeRate > 0 ? $exchangeRate : 1,
+                        profitPerUnit:      $profitUnit,
+                        storeProfitPerUnit: $storeProfitUnit,         // ✅ جدید
+                        investorId:         $investorId,
+                        receivedDate:       $purchaseData['purchase_date'] ?? now()->toDateString(),
                     );
 
                     /* ⭐ آپدیت inventory */
@@ -1232,7 +1303,7 @@ class ProductController extends Controller
                                 referenceType: Product::class,
                                 referenceId: $existing->id,
                                 notes: "Purchase updated: qty {$oldQty} → {$newQty}",
-                                unitCostAfn: $variantInfo['purchase_price_afn']
+                                unitCostAfn: $purchasePricePerUnit
                             );
                         } else {
                             Inventory::decrease(
@@ -1257,13 +1328,12 @@ class ProductController extends Controller
 
                     if ($oldPurchasePrice > 0 && $oldPurchasePrice != $newPurchasePrice) {
                         $this->recordPriceChange(
-                            variant: $variant,
+                            variant:     $variant,
                             oldPurchase: $oldPurchasePrice,
                             newPurchase: $newPurchasePrice,
-                            oldSale: (float) $variant->sale_price_afn,
-                            newSale: (float) $variant->sale_price_afn,
-                            reason: 'New purchase with different price',
-                            exchangeRate: $exchangeRate > 0 ? $exchangeRate : 1
+                            oldSale:     (float) $variant->sale_price_afn,
+                            newSale:     (float) $variant->sale_price_afn,
+                            reason:      'New purchase with different price',
                         );
                     }
                 }
@@ -1272,17 +1342,19 @@ class ProductController extends Controller
                 $this->applyPaidNow($row, (float) ($purchaseData['paid_now'] ?? 0));
                 $existingIds[] = $row->id;
 
-                /* ⭐ ساخت ProductBatch */
+                /* ⭐ ساخت ProductBatch با فیلدهای جدید */
                 $this->createProductBatch(
-                    branchId:      $branchId,
-                    variantId:     $variantId,
-                    purchaseRowId: $row->id,
-                    investorId:    $investorId,
-                    qty:           (int) $qty,
-                    unitCostAfn:   $variantInfo['purchase_price_afn'],
-                    exchangeRate:  $exchangeRate > 0 ? $exchangeRate : 1,
-                    profitPerUnit: $profitUsd,
-                    receivedDate:  $purchaseData['purchase_date'] ?? now()->toDateString(),
+                    branchId:           $branchId,
+                    variantId:          $variantId,
+                    purchaseRowId:      $row->id,
+                    investorId:         $investorId,
+                    qty:                (int) $qty,
+                    unitCostAfn:        $purchasePricePerUnit,
+                    salePriceAfn:       $salePricePerUnit,        // ✅ جدید
+                    exchangeRate:       $exchangeRate > 0 ? $exchangeRate : 1,
+                    profitPerUnit:      $profitUnit,
+                    storeProfitPerUnit: $storeProfitUnit,         // ✅ جدید
+                    receivedDate:       $purchaseData['purchase_date'] ?? now()->toDateString(),
                 );
 
                 $this->rememberDailyRate(
@@ -1298,7 +1370,7 @@ class ProductController extends Controller
                     referenceType: Product::class,
                     referenceId: $row->id,
                     notes: "New purchase — {$product->name}",
-                    unitCostAfn: $variantInfo['purchase_price_afn']
+                    unitCostAfn: $purchasePricePerUnit
                 );
             }
         }
@@ -1323,7 +1395,6 @@ class ProductController extends Controller
                         );
                     }
 
-                    // ⭐ batch را هم trash کن
                     ProductBatch::where('purchase_item_id', $p->id)
                         ->update(['trash' => true, 'user_id' => Auth::id()]);
 
@@ -1380,11 +1451,11 @@ class ProductController extends Controller
             ->pluck('id')
             ->each(function (int $userId) use ($title, $body, $url, $now) {
                 ActivityNotification::create([
-                    'user_id' => $userId,
-                    'section' => 'products',
-                    'title' => $title,
-                    'body' => $body,
-                    'url' => $url,
+                    'user_id'    => $userId,
+                    'section'    => 'products',
+                    'title'      => $title,
+                    'body'       => $body,
+                    'url'        => $url,
                     'created_at' => $now,
                     'updated_at' => $now,
                 ]);

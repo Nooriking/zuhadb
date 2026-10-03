@@ -9,8 +9,8 @@ import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
-import { AlertTriangle, ArrowLeft, Building2, Lock, Save, Shield, User as UserIcon } from 'lucide-react';
-import { useState } from 'react';
+import { AlertTriangle, ArrowLeft, Building2, CheckCircle2, Eye, EyeOff, Lock, Save, Shield, User as UserIcon, XCircle } from 'lucide-react';
+import { useMemo, useState } from 'react';
 
 /* =========================================================
  |  Types
@@ -31,7 +31,6 @@ interface User {
     phone: string | null;
     role: string;
     status: 'active' | 'inactive' | 'blocked';
-    employee_code: string | null;
 }
 
 type RoleLabels = Record<string, string>;
@@ -43,6 +42,26 @@ interface Props {
     isBranchLocked: boolean;
     defaultBranchId: number | null;
     errors?: Record<string, string>;
+}
+
+/* =========================================================
+ |  Password strength helper (اختیاری و ساده)
+ ========================================================= */
+
+function getPasswordStrength(pw: string): { score: number; label: string; color: string } {
+    if (!pw) return { score: 0, label: '', color: '' };
+
+    let score = 0;
+    if (pw.length >= 8) score++;
+    if (/[A-Z]/.test(pw)) score++;
+    if (/[a-z]/.test(pw)) score++;
+    if (/[0-9]/.test(pw)) score++;
+    if (/[^A-Za-z0-9]/.test(pw)) score++;
+
+    if (score <= 2) return { score, label: 'Weak', color: 'bg-red-500' };
+    if (score === 3) return { score, label: 'Medium', color: 'bg-amber-500' };
+    if (score === 4) return { score, label: 'Good', color: 'bg-blue-500' };
+    return { score, label: 'Strong', color: 'bg-green-500' };
 }
 
 /* =========================================================
@@ -61,12 +80,15 @@ export default function UsersEdit({ user, branches, roles, isBranchLocked, defau
         password_confirmation: '',
         branch_id: defaultBranchId ? String(defaultBranchId) : 'none',
         role: user.role,
-        employee_code: user.employee_code || '',
         status: user.status,
     });
 
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
     const [loading, setLoading] = useState(false);
+
+    /* ⭐ نمایش / مخفی کردن پسورد */
+    const [showPassword, setShowPassword] = useState(false);
+    const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
 
     const breadcrumbs: BreadcrumbItem[] = [
         { title: 'Dashboard', href: '/dashboard' },
@@ -74,6 +96,18 @@ export default function UsersEdit({ user, branches, roles, isBranchLocked, defau
         { title: user.name, href: `/users/${user.id}` },
         { title: 'Edit', href: `/users/${user.id}/edit` },
     ];
+
+    /* =========================================================
+     |  Password checks
+     ========================================================= */
+
+    const passwordStrength = useMemo(() => getPasswordStrength(form.password), [form.password]);
+
+    const passwordMismatch = form.password_confirmation.length > 0 && form.password !== form.password_confirmation;
+
+    const passwordMatch = form.password.length > 0 && form.password === form.password_confirmation;
+
+    const wantsToChangePassword = form.password.length > 0;
 
     /* =========================================================
      |  Submit
@@ -84,12 +118,20 @@ export default function UsersEdit({ user, branches, roles, isBranchLocked, defau
         setLoading(true);
         setErrors({});
 
-        const payload = {
+        // اگر کاربر پسورد جدید وارد نکرده، فیلدها را حذف کن
+        const payload: Record<string, any> = {
             ...form,
             branch_id: form.branch_id === 'none' ? null : form.branch_id,
         };
 
+        if (!payload.password) {
+            delete payload.password;
+            delete payload.password_confirmation;
+        }
+
+        // ✅ اصلاح شده: PUT به جای PATCH (مطابق روت لاراول)
         router.put(`/users/${user.id}`, payload, {
+            preserveScroll: true,
             onSuccess: () => {
                 toast({
                     title: 'Success',
@@ -119,10 +161,6 @@ export default function UsersEdit({ user, branches, roles, isBranchLocked, defau
             });
         }
     };
-
-    /* =========================================================
-     |  Status change warning
-     ========================================================= */
 
     const statusChanged = form.status !== user.status;
 
@@ -214,48 +252,112 @@ export default function UsersEdit({ user, branches, roles, isBranchLocked, defau
                                     />
                                     {errors.phone && <p className="text-destructive text-sm">{errors.phone}</p>}
                                 </div>
-
-                                {/* Employee Code */}
-                                <div className="space-y-2 md:col-span-2">
-                                    <Label>Employee Code</Label>
-                                    <Input
-                                        value={form.employee_code}
-                                        onChange={(e) => handleChange('employee_code', e.target.value)}
-                                        placeholder="EMP-0001"
-                                        className={errors.employee_code ? 'border-destructive' : ''}
-                                    />
-                                    {errors.employee_code && <p className="text-destructive text-sm">{errors.employee_code}</p>}
-                                </div>
                             </div>
 
-                            {/* ───────── Password Section ───────── */}
+                            {/* ───────── Password Section ⭐ ───────── */}
                             <div className="rounded-lg border border-dashed p-4">
-                                <div className="mb-3 flex items-center gap-2">
-                                    <Shield className="text-muted-foreground h-4 w-4" />
-                                    <span className="text-sm font-medium">Change Password (optional)</span>
+                                <div className="mb-3 flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <Shield className="text-muted-foreground h-4 w-4" />
+                                        <span className="text-sm font-medium">Change Password (optional)</span>
+                                    </div>
+                                    {wantsToChangePassword && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                handleChange('password', '');
+                                                handleChange('password_confirmation', '');
+                                            }}
+                                            className="text-muted-foreground hover:text-destructive text-xs underline"
+                                        >
+                                            Clear
+                                        </button>
+                                    )}
                                 </div>
+
                                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                    {/* New password with eye toggle */}
                                     <div className="space-y-2">
                                         <Label>New Password</Label>
-                                        <Input
-                                            type="password"
-                                            value={form.password}
-                                            onChange={(e) => handleChange('password', e.target.value)}
-                                            placeholder="Leave blank to keep current"
-                                            className={errors.password ? 'border-destructive' : ''}
-                                        />
+                                        <div className="relative">
+                                            <Input
+                                                type={showPassword ? 'text' : 'password'}
+                                                value={form.password}
+                                                onChange={(e) => handleChange('password', e.target.value)}
+                                                placeholder="Leave blank to keep current"
+                                                className={`pr-10 ${errors.password ? 'border-destructive' : ''}`}
+                                                autoComplete="new-password"
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowPassword((v) => !v)}
+                                                className="text-muted-foreground hover:text-foreground absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 transition"
+                                                tabIndex={-1}
+                                                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                                            >
+                                                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                            </button>
+                                        </div>
+
+                                        {/* Strength bar */}
+                                        {wantsToChangePassword && (
+                                            <div className="space-y-1">
+                                                <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
+                                                    <div
+                                                        className={`h-full ${passwordStrength.color} transition-all`}
+                                                        style={{ width: `${(passwordStrength.score / 5) * 100}%` }}
+                                                    />
+                                                </div>
+                                                <p className="text-muted-foreground text-xs">
+                                                    Strength: <span className="font-medium">{passwordStrength.label}</span>
+                                                </p>
+                                            </div>
+                                        )}
+
                                         {errors.password && <p className="text-destructive text-sm">{errors.password}</p>}
                                     </div>
+
+                                    {/* Confirm password with eye toggle */}
                                     <div className="space-y-2">
                                         <Label>Confirm New Password</Label>
-                                        <Input
-                                            type="password"
-                                            value={form.password_confirmation}
-                                            onChange={(e) => handleChange('password_confirmation', e.target.value)}
-                                            placeholder="Confirm new password"
-                                        />
+                                        <div className="relative">
+                                            <Input
+                                                type={showPasswordConfirm ? 'text' : 'password'}
+                                                value={form.password_confirmation}
+                                                onChange={(e) => handleChange('password_confirmation', e.target.value)}
+                                                placeholder="Confirm new password"
+                                                className={`pr-10 ${passwordMismatch ? 'border-destructive' : ''}`}
+                                                autoComplete="new-password"
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowPasswordConfirm((v) => !v)}
+                                                className="text-muted-foreground hover:text-foreground absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 transition"
+                                                tabIndex={-1}
+                                                aria-label={showPasswordConfirm ? 'Hide password' : 'Show password'}
+                                            >
+                                                {showPasswordConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                            </button>
+                                        </div>
+
+                                        {/* Match indicator */}
+                                        {form.password_confirmation.length > 0 && (
+                                            <p className={`flex items-center gap-1 text-xs ${passwordMatch ? 'text-green-600' : 'text-destructive'}`}>
+                                                {passwordMatch ? (
+                                                    <>
+                                                        <CheckCircle2 className="h-3 w-3" /> Passwords match
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <XCircle className="h-3 w-3" /> Passwords do not match
+                                                    </>
+                                                )}
+                                            </p>
+                                        )}
                                     </div>
                                 </div>
+
+                                <p className="text-muted-foreground mt-3 text-xs">Leave both fields empty to keep the current password.</p>
                             </div>
 
                             {/* ───────── Role / Branch / Status ───────── */}
@@ -280,6 +382,7 @@ export default function UsersEdit({ user, branches, roles, isBranchLocked, defau
                                     {errors.role && <p className="text-destructive text-sm">{errors.role}</p>}
                                 </div>
 
+                                {/* Branch */}
                                 <div className="space-y-2">
                                     <Label className="flex items-center gap-1">
                                         Branch

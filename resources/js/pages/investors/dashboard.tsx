@@ -1,4 +1,5 @@
-﻿import { Head, Link, router } from '@inertiajs/react';
+﻿import { LazyInView } from '@/components/lazy-in-view';
+import { Head, Link, router } from '@inertiajs/react';
 import type { LucideIcon } from 'lucide-react';
 import {
     AlertCircle,
@@ -15,8 +16,7 @@ import {
     Users,
     Wallet,
 } from 'lucide-react';
-import { useState, lazy, Suspense } from 'react';
-import { LazyInView } from '@/components/lazy-in-view';
+import { lazy, Suspense, useState } from 'react';
 
 const InvestorDashboardCharts = lazy(() => import('./dashboard-charts'));
 
@@ -268,7 +268,15 @@ function EmptyState({ message }: { message: string }) {
 
 function OwnInvestorDashboard({ kpis, recentProfitEntries, stockItems = [] }: Pick<Props, 'kpis' | 'recentProfitEntries' | 'stockItems'>) {
     const logout = () => {
-        router.post('/logout', {}, { onFinish: () => { window.location.href = '/login'; } });
+        router.post(
+            '/logout',
+            {},
+            {
+                onFinish: () => {
+                    window.location.href = '/login';
+                },
+            },
+        );
     };
 
     return (
@@ -296,18 +304,54 @@ function OwnInvestorDashboard({ kpis, recentProfitEntries, stockItems = [] }: Pi
                 <section className="space-y-3">
                     <h2 className="text-sm font-semibold tracking-wide uppercase">Capital</h2>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                        <KpiCard label="Capital given" value={`${fmt(kpis.total_capital)} USD`} sub="Money you invested" icon={Wallet} accent="bg-indigo-100 text-indigo-600" />
-                        <KpiCard label="Still available" value={`${fmt(kpis.available_capital)} USD`} sub="Not yet spent on stock" icon={PiggyBank} accent="bg-emerald-100 text-emerald-600" />
-                        <KpiCard label="Used on stock" value={`${fmt(kpis.invested_capital)} USD`} sub="Allocated to purchases" icon={ShoppingCart} accent="bg-amber-100 text-amber-600" />
+                        <KpiCard
+                            label="Capital given"
+                            value={`${fmt(kpis.total_capital)} USD`}
+                            sub="Money you invested"
+                            icon={Wallet}
+                            accent="bg-indigo-100 text-indigo-600"
+                        />
+                        <KpiCard
+                            label="Still available"
+                            value={`${fmt(kpis.available_capital)} USD`}
+                            sub="Not yet spent on stock"
+                            icon={PiggyBank}
+                            accent="bg-emerald-100 text-emerald-600"
+                        />
+                        <KpiCard
+                            label="Used on stock"
+                            value={`${fmt(kpis.invested_capital)} USD`}
+                            sub="Allocated to purchases"
+                            icon={ShoppingCart}
+                            accent="bg-amber-100 text-amber-600"
+                        />
                     </div>
                 </section>
 
                 <section className="space-y-3">
                     <h2 className="text-sm font-semibold tracking-wide uppercase">Profit</h2>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                        <KpiCard label="Profit earned" value={`${fmt(kpis.total_profit)} USD`} sub={`${fmt(kpis.profit_margin)}% of capital`} icon={TrendingUp} accent="bg-emerald-100 text-emerald-600" />
-                        <KpiCard label="Profit waiting" value={`${fmt(kpis.pending_profit)} USD`} sub="Not paid out yet" icon={Banknote} accent="bg-amber-100 text-amber-600" />
-                        <KpiCard label="Profit paid" value={`${fmt(kpis.paid_profit)} USD`} sub={`${fmt(kpis.withdrawn_profit)} USD withdrawn`} icon={ArrowUpFromLine} accent="bg-blue-100 text-blue-600" />
+                        <KpiCard
+                            label="Profit earned"
+                            value={`${fmt(kpis.total_profit)} USD`}
+                            sub={`${fmt(kpis.profit_margin)}% of capital`}
+                            icon={TrendingUp}
+                            accent="bg-emerald-100 text-emerald-600"
+                        />
+                        <KpiCard
+                            label="Profit waiting"
+                            value={`${fmt(kpis.pending_profit)} USD`}
+                            sub="Not paid out yet"
+                            icon={Banknote}
+                            accent="bg-amber-100 text-amber-600"
+                        />
+                        <KpiCard
+                            label="Profit paid"
+                            value={`${fmt(kpis.paid_profit)} USD`}
+                            sub={`${fmt(kpis.withdrawn_profit)} USD withdrawn`}
+                            icon={ArrowUpFromLine}
+                            accent="bg-blue-100 text-blue-600"
+                        />
                     </div>
                     <SectionCard title="Profit entries">
                         {recentProfitEntries.length === 0 ? (

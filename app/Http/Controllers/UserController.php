@@ -10,7 +10,6 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -43,8 +42,7 @@ class UserController extends Controller
                     $q->where('name', 'like', "%{$search}%")
                       ->orWhere('username', 'like', "%{$search}%")
                       ->orWhere('email', 'like', "%{$search}%")
-                      ->orWhere('phone', 'like', "%{$search}%")
-                      ->orWhere('employee_code', 'like', "%{$search}%");
+                      ->orWhere('phone', 'like', "%{$search}%");
                 });
             })
             ->when($status, fn ($q, $s) => $q->where('status', $s))
@@ -117,6 +115,10 @@ class UserController extends Controller
             abort(403, 'You are not allowed to create users.');
         }
 
+        if ($data['role'] === User::ROLE_SUPER_ADMIN) {
+            abort(403, 'Creating Super Admin users is forbidden.');
+        }
+
         if (! in_array($data['role'], $authUser->getCreatableRoles(), true)) {
             abort(403, 'You are not allowed to create a user with this role.');
         }
@@ -126,17 +128,18 @@ class UserController extends Controller
         }
 
         if ($data['role'] === User::ROLE_SUPER_ADMIN) {
-            abort(403, 'Creating Super Admin users is forbidden.');
+            $data['branch_id'] = null;
         }
 
         $data['user_id']  = $authUser->id;
         $data['password'] = Hash::make($data['password']);
 
-        if ($request->hasFile('avatar')) {
-            $data['avatar'] = $request->file('avatar')->store('users/avatars', 'public');
-        }
-
         $user = User::create($data);
+
+        if ($user->role === User::ROLE_BRANCH_MANAGER && $user->branch_id) {
+            Branch::where('id', $user->branch_id)
+                ->update(['manager_user_id' => $user->id]);
+        }
 
         return redirect()
             ->route('users.index')
@@ -156,7 +159,12 @@ class UserController extends Controller
             abort(404);
         }
 
-        if (! $authUser->canManageUser($user) && $authUser->id !== $user->id) {
+        // ✅ Super Admin می‌تواند همه را ببیند، بقیه طبق قانون
+        if (
+            ! $authUser->isSuperAdmin()
+            && ! $authUser->canManageUser($user)
+            && $authUser->id !== $user->id
+        ) {
             abort(403, 'You do not have permission to view this user.');
         }
 
@@ -189,7 +197,8 @@ class UserController extends Controller
             abort(404);
         }
 
-        if (! $authUser->canManageUser($user)) {
+        // ✅ Super Admin می‌تواند هر کاربری (از جمله خودش) را ویرایش کند
+        if (! $authUser->isSuperAdmin() && ! $authUser->canManageUser($user)) {
             abort(403, 'You are not allowed to edit this user.');
         }
 
@@ -221,24 +230,46 @@ class UserController extends Controller
         /** @var User $authUser */
         $authUser = Auth::user();
 
+        // ✅ چک اول: آیا اجازه کلی دارد؟
         if (! $authUser->canUpdateUsers()) {
             abort(403, 'You are not allowed to update users.');
         }
 
-        if (! in_array($data['role'], $authUser->getCreatableRoles(), true)) {
-            abort(403, 'You are not allowed to assign this role.');
-        }
+        // ✅ بررسی: آیا در حال ویرایش خودش است؟
+        $isEditingSelf = $authUser->id === $user->id;
 
-        if ($authUser->isBranchManager()) {
-            $data['branch_id'] = $authUser->branch_id;
-        }
+        if ($isEditingSelf && $authUser->isSuperAdmin()) {
+            // 🔒 Super Admin نمی‌تواند role خودش را تغییر دهد
+            if (isset($data['role']) && $data['role'] !== User::ROLE_SUPER_ADMIN) {
+                return back()->with('error', 'You cannot change your own Super Admin role.');
+            }
 
-        if ($data['role'] === User::ROLE_SUPER_ADMIN) {
-            abort(403, 'Assigning Super Admin role is forbidden.');
-        }
+            // 🔒 Super Admin نمی‌تواند status خودش را تغییر دهد
+            if (isset($data['status']) && $data['status'] !== 'active') {
+                return back()->with('error', 'You cannot change your own account status.');
+            }
 
-        if ($user->isSuperAdmin() && ! $authUser->isSuperAdmin()) {
-            abort(403, 'You cannot edit a Super Admin.');
+            // 🔒 Super Admin به هیچ شعبه‌ای وابسته نیست
+            $data['branch_id'] = null;
+            $data['role']      = User::ROLE_SUPER_ADMIN;
+            $data['status']    = 'active';
+        } else {
+            // ✅ محافظت‌های معمول برای ویرایش دیگران
+            if (($data['role'] ?? null) === User::ROLE_SUPER_ADMIN) {
+                abort(403, 'Assigning Super Admin role is forbidden.');
+            }
+
+            if (! in_array($data['role'] ?? '', $authUser->getCreatableRoles(), true)) {
+                abort(403, 'You are not allowed to assign this role.');
+            }
+
+            if ($user->isSuperAdmin() && ! $authUser->isSuperAdmin()) {
+                abort(403, 'You cannot edit a Super Admin.');
+            }
+
+            if ($authUser->isBranchManager()) {
+                $data['branch_id'] = $authUser->branch_id;
+            }
         }
 
         $data['user_id'] = $authUser->id;
@@ -249,14 +280,26 @@ class UserController extends Controller
             unset($data['password']);
         }
 
-        if ($request->hasFile('avatar')) {
-            if ($user->avatar && Storage::disk('public')->exists($user->avatar)) {
-                Storage::disk('public')->delete($user->avatar);
-            }
-            $data['avatar'] = $request->file('avatar')->store('users/avatars', 'public');
-        }
+        $oldBranchId = $user->branch_id;
+        $oldRole     = $user->role;
 
         $user->update($data);
+
+        if ($oldRole === User::ROLE_BRANCH_MANAGER && $oldBranchId) {
+            $newRole     = $user->role;
+            $newBranchId = $user->branch_id;
+
+            if ($newRole !== User::ROLE_BRANCH_MANAGER || $newBranchId !== $oldBranchId) {
+                Branch::where('id', $oldBranchId)
+                    ->where('manager_user_id', $user->id)
+                    ->update(['manager_user_id' => null]);
+            }
+        }
+
+        if ($user->role === User::ROLE_BRANCH_MANAGER && $user->branch_id) {
+            Branch::where('id', $user->branch_id)
+                ->update(['manager_user_id' => $user->id]);
+        }
 
         return redirect()
             ->route('users.index')
@@ -272,12 +315,10 @@ class UserController extends Controller
         /** @var User $authUser */
         $authUser = Auth::user();
 
-        // ⛔ Super Admin هرگز بلاک نمی‌شود — حتی توسط Super Admin دیگر
         if ($user->isSuperAdmin()) {
             return back()->with('error', 'Super Admin users cannot be blocked.');
         }
 
-        // ⛔ نمی‌توانی خودت را بلاک کنی
         if ($user->id === $authUser->id) {
             return back()->with('error', 'You cannot block your own account.');
         }
@@ -303,12 +344,10 @@ class UserController extends Controller
         /** @var User $authUser */
         $authUser = Auth::user();
 
-        // ⛔ Super Admin هرگز آنبلاک نمی‌شود (چون اصلاً نباید بلاک شود)
         if ($user->isSuperAdmin()) {
             return back()->with('error', 'Super Admin users cannot be unblocked.');
         }
 
-        // ⛔ نمی‌توانی خودت را آنبلاک کنی
         if ($user->id === $authUser->id) {
             return back()->with('error', 'You cannot unblock your own account.');
         }
@@ -326,126 +365,6 @@ class UserController extends Controller
     }
 
     /* =========================================================
-     |  DESTROY (Trash)
-     ========================================================= */
-
-    public function destroy(User $user): RedirectResponse
-    {
-        /** @var User $authUser */
-        $authUser = Auth::user();
-
-        if (! $authUser->canDeleteUsers()) {
-            return back()->with('error', 'Only Super Admin can move users to trash.');
-        }
-
-        if ($user->id === $authUser->id) {
-            return back()->with('error', 'You cannot delete your own account.');
-        }
-
-        if ($user->isSuperAdmin()) {
-            return back()->with('error', 'Super Admin users cannot be deleted.');
-        }
-
-        $name = $user->name;
-
-        $user->update([
-            'trash'   => true,
-            'user_id' => $authUser->id,
-        ]);
-        $user->delete();
-
-        return redirect()
-            ->route('users.index')
-            ->with('success', "User \"{$name}\" was moved to trash.");
-    }
-
-    /* =========================================================
-     |  RESTORE
-     ========================================================= */
-
-    public function restore(int $id): RedirectResponse
-    {
-        /** @var User $authUser */
-        $authUser = Auth::user();
-
-        if (! $authUser->canRestoreUsers()) {
-            abort(403, 'Only Super Admin can restore users.');
-        }
-
-        $user = User::onlyTrashed()->findOrFail($id);
-
-        $user->update([
-            'trash'   => false,
-            'user_id' => $authUser->id,
-        ]);
-        $user->restore();
-
-        return redirect()
-            ->route('users.index')
-            ->with('success', "User \"{$user->name}\" was restored.");
-    }
-
-    /* =========================================================
-     |  FORCE DELETE
-     ========================================================= */
-
-    public function forceDelete(int $id): RedirectResponse
-    {
-        /** @var User $authUser */
-        $authUser = Auth::user();
-
-        if (! $authUser->canForceDeleteUsers()) {
-            abort(403, 'Only Super Admin can permanently delete users.');
-        }
-
-        $user = User::onlyTrashed()->findOrFail($id);
-
-        if ($user->id === $authUser->id) {
-            return back()->with('error', 'You cannot permanently delete your own account.');
-        }
-
-        if ($user->isSuperAdmin()) {
-            return back()->with('error', 'Super Admin users cannot be permanently deleted.');
-        }
-
-        if ($user->avatar && Storage::disk('public')->exists($user->avatar)) {
-            Storage::disk('public')->delete($user->avatar);
-        }
-
-        $name = $user->name;
-        $user->forceDelete();
-
-        return redirect()
-            ->route('users.index')
-            ->with('success', "User \"{$name}\" was permanently deleted.");
-    }
-
-    /* =========================================================
-     |  TRASH LIST
-     ========================================================= */
-
-    public function trash(): Response
-    {
-        /** @var User $authUser */
-        $authUser = Auth::user();
-
-        if (! $authUser->canViewTrash()) {
-            abort(403, 'Only Super Admin can view the trash.');
-        }
-
-        $users = User::onlyTrashed()
-            ->with(['branch:id,name,code', 'creator:id,name'])
-            ->orderByDesc('updated_at')
-            ->paginate(15);
-
-        return Inertia::render('users/trash', [
-            'users'       => $users,
-            'roles'       => User::ROLE_LABELS,
-            'permissions' => $this->buildPermissions($authUser),
-        ]);
-    }
-
-    /* =========================================================
      |  TOGGLE STATUS (Deprecated)
      ========================================================= */
 
@@ -459,7 +378,7 @@ class UserController extends Controller
     }
 
     /* =========================================================
-     |  ⭐ MIDDLEWARE-BASED PERMISSIONS BUILDER
+     |  ⭐ PERMISSIONS BUILDER
      ========================================================= */
 
     protected function buildPermissions(User $authUser, ?User $targetUser = null): array
@@ -471,16 +390,12 @@ class UserController extends Controller
             'users_update'       => $authUser->canUpdateUsers(),
             'users_block'        => $authUser->canBlockUsers(),
             'users_unblock'      => $authUser->canUnblockUsers(),
-            'users_delete'       => $authUser->canDeleteUsers(),
-            'users_restore'      => $authUser->canRestoreUsers(),
-            'users_force_delete' => $authUser->canForceDeleteUsers(),
-            'users_trash_view'   => $authUser->canViewTrash(),
 
             // Branches
             'branches_view'      => $authUser->isSuperAdmin() || $authUser->isAdmin() || $authUser->isBranchManager(),
             'branches_create'    => $authUser->canManageBranches(),
             'branches_update'    => $authUser->canManageBranches(),
-            'branches_delete'    => $authUser->isSuperAdmin(),
+            'branches_delete'    => false,
 
             // Meta
             'is_super_admin'     => $authUser->isSuperAdmin(),
