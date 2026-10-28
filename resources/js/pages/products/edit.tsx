@@ -2,7 +2,7 @@
 
 import { MoneyField } from '@/components/money-field';
 import { UnitConversionFields } from '@/components/unit-conversion-fields';
-import { convertToDefault, defaultCurrencyId, findCurrency, type CatalogCurrency } from '@/lib/currencies';
+import { defaultCurrencyId, type CatalogCurrency } from '@/lib/currencies';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
