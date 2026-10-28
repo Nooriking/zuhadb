@@ -9,6 +9,7 @@ interface Investment {
     id: number;
     investment_number: string;
     capital_amount_afn: string;
+    capital_amount_currency?: string | null;
     investment_date: string;
     status: string;
     investor: { id: number; full_name: string } | null;
@@ -98,7 +99,10 @@ export default function InvestmentsTrash({ investments }: Props) {
                                         <td className="px-4 py-3">{investment.investor?.full_name || '—'}</td>
                                         <td className="px-4 py-3 text-xs">{formatDate(investment.investment_date)}</td>
                                         <td className="px-4 py-3 text-right font-mono">
-                                            <div className="font-semibold">{formatPrice(investment.capital_amount_afn)} USD</div>
+                                            <div className="font-semibold">
+                                                {formatPrice(investment.capital_amount_currency ?? investment.capital_amount_afn)}{' '}
+                                                {investment.currency?.code || 'AFN'}
+                                            </div>
                                         </td>
                                         <td className="px-4 py-3">
                                             <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold">{investment.status}</span>

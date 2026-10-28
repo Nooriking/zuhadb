@@ -288,18 +288,18 @@ export default function InvestorWithdrawalsCreate({
                                         <div>
                                             <p className="text-muted-foreground text-xs">Capital</p>
                                             <p className="font-mono text-2xl font-bold text-blue-600">
-                                                {formatPrice(selectedInvestor.wallet.capital_balance_afn)} USD
+                                                {formatPrice(selectedInvestor.wallet.capital_balance_afn)} AFN
                                             </p>
                                         </div>
                                         <div>
                                             <p className="text-muted-foreground text-xs">Profit</p>
                                             <p className="font-mono text-2xl font-bold text-green-600">
-                                                {formatPrice(selectedInvestor.wallet.profit_balance_afn)} USD
+                                                {formatPrice(selectedInvestor.wallet.profit_balance_afn)} AFN
                                             </p>
                                         </div>
                                         <div className="border-t pt-3">
                                             <p className="text-muted-foreground text-xs">Selected for withdrawal</p>
-                                            <p className="font-mono text-lg font-bold">{formatPrice(availableBalance)} USD</p>
+                                            <p className="font-mono text-lg font-bold">{formatPrice(availableBalance)} AFN</p>
                                         </div>
                                     </CardContent>
                                 </Card>
@@ -311,7 +311,7 @@ export default function InvestorWithdrawalsCreate({
                                             <div className="text-sm">
                                                 <p className="font-semibold text-blue-900">After this withdrawal</p>
                                                 <p className="mt-1 font-mono text-lg font-bold text-blue-700">
-                                                    {formatPrice(Math.max(0, availableBalance - amountAfn))} USD
+                                                    {formatPrice(Math.max(0, availableBalance - amountAfn))} AFN
                                                 </p>
                                                 <p className="mt-1 text-xs text-blue-700">Remaining in {form.type} balance</p>
                                             </div>

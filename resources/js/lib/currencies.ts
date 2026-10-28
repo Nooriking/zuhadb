@@ -54,6 +54,27 @@ export function convertToDefault(amount: number, from: CatalogCurrency | undefin
     return (amount * fromRate) / toRate;
 }
 
+export type MoneyTotals = {
+    by_currency: { code: string; symbol?: string | null; total: string }[];
+    combined: { code: string; name?: string; symbol?: string | null; total: string } | null;
+};
+
+export function formatTotals(totals?: MoneyTotals | null): string {
+    if (!totals) {
+        return '';
+    }
+
+    if (totals.combined) {
+        return `${totals.combined.total} ${totals.combined.code}`;
+    }
+
+    if (!totals.by_currency.length) {
+        return '—';
+    }
+
+    return totals.by_currency.map((row) => `${row.total} ${row.code}`).join(' · ');
+}
+
 export function formatAmount(amount: number, currency?: CatalogCurrency | null): string {
     const digits = currency?.decimal_places ?? 2;
     const formatted = new Intl.NumberFormat('en-US', {

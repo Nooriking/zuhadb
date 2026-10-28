@@ -93,7 +93,8 @@ export default function InvestmentsEdit({ investment, errors: initialErrors }: P
                             <div>
                                 <p className="text-xs text-gray-500">Capital</p>
                                 <p className="font-mono font-medium">
-                                    {formatPrice(investment.capital_amount_afn)} USD
+                                    {formatPrice(investment.capital_amount_currency ?? investment.capital_amount_afn)}{' '}
+                                    {investment.currency?.code || 'AFN'}
                                 </p>
                             </div>
                             <div>

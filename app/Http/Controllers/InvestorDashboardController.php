@@ -224,8 +224,9 @@ class InvestorDashboardController extends Controller
             ]);
 
         $originalCurrencyTotals = [];
-        if (! $reporting['converts_from_ledger'] || ! $reporting['conversion_available']) {
-            $originalCurrencyTotals = Investment::notTrashed()
+        if (! $reporting['conversion_available']) {
+            $originalCurrencyTotals = Investment::query()
+                ->where('investments.trash', false)
                 ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId, 'investments.investor_id'))
                 ->leftJoin('currencies', 'currencies.id', '=', 'investments.currency_id')
                 ->select(

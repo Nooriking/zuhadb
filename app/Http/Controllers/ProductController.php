@@ -199,21 +199,12 @@ class ProductController extends Controller
     public function receive(): Response
     {
         $variants = ProductVariant::query()
-            ->with(['product:id,name,brand_id', 'product.brand:id,name', 'barcodes:id,variant_id,barcode'])
+            ->with(['product:id,name,brand_id,base_unit_name,pack_unit_name,units_per_pack', 'product.brand:id,name', 'barcodes:id,variant_id,barcode'])
             ->where('trash', false)
             ->orderByDesc('id')
             ->limit(300)
             ->get()
-            ->map(fn (ProductVariant $variant) => [
-                'id' => $variant->id,
-                'name' => trim(($variant->product?->brand?->name ? $variant->product->brand->name.' — ' : '').($variant->product?->name ?? 'Product')),
-                'volume_ml' => $variant->volume_ml,
-                'concentration' => $variant->concentration,
-                'purchase_price_afn' => $variant->purchase_price_afn,
-                'sale_price_afn' => $variant->sale_price_afn,
-                'stock_quantity' => $variant->stock_quantity,
-                'barcodes' => $variant->barcodes->pluck('barcode')->filter()->values(),
-            ]);
+            ->map(fn (ProductVariant $variant) => $this->receiveVariantPayload($variant));
 
         return Inertia::render('products/receive', [
             'variants' => $variants,
@@ -261,16 +252,7 @@ class ProductController extends Controller
 
         return response()->json([
             'found' => true,
-            'variant' => [
-                'id' => $variant->id,
-                'name' => trim(($variant->product?->brand?->name ? $variant->product->brand->name.' — ' : '').($variant->product?->name ?? 'Product')),
-                'volume_ml' => $variant->volume_ml,
-                'concentration' => $variant->concentration,
-                'purchase_price_afn' => $variant->purchase_price_afn,
-                'sale_price_afn' => $variant->sale_price_afn,
-                'stock_quantity' => $variant->stock_quantity,
-                'barcodes' => $variant->barcodes->pluck('barcode')->filter()->values(),
-            ],
+            'variant' => $this->receiveVariantPayload($variant),
         ]);
     }
 
@@ -873,13 +855,27 @@ class ProductController extends Controller
      |  PRIVATE HELPERS
      ========================================================= */
 
-    private function profitAfnToUsd(float $profitAfn, float $exchangeRate, mixed $investorId): float
+    /**
+     * @return array<string, mixed>
+     */
+    private function receiveVariantPayload(ProductVariant $variant): array
     {
-        if (empty($investorId) || $exchangeRate <= 0) {
-            return 0;
-        }
+        $product = $variant->product;
 
-        return round($profitAfn / $exchangeRate, 2);
+        return [
+            'id' => $variant->id,
+            'name' => trim(($product?->brand?->name ? $product->brand->name.' — ' : '').($product?->name ?? 'Product')),
+            'volume_ml' => $variant->volume_ml,
+            'concentration' => $variant->concentration,
+            'purchase_price_afn' => $variant->purchase_price_afn,
+            'sale_price_afn' => $variant->sale_price_afn,
+            'stock_quantity' => $variant->stock_quantity,
+            'barcodes' => $variant->barcodes->pluck('barcode')->filter()->values(),
+            'base_unit_name' => $product?->base_unit_name,
+            'pack_unit_name' => $product?->pack_unit_name,
+            'units_per_pack' => $product?->units_per_pack,
+            'conversion_label' => $product?->conversionLabel(),
+        ];
     }
 
     /**

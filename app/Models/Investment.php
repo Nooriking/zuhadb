@@ -266,8 +266,8 @@ class Investment extends Model
 
             if ($allocatedAmountAfn > $availableAfn + 0.01) {
                 throw new \Exception(
-                    "Investment available balance is {$availableAfn} USD, "
-                    . "but you tried to allocate {$allocatedAmountAfn} USD."
+                    "Investment available balance is {$availableAfn} AFN, "
+                    . "but you tried to allocate {$allocatedAmountAfn} AFN."
                 );
             }
 

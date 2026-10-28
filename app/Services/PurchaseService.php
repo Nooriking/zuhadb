@@ -49,9 +49,9 @@ class PurchaseService
                 ]);
             }
 
-            if ($investorId && $exchangeRate <= 0) {
+            if ($investorId && $exchangeRate < 0) {
                 throw ValidationException::withMessages([
-                    'exchange_rate' => 'Enter the USD to AFN rate so capital and investor profit are saved in dollars.',
+                    'exchange_rate' => 'Exchange rate cannot be negative.',
                 ]);
             }
 
@@ -74,8 +74,6 @@ class PurchaseService
             }
 
             $totalCostAfn = round($purchasePrice * $qty, 2);
-            $totalCostUsd = $exchangeRate > 0 ? round($totalCostAfn / $exchangeRate, 2) : 0.0;
-            $profitUsd = $this->profitAfnToUsd($profitAfn, $exchangeRate, $investorId);
 
             $investment = null;
             if ($investmentId) {
@@ -94,9 +92,9 @@ class PurchaseService
                 }
 
                 $available = (float) $investment->available_amount_afn;
-                if ($totalCostUsd > $available + 0.01) {
+                if ($totalCostAfn > $available + 0.01) {
                     throw ValidationException::withMessages([
-                        'investment_id' => "Available capital is {$available} USD, but this stock costs {$totalCostUsd} USD.",
+                        'investment_id' => "Available capital is {$available} AFN, but this stock costs {$totalCostAfn} AFN.",
                     ]);
                 }
             }
@@ -143,7 +141,7 @@ class PurchaseService
                 investorId: $investorId ? (int) $investorId : null,
                 qty: $qty,
                 unitCostAfn: $purchasePrice,
-                profitPerUnit: $profitUsd,
+                profitPerUnit: $profitAfn,
                 receivedDate: $data['purchase_date'],
                 userId: $actor->id,
             );
@@ -151,7 +149,7 @@ class PurchaseService
             if ($investment) {
                 $purchaseAllocation = $investment->allocateToPurchase(
                     $purchaseRow->id,
-                    $totalCostUsd,
+                    $totalCostAfn,
                     "Add stock · batch {$batch->batch_code}"
                 );
 
@@ -162,8 +160,8 @@ class PurchaseService
                     'funded_quantity' => $qty,
                     'sold_quantity' => 0,
                     'remaining_quantity' => $qty,
-                    'cost_per_unit_afn' => $exchangeRate > 0 ? round($purchasePrice / $exchangeRate, 2) : 0,
-                    'profit_per_unit_afn' => $profitUsd,
+                    'cost_per_unit_afn' => $purchasePrice,
+                    'profit_per_unit_afn' => $profitAfn,
                     'capital_recovered_afn' => 0,
                     'profit_earned_afn' => 0,
                     'status' => 'active',
@@ -206,23 +204,14 @@ class PurchaseService
                     'branch_id' => $branchId,
                     'funding_source' => $investorId ? 'investor' : 'office',
                     'investment_id' => $investment?->id,
-                    'total_cost_usd' => $totalCostUsd,
-                    'profit_per_unit_usd' => $profitUsd,
+                    'total_cost_afn' => $totalCostAfn,
+                    'profit_per_unit_afn' => $profitAfn,
                 ],
                 userId: $actor->id,
             );
 
             return $purchaseRow;
         });
-    }
-
-    private function profitAfnToUsd(float $profitAfn, float $exchangeRate, mixed $investorId): float
-    {
-        if (empty($investorId) || $exchangeRate <= 0) {
-            return 0;
-        }
-
-        return round($profitAfn / $exchangeRate, 2);
     }
 
     private function createProductBatch(

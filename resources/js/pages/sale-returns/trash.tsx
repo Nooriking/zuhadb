@@ -3,7 +3,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import AppLayout from '@/layouts/app-layout';
 import { forceDeleteItem, restoreItem } from '@/lib/trash-actions';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link, router } from '@inertiajs/react';
+import { Head, Link } from '@inertiajs/react';
 import { ArrowLeft, RotateCcw, Trash2 } from 'lucide-react';
 
 interface SaleReturn {
@@ -28,7 +28,6 @@ const breadcrumbs: BreadcrumbItem[] = [
 ];
 
 export default function SaleReturnsTrash({ saleReturns }: Props) {
-
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="Sale return trash" />
@@ -74,7 +73,7 @@ export default function SaleReturnsTrash({ saleReturns }: Props) {
                                                     variant="outline"
                                                     size="sm"
                                                     className="gap-1"
-                                                    onClick={() => router.post(`/sale-returns/${row.id}/restore`)}
+                                                    onClick={() => void restoreItem(row.return_number, `/sale-returns/${row.id}/restore`)}
                                                 >
                                                     <RotateCcw className="h-3 w-3" /> Restore
                                                 </Button>
@@ -82,20 +81,13 @@ export default function SaleReturnsTrash({ saleReturns }: Props) {
                                                     variant="outline"
                                                     size="sm"
                                                     className="gap-1 text-red-600"
-                                                    onClick={() => setPendingId(row.id)}
+                                                    onClick={() =>
+                                                        void forceDeleteItem(row.return_number, `/sale-returns/${row.id}/force-delete`)
+                                                    }
                                                 >
                                                     <Trash2 className="h-3 w-3" /> Delete
                                                 </Button>
                                             </div>
-                                            {pendingId === row.id && (
-                                                <Button
-                                                    size="sm"
-                                                    className="mt-2 bg-red-600 text-white"
-                                                    onClick={() => router.delete(`/sale-returns/${row.id}/force-delete`)}
-                                                >
-                                                    Confirm delete
-                                                </Button>
-                                            )}
                                         </TableCell>
                                     </TableRow>
                                 ))

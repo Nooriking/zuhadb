@@ -1,6 +1,7 @@
 ﻿// resources/js/pages/investments/index.tsx
 
 import { FilterField, IndexFilters, filterControlClass } from '@/components/index-filters';
+import { formatTotals, type MoneyTotals } from '@/lib/currencies';
 import { DeleteAction, RowActions, ViewAction } from '@/components/row-actions';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
@@ -54,6 +55,8 @@ interface Props {
         total_available_afn: string;
         total_allocated_afn: string;
         total_profit_afn: string;
+        capital_totals?: MoneyTotals;
+        profit_totals?: MoneyTotals;
     };
 }
 
@@ -145,7 +148,8 @@ export default function InvestmentsIndex({ investments, investors, filters, stat
                     </div>
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
                         <p className="text-xs text-gray-500">Total Capital</p>
-                        <p className="text-xl font-bold">{formatPrice(stats.total_capital_afn)} AFN</p>
+                        <p className="text-xl font-bold">{formatTotals(stats.capital_totals) || `${formatPrice(stats.total_capital_afn)} AFN`}</p>
+                        <p className="text-muted-foreground text-xs">Ledger {formatPrice(stats.total_capital_afn)} AFN</p>
                     </div>
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
                         <p className="text-xs text-gray-500">Available</p>
@@ -153,7 +157,8 @@ export default function InvestmentsIndex({ investments, investors, filters, stat
                     </div>
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
                         <p className="text-xs text-gray-500">Total Profit</p>
-                        <p className="text-xl font-bold text-purple-600">{formatPrice(stats.total_profit_afn)} AFN</p>
+                        <p className="text-xl font-bold text-purple-600">{formatTotals(stats.profit_totals) || `${formatPrice(stats.total_profit_afn)} AFN`}</p>
+                        <p className="text-muted-foreground text-xs">Ledger {formatPrice(stats.total_profit_afn)} AFN</p>
                     </div>
                 </div>
 

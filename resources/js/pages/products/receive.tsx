@@ -20,6 +20,10 @@ interface VariantOption {
     sale_price_afn: string;
     stock_quantity: number;
     barcodes: string[];
+    base_unit_name?: string | null;
+    pack_unit_name?: string | null;
+    units_per_pack?: string | number | null;
+    conversion_label?: string | null;
 }
 
 interface InvestorOption {
@@ -62,6 +66,7 @@ export default function ProductReceive({ variants, investors, investments = [], 
     const [form, setForm] = useState({
         variant_id: variants[0] ? String(variants[0].id) : '',
         quantity: '1',
+        quantity_unit: 'base' as 'base' | 'pack',
         purchase_price_afn: variants[0] ? String(variants[0].purchase_price_afn || '') : '',
         sale_price_afn: variants[0] ? String(variants[0].sale_price_afn || '') : '',
         funding_source: 'office' as 'office' | 'investor',
@@ -83,16 +88,15 @@ export default function ProductReceive({ variants, investors, investments = [], 
 
     const selected = useMemo(() => list.find((v) => String(v.id) === form.variant_id), [list, form.variant_id]);
     const isInvestor = form.funding_source === 'investor';
-    const rate = parseFloat(form.exchange_rate) || 0;
     const qty = parseInt(form.quantity, 10) || 0;
     const purchasePrice = parseFloat(form.purchase_price_afn) || 0;
     const profitAfn = parseFloat(form.profit_per_unit) || 0;
-    const profitUsd = isInvestor && rate > 0 ? profitAfn / rate : 0;
-    const totalCostAfn = purchasePrice * qty;
-    const totalCostUsd = rate > 0 ? totalCostAfn / rate : 0;
-    const totalProfitUsd = profitUsd * qty;
+    const packFactor = selected ? Number(selected.units_per_pack) : 0;
+    const hasPack = Boolean(selected?.base_unit_name && selected?.pack_unit_name && packFactor > 0);
+    const baseQty = form.quantity_unit === 'pack' && hasPack ? qty * packFactor : qty;
+    const totalCostAfn = purchasePrice * baseQty;
+    const totalProfitAfn = profitAfn * baseQty;
 
-    /* ═══════════ Investor Investments ═══════════ */
     const investorInvestments = useMemo(() => {
         if (!form.investor_id) return [];
         return investments.filter((row) => String(row.investor_id) === String(form.investor_id));
@@ -102,9 +106,8 @@ export default function ProductReceive({ variants, investors, investments = [], 
         () => investments.find((row) => String(row.id) === String(form.investment_id)),
         [investments, form.investment_id],
     );
-
-    const availableUsd = selectedInvestment ? parseFloat(selectedInvestment.available_amount_afn) || 0 : 0;
-    const remainingAfter = availableUsd - totalCostUsd;
+    const availableAfn = selectedInvestment ? parseFloat(selectedInvestment.available_amount_afn) || 0 : 0;
+    const remainingAfter = availableAfn - totalCostAfn;
 
     /* ═══════════════════════════════════════════════════════
      |  ✅ LIVE VALIDATION
@@ -133,11 +136,8 @@ export default function ProductReceive({ variants, investors, investments = [], 
             if (!form.investment_id) {
                 problems.push('Select an investment pot');
             }
-            if (rate <= 0) {
-                problems.push('Enter the USD → AFN exchange rate');
-            }
-            if (rate > 0 && totalCostUsd > availableUsd + 0.01) {
-                problems.push(`Insufficient capital (need ${money(totalCostUsd)} USD, have ${money(availableUsd)} USD)`);
+            if (totalCostAfn > availableAfn + 0.01) {
+                problems.push(`Insufficient capital (need ${money(totalCostAfn)} AFN, have ${money(availableAfn)} AFN)`);
             }
         }
 
@@ -150,9 +150,8 @@ export default function ProductReceive({ variants, investors, investments = [], 
         isInvestor,
         qty,
         purchasePrice,
-        rate,
-        totalCostUsd,
-        availableUsd,
+        totalCostAfn,
+        availableAfn,
     ]);
 
     const canSubmit = liveProblems.length === 0;
@@ -282,13 +281,8 @@ export default function ProductReceive({ variants, investors, investments = [], 
                 window.scrollTo({ top: 0, behavior: 'smooth' });
                 return;
             }
-            if (rate <= 0) {
-                setScanMessage('❌ Please enter the USD to AFN exchange rate.');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-                return;
-            }
-            if (totalCostUsd > availableUsd + 0.01) {
-                setScanMessage(`❌ This stock costs ${money(totalCostUsd)} USD but only ${money(availableUsd)} USD is available.`);
+            if (totalCostAfn > availableAfn + 0.01) {
+                setScanMessage(`❌ This stock costs ${money(totalCostAfn)} AFN but only ${money(availableAfn)} AFN is available.`);
                 window.scrollTo({ top: 0, behavior: 'smooth' });
                 return;
             }
@@ -471,7 +465,7 @@ export default function ProductReceive({ variants, investors, investments = [], 
                                                             <div className="flex flex-col items-start py-0.5">
                                                                 <span className="font-mono text-sm">{row.investment_number}</span>
                                                                 <span className="text-muted-foreground text-xs">
-                                                                    Available {money(parseFloat(row.available_amount_afn))} USD
+                                                                    Available {money(parseFloat(row.available_amount_afn))} AFN
                                                                 </span>
                                                             </div>
                                                         </SelectItem>
@@ -497,50 +491,31 @@ export default function ProductReceive({ variants, investors, investments = [], 
                                             placeholder="0"
                                         />
                                         <p className="text-muted-foreground text-xs">
-                                            {profitUsd > 0
-                                                ? `${money(profitUsd)} USD per unit will be owed when this stock sells.`
-                                                : 'Enter profit in AFN; it is converted with the rate below.'}
+                                            Entered and stored in AFN (ledger). This is the investor share per base unit, not the store margin.
                                         </p>
                                         {errors.profit_per_unit && <p className="text-destructive text-xs">{errors.profit_per_unit}</p>}
                                     </div>
-
-                                    <div className="space-y-2">
-                                        <Label>
-                                            Exchange rate (USD → AFN) <span className="text-destructive">*</span>
-                                        </Label>
-                                        <Input
-                                            type="number"
-                                            min="0"
-                                            step="0.01"
-                                            value={form.exchange_rate}
-                                            onChange={(e) => setForm((prev) => ({ ...prev, exchange_rate: e.target.value }))}
-                                            placeholder="How many AFN for 1 USD"
-                                            required={isInvestor}
-                                        />
-                                        {errors.exchange_rate && <p className="text-destructive text-xs">{errors.exchange_rate}</p>}
-                                    </div>
                                 </div>
 
-                                {selectedInvestment && rate > 0 && qty > 0 && (
+                                {selectedInvestment && qty > 0 && (
                                     <div className="bg-background grid gap-3 rounded-lg border p-3 text-sm sm:grid-cols-4">
                                         <div>
                                             <p className="text-muted-foreground text-xs">Stock cost</p>
                                             <p className="font-mono font-semibold">{money(totalCostAfn)} AFN</p>
-                                            <p className="text-muted-foreground font-mono text-xs">{money(totalCostUsd)} USD</p>
                                         </div>
                                         <div>
                                             <p className="text-muted-foreground text-xs">Available now</p>
-                                            <p className="font-mono font-semibold">{money(availableUsd)} USD</p>
+                                            <p className="font-mono font-semibold">{money(availableAfn)} AFN</p>
                                         </div>
                                         <div>
                                             <p className="text-muted-foreground text-xs">After this receive</p>
                                             <p className={`font-mono font-semibold ${remainingAfter < 0 ? 'text-destructive' : 'text-emerald-700'}`}>
-                                                {money(remainingAfter)} USD
+                                                {money(remainingAfter)} AFN
                                             </p>
                                         </div>
                                         <div>
                                             <p className="text-muted-foreground text-xs">Investor profit total</p>
-                                            <p className="font-mono font-semibold text-emerald-700">{money(totalProfitUsd)} USD</p>
+                                            <p className="font-mono font-semibold text-emerald-700">{money(totalProfitAfn)} AFN</p>
                                             <p className="text-muted-foreground text-xs">owed when sold</p>
                                         </div>
                                     </div>
@@ -592,7 +567,11 @@ export default function ProductReceive({ variants, investors, investments = [], 
                                     <p className="text-muted-foreground text-xs">Current stock</p>
                                     <p className="text-sm font-medium">
                                         {selected.stock_quantity}
-                                        <span className="text-muted-foreground"> → {selected.stock_quantity + qty}</span>
+                                        <span className="text-muted-foreground">
+                                            {' '}
+                                            → {selected.stock_quantity + baseQty}
+                                            {selected.base_unit_name ? ` ${selected.base_unit_name}` : ''}
+                                        </span>
                                     </p>
                                 </div>
                                 {selected.barcodes.length > 0 && (
@@ -611,7 +590,14 @@ export default function ProductReceive({ variants, investors, investments = [], 
                     <h2 className="mb-3 text-sm font-semibold">Quantity & prices</h2>
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                         <div className="space-y-2">
-                            <Label>Quantity</Label>
+                            <Label>
+                                Quantity
+                                {hasPack
+                                    ? ` (${form.quantity_unit === 'pack' ? selected?.pack_unit_name : selected?.base_unit_name})`
+                                    : selected?.base_unit_name
+                                      ? ` (${selected.base_unit_name})`
+                                      : ''}
+                            </Label>
                             <Input
                                 type="number"
                                 min="1"
@@ -619,6 +605,24 @@ export default function ProductReceive({ variants, investors, investments = [], 
                                 onChange={(e) => setForm((prev) => ({ ...prev, quantity: e.target.value }))}
                                 required
                             />
+                            {hasPack ? (
+                                <Select
+                                    value={form.quantity_unit}
+                                    onValueChange={(val) =>
+                                        setForm((prev) => ({ ...prev, quantity_unit: val as 'base' | 'pack' }))
+                                    }
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="base">{selected?.base_unit_name} (base)</SelectItem>
+                                        <SelectItem value="pack">
+                                            {selected?.pack_unit_name} ({selected?.conversion_label})
+                                        </SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            ) : null}
                         </div>
                         <div className="space-y-2">
                             <Label>Purchase price (AFN)</Label>
@@ -694,7 +698,7 @@ export default function ProductReceive({ variants, investors, investments = [], 
                                     step="0.01"
                                     value={form.exchange_rate}
                                     onChange={(e) => setForm((prev) => ({ ...prev, exchange_rate: e.target.value }))}
-                                    placeholder="USD to AFN"
+                                    placeholder="Optional historical note"
                                 />
                             </div>
                         )}

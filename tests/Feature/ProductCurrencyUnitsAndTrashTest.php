@@ -6,13 +6,14 @@ use App\Models\Currency;
 use App\Models\Product;
 use App\Models\ProductVariant;
 use App\Models\User;
+use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 
 beforeEach(function () {
+    $this->withoutMiddleware(ValidateCsrfToken::class);
     $branch = Branch::factory()->create();
     $this->admin = User::factory()->create([
         'role' => User::ROLE_ADMIN,
         'branch_id' => $branch->id,
-        'email_verified_at' => now(),
     ]);
 });
 

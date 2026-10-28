@@ -1365,7 +1365,12 @@ export default function ProductsEdit({
                                             </div>
 
                                             <div className="space-y-2">
-                                                <Label>Quantity</Label>
+                                                <Label>
+                                                    Quantity
+                                                    {form.base_unit_name
+                                                        ? ` (${p.quantity_unit === 'pack' ? form.pack_unit_name || 'pack' : form.base_unit_name})`
+                                                        : ''}
+                                                </Label>
                                                 <Input
                                                     type="number"
                                                     min="1"
@@ -1378,6 +1383,22 @@ export default function ProductsEdit({
                                                     }}
                                                     className={errors[`purchases.${pIndex}.quantity`] ? 'border-destructive' : ''}
                                                 />
+                                                {form.base_unit_name && form.pack_unit_name && Number(form.units_per_pack) > 0 ? (
+                                                    <Select
+                                                        value={p.quantity_unit}
+                                                        onValueChange={(val) => updatePurchase(pIndex, 'quantity_unit', val as 'base' | 'pack')}
+                                                    >
+                                                        <SelectTrigger>
+                                                            <SelectValue />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="base">{form.base_unit_name} (base)</SelectItem>
+                                                            <SelectItem value="pack">
+                                                                {form.pack_unit_name} (1 = {form.units_per_pack} {form.base_unit_name})
+                                                            </SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                ) : null}
                                                 {errors[`purchases.${pIndex}.quantity`] && (
                                                     <p className="text-destructive text-xs">{errors[`purchases.${pIndex}.quantity`]}</p>
                                                 )}
@@ -1395,25 +1416,23 @@ export default function ProductsEdit({
                                         {isInvestor ? (
                                             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                                                 <div className="space-y-2">
-                                                    <Label>
-                                                        Investor Profit / Unit (AFN) <span className="text-destructive">*</span>
-                                                    </Label>
-                                                    <Input
-                                                        type="number"
-                                                        min="0"
-                                                        onKeyDown={preventNegative}
-                                                        value={p.profit_per_unit}
-                                                        onChange={(e) => {
-                                                            const val = e.target.value;
+                                                    <MoneyField
+                                                        label="Investor profit / unit"
+                                                        required
+                                                        amount={p.profit_per_unit}
+                                                        currencyId={p.profit_currency_id || ledgerCurrencyId}
+                                                        currencies={currencies}
+                                                        onAmountChange={(val) => {
                                                             if (toNum(val) < 0) return;
                                                             updatePurchase(pIndex, 'profit_per_unit', val);
                                                             recalcPurchase(pIndex);
                                                         }}
-                                                        className={errors[`purchases.${pIndex}.profit_per_unit`] ? 'border-destructive' : ''}
+                                                        onCurrencyChange={(val) => updatePurchase(pIndex, 'profit_currency_id', val)}
+                                                        error={
+                                                            errors[`purchases.${pIndex}.profit_per_unit`] ||
+                                                            errors[`purchases.${pIndex}.profit_currency_id`]
+                                                        }
                                                     />
-                                                    {errors[`purchases.${pIndex}.profit_per_unit`] && (
-                                                        <p className="text-destructive text-xs">{errors[`purchases.${pIndex}.profit_per_unit`]}</p>
-                                                    )}
                                                 </div>
 
                                                 <div className="space-y-2">
@@ -1429,7 +1448,7 @@ export default function ProductsEdit({
                                                 <div className="space-y-2">
                                                     <Label>Line Profit (auto)</Label>
                                                     <div className="flex h-10 items-center rounded-md border border-dashed bg-emerald-50 px-3 font-mono text-sm text-emerald-700">
-                                                        {p.line_profit} <span className="ml-1 text-xs">USD</span>
+                                                        {p.line_profit} <span className="ml-1 text-xs">AFN</span>
                                                     </div>
                                                     <p className="text-muted-foreground text-xs">
                                                         = {p.profit_per_unit} × {p.quantity}

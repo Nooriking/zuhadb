@@ -1,6 +1,7 @@
 // resources/js/pages/investor-profit-entries/index.tsx
 
 import { FilterField, IndexFilters, filterControlClass } from '@/components/index-filters';
+import { formatTotals, type MoneyTotals } from '@/lib/currencies';
 import { CancelAction, PayAction, RowActions, ViewAction } from '@/components/row-actions';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
@@ -49,6 +50,7 @@ interface Props {
         total_profit_afn: string;
         pending_profit: string;
         paid_profit: string;
+        profit_totals?: MoneyTotals;
     };
 }
 
@@ -101,7 +103,7 @@ export default function InvestorProfitEntriesIndex({ entries, investors, investm
     };
 
     const handleMarkPaid = (entry: Entry) => {
-        if (!confirm(`Mark this entry as paid? Amount: ${formatPrice(entry.profit_amount_afn)} USD`)) return;
+        if (!confirm(`Mark this entry as paid? Amount: ${formatPrice(entry.profit_amount_currency ?? entry.profit_amount_afn)} ${entry.currency?.code || 'AFN'}`)) return;
 
         router.patch(`/investor-profit-entries/${entry.id}/mark-as-paid`, {}, { preserveScroll: true });
     };
@@ -170,16 +172,17 @@ export default function InvestorProfitEntriesIndex({ entries, investors, investm
                 <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
                         <p className="text-xs text-gray-500">Total Profit</p>
-                        <p className="text-xl font-bold">{formatPrice(stats.total_profit_afn)} USD</p>
+                        <p className="text-xl font-bold">{formatTotals(stats.profit_totals) || `${formatPrice(stats.total_profit_afn)} AFN`}</p>
+                        <p className="text-muted-foreground text-xs">Ledger {formatPrice(stats.total_profit_afn)} AFN</p>
                     </div>
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
                         <p className="text-xs text-gray-500">Pending</p>
-                        <p className="text-xl font-bold text-yellow-600">{formatPrice(stats.pending_profit)} USD</p>
+                        <p className="text-xl font-bold text-yellow-600">{formatPrice(stats.pending_profit)} AFN</p>
                         <p className="text-xs text-gray-500">{stats.pending_count} entries</p>
                     </div>
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
                         <p className="text-xs text-gray-500">Paid</p>
-                        <p className="text-xl font-bold text-green-600">{formatPrice(stats.paid_profit)} USD</p>
+                        <p className="text-xl font-bold text-green-600">{formatPrice(stats.paid_profit)} AFN</p>
                         <p className="text-xs text-gray-500">{stats.paid_count} entries</p>
                     </div>
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
@@ -300,7 +303,11 @@ export default function InvestorProfitEntriesIndex({ entries, investors, investm
                                         <td className="px-4 py-3 text-center font-mono">{entry.quantity}</td>
                                         <td className="px-4 py-3 text-right font-mono text-xs">{formatPrice(entry.profit_per_unit_afn)}</td>
                                         <td className="px-4 py-3 text-right font-mono font-semibold text-green-600">
-                                            {formatPrice(entry.profit_amount_afn)} USD
+                                            {formatPrice(entry.profit_amount_currency ?? entry.profit_amount_afn)}{' '}
+                                            {entry.currency?.code || 'AFN'}
+                                            {entry.currency?.code && entry.currency.code !== 'AFN' ? (
+                                                <div className="text-muted-foreground text-xs font-normal">{formatPrice(entry.profit_amount_afn)} AFN</div>
+                                            ) : null}
                                         </td>
                                         <td className="px-4 py-3">{getStatusBadge(entry.status)}</td>
                                         <td className="px-4 py-3">

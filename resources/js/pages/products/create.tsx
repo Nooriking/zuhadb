@@ -1185,19 +1185,19 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                                     </div>
 
                                                     <div className="space-y-2 md:col-span-2">
-                                                        <Label>
-                                                            USD to AFN <span className="text-destructive">*</span>
-                                                        </Label>
+                                                        <Label>Optional USD snapshot rate</Label>
                                                         <Input
                                                             type="number"
-                                                            min="0.01"
+                                                            min="0"
                                                             step="0.01"
                                                             value={p.exchange_rate}
                                                             onChange={(e) => updatePurchase(pIndex, 'exchange_rate', e.target.value)}
-                                                            placeholder="e.g. 64"
+                                                            placeholder="Optional historical USD→AFN note"
                                                             className={errors[`purchases.${pIndex}.exchange_rate`] ? 'border-destructive' : ''}
                                                         />
-                                                        <p className="text-muted-foreground text-xs">Dollar rate for this purchase</p>
+                                                        <p className="text-muted-foreground text-xs">
+                                                            Catalog currency rates convert money. This field is only an optional purchase snapshot.
+                                                        </p>
                                                         {errors[`purchases.${pIndex}.exchange_rate`] && (
                                                             <p className="text-destructive text-xs">{errors[`purchases.${pIndex}.exchange_rate`]}</p>
                                                         )}

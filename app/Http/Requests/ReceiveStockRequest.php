@@ -40,9 +40,8 @@ class ReceiveStockRequest extends FormRequest
             ],
             'exchange_rate' => [
                 'nullable',
-                Rule::requiredIf(fn () => $this->input('funding_source') === 'investor'),
                 'numeric',
-                'min:0.01',
+                'min:0',
                 'max:'.SafeData::MONEY_MAX,
             ],
             'profit_per_unit' => SafeData::money(false, 0),

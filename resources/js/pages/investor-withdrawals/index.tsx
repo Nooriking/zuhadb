@@ -210,7 +210,7 @@ export default function InvestorWithdrawalsIndex({ withdrawals, investors, filte
                             <p className="text-muted-foreground text-xs">Total Paid Amount</p>
                             <DollarSign className="h-4 w-4 text-purple-500" />
                         </div>
-                        <p className="mt-1 text-2xl font-bold text-purple-600">{formatPrice(stats.total_amount_paid_afn)} USD</p>
+                        <p className="mt-1 text-2xl font-bold text-purple-600">{formatPrice(stats.total_amount_paid_afn)} AFN</p>
                     </div>
                 </div>
 
@@ -287,7 +287,7 @@ export default function InvestorWithdrawalsIndex({ withdrawals, investors, filte
                                 <TableHead>Date</TableHead>
                                 <TableHead>Type</TableHead>
                                 <TableHead className="text-right">Amount</TableHead>
-                                <TableHead className="text-right">USD</TableHead>
+                                <TableHead className="text-right">Ledger (AFN)</TableHead>
                                 <TableHead>Status</TableHead>
                                 <TableHead>Approved By</TableHead>
                                 <TableHead className="text-center">Actions</TableHead>
@@ -316,9 +316,9 @@ export default function InvestorWithdrawalsIndex({ withdrawals, investors, filte
                                         <TableCell className="text-xs">{formatDate(w.withdrawal_date)}</TableCell>
                                         <TableCell>{getTypeBadge(w.type)}</TableCell>
                                         <TableCell className="text-right font-mono font-semibold">
-                                            {formatPrice(w.amount_afn, 2)} USD
+                                            {formatPrice(w.amount_currency ?? w.amount_afn, 2)} {w.currency?.code || 'AFN'}
                                         </TableCell>
-                                        <TableCell className="text-right font-mono text-xs text-gray-600">{formatPrice(w.amount_afn)} USD</TableCell>
+                                        <TableCell className="text-right font-mono text-xs text-gray-600">{formatPrice(w.amount_afn)} AFN</TableCell>
                                         <TableCell>{getStatusBadge(w.status)}</TableCell>
                                         <TableCell className="text-xs">{w.approved_by?.name || '—'}</TableCell>
                                         <TableCell>

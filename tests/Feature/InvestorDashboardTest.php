@@ -91,10 +91,10 @@ test('admin investor dashboard capital matches investor wallets and respects the
         ->assertOk()
         ->assertInertia(fn ($page) => $page
             ->component('investors/dashboard')
-            ->where('kpis.total_capital', $expectedCapital)
-            ->where('kpis.total_profit', $expectedPeriodProfit)
-            ->where('kpis.lifetime_profit', $expectedLifetimeProfit)
-            ->where('kpis.remaining_profit', $money->reportAmount(90))
+            ->where('kpis.total_capital', fn ($value) => (float) $value === (float) $expectedCapital)
+            ->where('kpis.total_profit', fn ($value) => (float) $value === (float) $expectedPeriodProfit)
+            ->where('kpis.lifetime_profit', fn ($value) => (float) $value === (float) $expectedLifetimeProfit)
+            ->where('kpis.remaining_profit', fn ($value) => (float) $value === (float) $money->reportAmount(90))
             ->where('reporting.currency.code', fn ($code) => is_string($code) && $code !== '')
         );
 
@@ -118,7 +118,7 @@ test('investor users only see their own dashboard figures', function () {
         ->assertInertia(fn ($page) => $page
             ->component('investors/dashboard')
             ->where('own', true)
-            ->where('kpis.total_capital', $money->reportAmount(1400))
+            ->where('kpis.total_capital', fn ($value) => (float) $value === (float) $money->reportAmount(1400))
             ->where('counters.total_investors', 1)
         );
 });
@@ -127,16 +127,16 @@ test('dashboard converts ledger totals when a valid default rate exists', functi
     $this->actingAs(adminUser());
     seedInvestorBooks();
 
-    $afn = Currency::query()->where('code', 'AFN')->first()
-        ?? Currency::factory()->create(['code' => 'AFN', 'is_base' => true, 'rate_to_default' => '1']);
-    $usd = Currency::factory()->create([
-        'code' => 'USD',
-        'name' => 'US Dollar',
-        'symbol' => '$',
-        'rate_to_default' => '70',
-        'is_base' => false,
-        'status' => 'active',
-    ]);
+    $usd = Currency::query()->where('code', 'USD')->first()
+        ?? Currency::factory()->create([
+            'code' => 'USD',
+            'name' => 'US Dollar',
+            'symbol' => '$',
+            'rate_to_default' => '70',
+            'is_base' => false,
+            'status' => 'active',
+        ]);
+    $usd->update(['rate_to_default' => '70', 'status' => 'active', 'trash' => false]);
     app(CurrencyService::class)->makeDefault($usd);
 
     $expected = app(CurrencyService::class)->reportAmount(1900);
@@ -156,18 +156,15 @@ test('ledger amounts stay unconverted when the exchange rate is missing', functi
     $this->actingAs(adminUser());
     seedInvestorBooks();
 
-    $usd = Currency::factory()->create([
-        'code' => 'USD',
-        'rate_to_default' => '0',
-        'is_base' => true,
-        'status' => 'active',
-    ]);
-    Currency::query()->where('id', '!=', $usd->id)->update(['is_base' => false, 'rate_to_default' => '0']);
+    Currency::query()->update(['is_base' => false, 'rate_to_default' => '0']);
+    $ledger = Currency::query()->where('code', 'AFN')->first()
+        ?? Currency::factory()->create(['code' => 'AFN', 'status' => 'active']);
+    $ledger->update(['is_base' => true, 'rate_to_default' => '0', 'status' => 'active', 'trash' => false]);
 
     $this->get('/investors/dashboard')
         ->assertOk()
         ->assertInertia(fn ($page) => $page
             ->where('reporting.converts_from_ledger', false)
-            ->where('kpis.total_capital', 1900.0)
+            ->where('kpis.total_capital', fn ($value) => (float) $value === 1900.0)
         );
 });

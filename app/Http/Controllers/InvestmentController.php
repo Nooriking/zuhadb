@@ -410,7 +410,7 @@ class InvestmentController extends Controller
     public function trash(): Response
     {
         $investments = Investment::onlyTrashed()
-            ->with(['investor:id,full_name', 'creator:id,name'])
+            ->with(['investor:id,full_name', 'creator:id,name', 'currency:id,code,name,symbol'])
             ->orderByDesc('updated_at')
             ->paginate(15);
 
