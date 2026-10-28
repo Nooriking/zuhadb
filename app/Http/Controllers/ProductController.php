@@ -16,6 +16,8 @@ use App\Models\ProductPriceHistory;
 use App\Models\ActivityNotification;
 use App\Models\ProductVariant;
 use App\Models\User;
+use App\Models\Currency;
+use App\Services\CurrencyService;
 use App\Services\PurchaseService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -31,6 +33,7 @@ class ProductController extends Controller
 {
     public function __construct(
         private readonly PurchaseService $purchases,
+        private readonly CurrencyService $currencies,
     ) {}
 
     /**
@@ -189,6 +192,7 @@ class ProductController extends Controller
                 ->select('id', 'name')
                 ->orderBy('name')
                 ->get(),
+            'currencies' => Currency::formOptions(),
         ]);
     }
 
@@ -320,6 +324,7 @@ class ProductController extends Controller
                 unset($variantData['barcodes']);
 
                 $variantData = $this->normalizeVariantData($variantData);
+                $variantData = $this->applyVariantMoney($variantData, "variants.{$index}");
                 $variantData['product_id'] = $product->id;
                 $variantData['user_id']    = Auth::id();
 
@@ -353,9 +358,16 @@ class ProductController extends Controller
                         ->store('bills', 'public');
                 }
 
-                $qty          = (float) ($purchaseData['quantity'] ?? 1);
+                $qty          = (float) $product->quantityToBaseUnits(
+                    (int) ($purchaseData['quantity'] ?? 1),
+                    (string) ($purchaseData['quantity_unit'] ?? 'base')
+                );
                 $exchangeRate = (float) ($purchaseData['exchange_rate'] ?? 0);
-                $profitUnit   = (float) ($purchaseData['profit_per_unit'] ?? 0);
+                $profitUnit   = $this->profitToLedger(
+                    (float) ($purchaseData['profit_per_unit'] ?? 0),
+                    $purchaseData['profit_currency_id'] ?? null,
+                    "purchases.{$index}.profit_currency_id"
+                );
 
                 $investorId = $purchaseData['investor_id'] ?? null;
                 if (empty($investorId) || $investorId === 'store' || $investorId === 'none') {
@@ -555,6 +567,13 @@ class ProductController extends Controller
                 ->select('id', 'name')
                 ->orderBy('name')
                 ->get(),
+            'currencies' => Currency::formOptions(
+                $product->variants->flatMap(fn ($variant) => [
+                    $variant->purchase_currency_id,
+                    $variant->sale_currency_id,
+                    $variant->wholesale_currency_id,
+                ])->all()
+            ),
         ]);
     }
 
@@ -592,6 +611,7 @@ class ProductController extends Controller
                 unset($variantData['id']);
 
                 $variantData = $this->normalizeVariantData($variantData);
+                $variantData = $this->applyVariantMoney($variantData, "variants.{$index}");
 
                 if ($variantId) {
                     $variant = ProductVariant::where('id', $variantId)
@@ -706,7 +726,7 @@ class ProductController extends Controller
 
     public function restore(int $id): RedirectResponse
     {
-        $product = Product::where('trash', true)->findOrFail($id);
+        $product = Product::onlyTrash()->whereNull('variant_id')->findOrFail($id);
 
         DB::transaction(function () use ($product) {
             $product->update(['trash' => false, 'user_id' => Auth::id()]);
@@ -737,7 +757,8 @@ class ProductController extends Controller
 
     public function forceDelete(int $id): RedirectResponse
     {
-        $product = Product::where('trash', true)
+        $product = Product::onlyTrash()
+            ->whereNull('variant_id')
             ->with(['variants.barcodes', 'variants'])
             ->findOrFail($id);
 
@@ -1070,6 +1091,51 @@ class ProductController extends Controller
         return $variantData;
     }
 
+    /**
+     * Store entered amounts in their currencies and write AFN ledger snapshots.
+     *
+     * @param  array<string, mixed>  $variantData
+     * @return array<string, mixed>
+     */
+    private function applyVariantMoney(array $variantData, string $errorPrefix): array
+    {
+        $pairs = [
+            'purchase' => ['amount' => 'purchase_amount', 'currency' => 'purchase_currency_id', 'ledger' => 'purchase_price_afn'],
+            'sale' => ['amount' => 'sale_amount', 'currency' => 'sale_currency_id', 'ledger' => 'sale_price_afn'],
+            'wholesale' => ['amount' => 'wholesale_amount', 'currency' => 'wholesale_currency_id', 'ledger' => 'wholesale_price_afn'],
+        ];
+
+        foreach ($pairs as $pair) {
+            $entered = $variantData[$pair['amount']] ?? $variantData[$pair['ledger']] ?? 0;
+            $variantData[$pair['amount']] = $entered === '' || $entered === null ? 0 : $entered;
+            $currencyId = $variantData[$pair['currency']] ?? null;
+
+            if (empty($currencyId)) {
+                $variantData[$pair['ledger']] = $variantData[$pair['amount']];
+                $variantData[$pair['currency']] = null;
+
+                continue;
+            }
+
+            $currency = $this->currencies->requireActive((int) $currencyId, $errorPrefix.'.'.$pair['currency']);
+            $variantData[$pair['ledger']] = $this->currencies->toLedger((string) $variantData[$pair['amount']], $currency);
+            $variantData[$pair['currency']] = $currency->id;
+        }
+
+        return $variantData;
+    }
+
+    private function profitToLedger(float $amount, mixed $currencyId, string $field): float
+    {
+        if ($amount <= 0 || empty($currencyId)) {
+            return $amount;
+        }
+
+        $currency = $this->currencies->requireActive((int) $currencyId, $field);
+
+        return (float) $this->currencies->toLedger((string) $amount, $currency);
+    }
+
     private function syncBarcodes(ProductVariant $variant, array $barcodes): void
     {
         $existing = ProductBarcode::where('variant_id', $variant->id)
@@ -1170,11 +1236,22 @@ class ProductController extends Controller
             }
 
             $purchaseId = $purchaseData['id'] ?? null;
-            unset($purchaseData['id'], $purchaseData['variant_index']);
+            $quantityUnit = (string) ($purchaseData['quantity_unit'] ?? 'base');
+            $profitCurrencyId = $purchaseData['profit_currency_id'] ?? null;
+            unset(
+                $purchaseData['id'],
+                $purchaseData['variant_index'],
+                $purchaseData['quantity_unit'],
+                $purchaseData['profit_currency_id']
+            );
 
-            $qty          = (float) ($purchaseData['quantity'] ?? 1);
+            $qty          = (float) $product->quantityToBaseUnits((int) ($purchaseData['quantity'] ?? 1), $quantityUnit);
             $exchangeRate = (float) ($purchaseData['exchange_rate'] ?? 0);
-            $profitUnit   = (float) ($purchaseData['profit_per_unit'] ?? 0);
+            $profitUnit   = $this->profitToLedger(
+                (float) ($purchaseData['profit_per_unit'] ?? 0),
+                $profitCurrencyId,
+                "purchases.{$index}.profit_currency_id"
+            );
 
             $investorId = $purchaseData['investor_id'] ?? null;
             if (empty($investorId) || $investorId === 'store' || $investorId === 'none') {

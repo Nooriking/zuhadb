@@ -21,9 +21,16 @@ class Investment extends Model
         'source_type',              // ✅ اضافه شد — cash | goods
         'parent_investment_id',
         'investment_number',
+        'currency_id',
+        'currency_code',
+        'currency_symbol',
+        'exchange_rate',
+        'capital_amount_currency',
         'capital_amount_afn',
+        'available_amount_currency',
         'available_amount_afn',
         'allocated_amount_afn',
+        'profit_amount_currency',
         'profit_amount_afn',
         'withdrawn_amount_afn',
         'investment_date',
@@ -35,10 +42,14 @@ class Investment extends Model
     ];
 
     protected $casts = [
-        'capital_amount_afn'    => 'decimal:2',
-        'available_amount_afn'  => 'decimal:2',
-        'allocated_amount_afn'  => 'decimal:2',
-        'profit_amount_afn'     => 'decimal:2',
+        'exchange_rate'             => 'decimal:8',
+        'capital_amount_currency'   => 'decimal:2',
+        'capital_amount_afn'        => 'decimal:2',
+        'available_amount_currency' => 'decimal:2',
+        'available_amount_afn'      => 'decimal:2',
+        'allocated_amount_afn'      => 'decimal:2',
+        'profit_amount_currency'    => 'decimal:2',
+        'profit_amount_afn'         => 'decimal:2',
         'withdrawn_amount_afn'  => 'decimal:2',
         'investment_date'       => 'date',
         'trash'                 => 'boolean',
@@ -90,6 +101,11 @@ class Investment extends Model
     public function investor(): BelongsTo
     {
         return $this->belongsTo(Investor::class, 'investor_id');
+    }
+
+    public function currency(): BelongsTo
+    {
+        return $this->belongsTo(Currency::class, 'currency_id');
     }
 
     public function parent(): BelongsTo

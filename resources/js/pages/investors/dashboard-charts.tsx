@@ -45,12 +45,15 @@ export default function InvestorDashboardCharts({
     profitByInvestor,
     withdrawalBreakdown,
     investmentStatus,
+    currencyCode = '',
 }: {
     capitalTrend: Point[];
     profitByInvestor: NameValue[];
     withdrawalBreakdown: NameValue[];
     investmentStatus: NameValue[];
+    currencyCode?: string;
 }) {
+    const moneyLabel = (v: number) => `${fmt(v)}${currencyCode ? ` ${currencyCode}` : ''}`;
     return (
         <>
             <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -75,7 +78,7 @@ export default function InvestorDashboardCharts({
                                     <XAxis dataKey="date" tick={{ fontSize: 12 }} />
                                     <YAxis tickFormatter={fmtShort} tick={{ fontSize: 12 }} />
                                     <Tooltip
-                                        formatter={(v) => `${fmt(Number(v))} USD`}
+                                        formatter={(v) => moneyLabel(Number(v))}
                                         contentStyle={{ borderRadius: 12, border: '1px solid #e5e7eb' }}
                                     />
                                     <Legend />
@@ -121,7 +124,7 @@ export default function InvestorDashboardCharts({
                                         <Cell key={i} fill={COLORS[i % COLORS.length]} />
                                     ))}
                                 </Pie>
-                                <Tooltip formatter={(v) => `${fmt(Number(v))} USD`} />
+                                <Tooltip formatter={(v) => moneyLabel(Number(v))} />
                             </PieChart>
                         </ResponsiveContainer>
                     )}
@@ -130,40 +133,48 @@ export default function InvestorDashboardCharts({
 
             <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
                 <SectionCard title="Withdrawal Breakdown">
-                    <ResponsiveContainer width="100%" height={260}>
-                        <PieChart>
-                            <Pie
-                                data={withdrawalBreakdown}
-                                dataKey="value"
-                                nameKey="name"
-                                cx="50%"
-                                cy="50%"
-                                outerRadius={100}
-                                label={({ name, value }) => `${name}: ${fmtShort(Number(value))}`}
-                            >
-                                {withdrawalBreakdown.map((_, i) => (
-                                    <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                                ))}
-                            </Pie>
-                            <Tooltip formatter={(v) => `${fmt(Number(v))} USD`} />
-                        </PieChart>
-                    </ResponsiveContainer>
+                    {withdrawalBreakdown.length === 0 ? (
+                        <EmptyState message="No withdrawals in this date range" />
+                    ) : (
+                        <ResponsiveContainer width="100%" height={260}>
+                            <PieChart>
+                                <Pie
+                                    data={withdrawalBreakdown}
+                                    dataKey="value"
+                                    nameKey="name"
+                                    cx="50%"
+                                    cy="50%"
+                                    outerRadius={100}
+                                    label={({ name, value }) => `${name}: ${fmtShort(Number(value))}`}
+                                >
+                                    {withdrawalBreakdown.map((_, i) => (
+                                        <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                                    ))}
+                                </Pie>
+                                <Tooltip formatter={(v) => moneyLabel(Number(v))} />
+                            </PieChart>
+                        </ResponsiveContainer>
+                    )}
                 </SectionCard>
 
                 <SectionCard title="Investment Status">
-                    <ResponsiveContainer width="100%" height={260}>
-                        <BarChart data={investmentStatus}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                            <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                            <YAxis tickFormatter={fmtShort} tick={{ fontSize: 12 }} />
-                            <Tooltip formatter={(v) => `${fmt(Number(v))} USD`} />
-                            <Bar dataKey="value" name="Amount" radius={[8, 8, 0, 0]}>
-                                {investmentStatus.map((_, i) => (
-                                    <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                                ))}
-                            </Bar>
-                        </BarChart>
-                    </ResponsiveContainer>
+                    {investmentStatus.length === 0 ? (
+                        <EmptyState message="No investments yet" />
+                    ) : (
+                        <ResponsiveContainer width="100%" height={260}>
+                            <BarChart data={investmentStatus}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                                <YAxis tickFormatter={fmtShort} tick={{ fontSize: 12 }} />
+                                <Tooltip formatter={(v) => moneyLabel(Number(v))} />
+                                <Bar dataKey="value" name="Amount" radius={[8, 8, 0, 0]}>
+                                    {investmentStatus.map((_, i) => (
+                                        <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                                    ))}
+                                </Bar>
+                            </BarChart>
+                        </ResponsiveContainer>
+                    )}
                 </SectionCard>
             </div>
         </>

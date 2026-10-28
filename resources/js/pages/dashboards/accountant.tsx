@@ -1,5 +1,6 @@
 import KpiCard from '@/components/dashboard/kpi-card';
 import AppLayout from '@/layouts/app-layout';
+import { formatMoney, type SharedCurrency } from '@/lib/money';
 import { Head, Link } from '@inertiajs/react';
 import { Banknote, Receipt, TrendingUp, Users, Wallet } from 'lucide-react';
 
@@ -19,12 +20,13 @@ interface Props {
         pending_investor_profit: number;
     };
     recentExpenses: ExpenseRow[];
+    reporting?: {
+        currency: SharedCurrency;
+    };
 }
 
-const money = (value: number | string) =>
-    new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Number(value) || 0) + ' AFN';
-
-export default function AccountantDashboard({ kpis, recentExpenses }: Props) {
+export default function AccountantDashboard({ kpis, recentExpenses, reporting }: Props) {
+    const money = (value: number | string) => formatMoney(value, reporting?.currency);
     return (
         <AppLayout breadcrumbs={[{ title: 'Dashboard', href: '/dashboard' }]}>
             <Head title="Accountant Dashboard" />

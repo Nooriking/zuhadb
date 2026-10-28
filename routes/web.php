@@ -275,11 +275,17 @@ Route::middleware(['auth', 'verified', 'lock.records'])->group(function () {
         Route::post('/', [ProductController::class, 'store'])
             ->middleware('permission:products.create')->name('store');
 
-        Route::get('/trash', [ProductController::class, 'trash'])->middleware('role:super_admin')->name('trash');
+        Route::get('/check-barcode', [ProductController::class, 'checkBarcode'])
+            ->middleware('permission:products.view')->name('checkBarcode');
+
+        Route::get('/trash', [ProductController::class, 'trash'])
+            ->middleware('permission:products.view')->name('trash');
         Route::get('/search', [ProductSearchController::class, 'search'])->name('search');
 
-        Route::post('/{id}/restore', [ProductController::class, 'restore'])->middleware('role:super_admin')->whereNumber('id')->name('restore');
-        Route::delete('/{id}/force-delete', [ProductController::class, 'forceDelete'])->middleware('role:super_admin')->whereNumber('id')->name('forceDelete');
+        Route::post('/{id}/restore', [ProductController::class, 'restore'])
+            ->middleware('permission:products.delete')->whereNumber('id')->name('restore');
+        Route::delete('/{id}/force-delete', [ProductController::class, 'forceDelete'])
+            ->middleware('permission:products.delete')->whereNumber('id')->name('forceDelete');
         Route::patch('/{product}/toggle-status', [ProductController::class, 'toggleStatus'])->middleware('role:super_admin')->name('toggleStatus');
 
         Route::get('/{product}', [ProductController::class, 'show'])

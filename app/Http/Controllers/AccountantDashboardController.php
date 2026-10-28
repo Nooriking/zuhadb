@@ -7,6 +7,7 @@ use App\Models\Expense;
 use App\Models\InvestorProfitEntry;
 use App\Models\Sale;
 use App\Models\SalePayment;
+use App\Services\CurrencyService;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -15,6 +16,8 @@ class AccountantDashboardController extends Controller
 {
     public function index(Request $request): Response
     {
+        $money = fn (float $amount): float => app(CurrencyService::class)->reportAmount($amount);
+
         $sales = Sale::notTrashed()
             ->where('status', 'completed')
             ->whereMonth('sale_date', now()->month)
@@ -33,17 +36,26 @@ class AccountantDashboardController extends Controller
         $recentExpenses = Expense::notTrashed()
             ->latest('id')
             ->limit(8)
-            ->get(['id', 'title', 'amount_afn', 'expense_date']);
+            ->get(['id', 'title', 'amount_afn', 'expense_date'])
+            ->map(fn (Expense $expense) => [
+                'id' => $expense->id,
+                'title' => $expense->title,
+                'amount_afn' => $money((float) $expense->amount_afn),
+                'expense_date' => $expense->expense_date,
+            ]);
+
+        $reporting = app(CurrencyService::class)->reportingContext();
 
         return Inertia::render('dashboards/accountant', [
             'kpis' => [
-                'month_sales' => round($monthSales, 2),
-                'month_collected' => round($monthCollected, 2),
-                'month_expenses' => round($monthExpenses, 2),
-                'customer_due' => round((float) Customer::notTrashed()->sum('current_due_afn'), 2),
-                'pending_investor_profit' => round((float) InvestorProfitEntry::where('status', 'pending')->sum('profit_amount_afn'), 2),
+                'month_sales' => $money($monthSales),
+                'month_collected' => $money($monthCollected),
+                'month_expenses' => $money($monthExpenses),
+                'customer_due' => $money((float) Customer::notTrashed()->sum('current_due_afn')),
+                'pending_investor_profit' => $money((float) InvestorProfitEntry::where('status', 'pending')->sum('profit_amount_afn')),
             ],
             'recentExpenses' => $recentExpenses,
+            'reporting' => $reporting,
         ]);
     }
 }

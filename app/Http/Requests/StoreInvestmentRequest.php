@@ -25,8 +25,18 @@ class StoreInvestmentRequest extends FormRequest
                 'integer',
                 Rule::exists('users', 'id')->where(fn ($q) => $q->where('role', User::ROLE_INVESTOR)),
             ],
+            'source_type' => ['required', Rule::in(['cash', 'goods'])],
             'parent_investment_id' => ['nullable', 'integer', 'exists:investments,id'],
-            'capital_amount_afn' => SafeData::money(true, 0),
+            'currency_id' => [
+                Rule::requiredIf(fn () => $this->input('source_type') === 'cash'),
+                'nullable',
+                'integer',
+                Rule::exists('currencies', 'id')->where(
+                    fn ($q) => $q->where('trash', false)->where('status', 'active')->whereNull('deleted_at')
+                ),
+            ],
+            'capital_amount' => SafeData::money(false, 0),
+            'capital_amount_afn' => SafeData::money(false, 0),
             'investment_date' => ['required', 'date'],
             'notes' => SafeData::plainText(SafeData::NOTES_MAX),
         ];

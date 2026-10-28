@@ -5,8 +5,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import AppLayout from '@/layouts/app-layout';
+import { formatLedgerMoney, type SharedCurrencyPayload } from '@/lib/money';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link, router } from '@inertiajs/react';
+import { Head, Link, router, usePage } from '@inertiajs/react';
 import { ArrowLeft, Banknote, Calendar, Edit, Mail, MapPin, Package, Phone, TrendingUp, User as UserIcon, Wallet } from 'lucide-react';
 import { useState } from 'react';
 
@@ -109,11 +110,6 @@ const breadcrumbs = (investor: Investor): BreadcrumbItem[] => [
     { title: investor.full_name, href: `/investors/${investor.id}` },
 ];
 
-const formatPrice = (value: string | number, digits: number = 0) => {
-    const num = typeof value === 'string' ? parseFloat(value) : value;
-    return new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(num);
-};
-
 const formatDate = (date: string | null) => {
     if (!date) return '—';
     return new Date(date).toLocaleDateString('en-US', {
@@ -141,6 +137,8 @@ const getStatusBadge = (status: string) => {
 };
 
 export default function InvestorsShow({ investor, stats }: Props) {
+    const { currency } = usePage().props as { currency?: SharedCurrencyPayload };
+    const money = (value: string | number | null | undefined) => formatLedgerMoney(value, currency);
     const [activeTab, setActiveTab] = useState<'overview' | 'withdrawals' | 'batches' | 'transactions'>('overview');
 
     const getInitials = (name: string) => {
@@ -216,30 +214,30 @@ export default function InvestorsShow({ investor, stats }: Props) {
                             <p className="text-muted-foreground text-xs">Capital Balance</p>
                             <Wallet className="h-4 w-4 text-blue-500" />
                         </div>
-                        <p className="mt-1 text-2xl font-bold text-blue-600">{formatPrice(investor.wallet?.capital_balance_afn || 0)} USD</p>
-                        <p className="text-muted-foreground mt-1 text-xs">Invested: {formatPrice(investor.wallet?.total_invested_afn || 0)} USD</p>
+                        <p className="mt-1 text-2xl font-bold text-blue-600">{money(investor.wallet?.capital_balance_afn || 0)}</p>
+                        <p className="text-muted-foreground mt-1 text-xs">Invested: {money(investor.wallet?.total_invested_afn || 0)}</p>
                     </div>
                     <div className="rounded-lg border bg-white p-6 shadow-sm">
                         <div className="flex items-center justify-between">
                             <p className="text-muted-foreground text-xs">Profit Balance</p>
                             <TrendingUp className="h-4 w-4 text-green-500" />
                         </div>
-                        <p className="mt-1 text-2xl font-bold text-green-600">{formatPrice(investor.wallet?.profit_balance_afn || 0)} USD</p>
-                        <p className="text-muted-foreground mt-1 text-xs">Earned: {formatPrice(investor.wallet?.total_profit_earned_afn || 0)} USD</p>
+                        <p className="mt-1 text-2xl font-bold text-green-600">{money(investor.wallet?.profit_balance_afn || 0)}</p>
+                        <p className="text-muted-foreground mt-1 text-xs">Earned: {money(investor.wallet?.total_profit_earned_afn || 0)}</p>
                     </div>
                     <div className="rounded-lg border bg-white p-6 shadow-sm">
                         <div className="flex items-center justify-between">
                             <p className="text-muted-foreground text-xs">Withdrawn</p>
                             <Banknote className="h-4 w-4 text-orange-500" />
                         </div>
-                        <p className="mt-1 text-2xl font-bold text-orange-600">{formatPrice(investor.wallet?.total_withdrawn_afn || 0)} USD</p>
+                        <p className="mt-1 text-2xl font-bold text-orange-600">{money(investor.wallet?.total_withdrawn_afn || 0)}</p>
                     </div>
                     <div className="rounded-lg border bg-white p-6 shadow-sm">
                         <div className="flex items-center justify-between">
                             <p className="text-muted-foreground text-xs">Total Balance</p>
                             <DollarSignIcon />
                         </div>
-                        <p className="mt-1 text-2xl font-bold text-purple-600">{formatPrice(totalBalance)} USD</p>
+                        <p className="mt-1 text-2xl font-bold text-purple-600">{money(totalBalance)}</p>
                     </div>
                 </div>
 
@@ -425,7 +423,7 @@ export default function InvestorsShow({ investor, stats }: Props) {
                                                         {w.type === 'profit' ? 'Profit' : 'Capital'}
                                                     </Badge>
                                                 </TableCell>
-                                                <TableCell className="text-right font-mono font-semibold">{formatPrice(w.amount_afn)} USD</TableCell>
+                                                <TableCell className="text-right font-mono font-semibold">{money(w.amount_afn)}</TableCell>
                                                 <TableCell>{getStatusBadge(w.status)}</TableCell>
                                                 <TableCell className="text-right">
                                                     <Link href={`/investor-withdrawals/${w.id}`}>
@@ -473,9 +471,9 @@ export default function InvestorsShow({ investor, stats }: Props) {
                                                 <TableCell className="text-center font-mono text-xs">
                                                     {b.remaining_quantity} / {b.quantity}
                                                 </TableCell>
-                                                <TableCell className="text-right font-mono text-xs">{formatPrice(b.unit_cost_afn)} AFN</TableCell>
+                                                <TableCell className="text-right font-mono text-xs">{money(b.unit_cost_afn)}</TableCell>
                                                 <TableCell className="text-right font-mono text-xs text-blue-600">
-                                                    {formatPrice(b.profit_per_unit_afn)} USD
+                                                    {money(b.profit_per_unit_afn)}
                                                 </TableCell>
                                                 <TableCell className="text-xs">{formatDate(b.received_date)}</TableCell>
                                             </TableRow>
@@ -520,7 +518,7 @@ export default function InvestorsShow({ investor, stats }: Props) {
                                                     <Badge variant={t.balance_type === 'profit' ? 'success' : 'secondary'}>{t.balance_type}</Badge>
                                                 </TableCell>
                                                 <TableCell className="text-right font-mono text-sm font-semibold">
-                                                    {formatPrice(t.amount_afn)} USD
+                                                    {money(t.amount_afn)}
                                                 </TableCell>
                                             </TableRow>
                                         ))}

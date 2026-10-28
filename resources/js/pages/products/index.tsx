@@ -118,12 +118,12 @@ export default function ProductsIndex({ products, brands, filters, monthlyRates 
         access?: { is_super_admin?: boolean };
         permissions?: { permissions?: string[] };
     };
-    const canManage = Boolean(page.access?.is_super_admin);
     const granted = page.permissions?.permissions ?? [];
     const allow = (name: string) => granted.includes('*') || granted.includes(name);
     const canView = allow('products.view');
     const canEdit = allow('products.update');
     const canDelete = allow('products.delete');
+    const canManage = canView || Boolean(page.access?.is_super_admin);
     const [search, setSearch] = useState(filters.search || '');
     const [brandFilter, setBrandFilter] = useState(filters.brand_id || 'all');
     const [genderFilter, setGenderFilter] = useState(filters.gender || 'all');

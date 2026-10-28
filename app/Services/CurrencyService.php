@@ -39,10 +39,206 @@ class CurrencyService
             return Money::round($amount, $decimals ?? $to->decimal_places);
         }
 
+        if (! $this->hasPositiveRate($from) || ! $this->hasPositiveRate($to)) {
+            throw new \InvalidArgumentException('A positive exchange rate is required for conversion.');
+        }
+
         $inDefault = Money::mul((string) $amount, (string) $from->rate_to_default, 12);
         $converted = Money::div($inDefault, (string) $to->rate_to_default, 12);
 
         return Money::round($converted, $decimals ?? $to->decimal_places);
+    }
+
+    public function hasPositiveRate(Currency $currency): bool
+    {
+        return (float) $currency->rate_to_default > 0;
+    }
+
+    /**
+     * Investor and POS amounts are stored in the ledger currency (AFN).
+     * Report them in the configured default when a valid rate exists.
+     *
+     * @return array{
+     *     currency: array<string, mixed>,
+     *     ledger: array<string, mixed>,
+     *     conversion_available: bool,
+     *     converts_from_ledger: bool
+     * }
+     */
+    public function reportingContext(): array
+    {
+        $ledger = Currency::ledger();
+        $default = Currency::getDefault();
+        $fallback = [
+            'code' => (string) config('business.default_currency', 'AFN'),
+            'name' => 'Afghan Afghani',
+            'symbol' => '؋',
+            'decimal_places' => 2,
+            'rate_to_default' => '1',
+            'is_default' => true,
+        ];
+
+        $ledgerPayload = $ledger ? Currency::toShared($ledger) : $fallback;
+
+        if ($default && $ledger && $this->canConvert($ledger, $default)) {
+            return [
+                'currency' => Currency::toShared($default),
+                'ledger' => $ledgerPayload,
+                'conversion_available' => true,
+                'converts_from_ledger' => $default->id !== $ledger->id,
+            ];
+        }
+
+        return [
+            'currency' => $ledgerPayload,
+            'ledger' => $ledgerPayload,
+            'conversion_available' => $ledger !== null && $this->hasPositiveRate($ledger),
+            'converts_from_ledger' => false,
+        ];
+    }
+
+    public function canConvert(Currency $from, Currency $to): bool
+    {
+        if ($from->id === $to->id) {
+            return true;
+        }
+
+        return $this->hasPositiveRate($from) && $this->hasPositiveRate($to);
+    }
+
+    public function toLedger(string $amount, Currency $from): string
+    {
+        $ledger = Currency::ledger() ?? $from;
+
+        try {
+            return $this->convert($amount, $from, $ledger, (int) ($ledger->decimal_places ?? 2));
+        } catch (\InvalidArgumentException) {
+            throw ValidationException::withMessages([
+                'currency_id' => 'Set a positive catalog rate for '.$from->code.' before using it on monetary fields.',
+            ]);
+        }
+    }
+
+    public function requireActive(?int $id, string $field = 'currency_id'): Currency
+    {
+        $currency = Currency::query()->notTrashed()->find($id);
+
+        if (! $currency) {
+            throw ValidationException::withMessages([
+                $field => 'The selected currency is invalid.',
+            ]);
+        }
+
+        if ($currency->status !== 'active') {
+            throw ValidationException::withMessages([
+                $field => 'The selected currency is inactive.',
+            ]);
+        }
+
+        return $currency;
+    }
+
+    /**
+     * @return array{id: int, code: string, symbol: string|null, rate_to_default: string}
+     */
+    public function snapshot(Currency $currency): array
+    {
+        return [
+            'id' => $currency->id,
+            'code' => $currency->code,
+            'symbol' => $currency->symbol,
+            'rate_to_default' => (string) ($currency->rate_to_default ?? '0'),
+        ];
+    }
+
+    /**
+     * @param  iterable<int, array{amount: string|int|float, currency:?Currency, code?:?string, symbol?:?string}>  $rows
+     * @return array{by_currency: list<array<string, mixed>>, combined: array<string, mixed>|null}
+     */
+    public function summarize(iterable $rows): array
+    {
+        $groups = [];
+        $combinedDefault = '0';
+        $convertible = true;
+        $default = Currency::getDefault();
+
+        foreach ($rows as $row) {
+            $currency = $row['currency'] ?? null;
+            $code = $currency?->code ?? ($row['code'] ?? 'UNSET');
+            $symbol = $currency?->symbol ?? ($row['symbol'] ?? null);
+            $amount = Money::round((string) ($row['amount'] ?? 0), 2);
+
+            if (! isset($groups[$code])) {
+                $groups[$code] = ['code' => $code, 'symbol' => $symbol, 'total' => '0'];
+            }
+
+            $groups[$code]['total'] = function_exists('bcadd')
+                ? bcadd($groups[$code]['total'], $amount, 2)
+                : number_format((float) $groups[$code]['total'] + (float) $amount, 2, '.', '');
+
+            if (! $currency instanceof Currency || ! $default || ! $this->canConvert($currency, $default)) {
+                $convertible = false;
+
+                continue;
+            }
+
+            try {
+                $piece = $this->convert($amount, $currency, $default, 2);
+                $combinedDefault = function_exists('bcadd')
+                    ? bcadd($combinedDefault, $piece, 2)
+                    : number_format((float) $combinedDefault + (float) $piece, 2, '.', '');
+            } catch (\Throwable) {
+                $convertible = false;
+            }
+        }
+
+        return [
+            'by_currency' => array_values($groups),
+            'combined' => $convertible && $default
+                ? [
+                    'code' => $default->code,
+                    'name' => $default->name,
+                    'symbol' => $default->symbol,
+                    'total' => $combinedDefault,
+                ]
+                : null,
+        ];
+    }
+
+    /**
+     * Convert a ledger (AFN) amount into the reporting currency.
+     * Returns null when no reliable rate is available.
+     */
+    public function fromLedger(float|string $amount): ?float
+    {
+        $context = $this->reportingContext();
+        $ledger = Currency::ledger();
+        $default = Currency::getDefault();
+
+        if (! $context['conversion_available']) {
+            return null;
+        }
+
+        if (! $context['converts_from_ledger'] || ! $ledger || ! $default) {
+            return (float) Money::round((string) $amount, (int) ($context['currency']['decimal_places'] ?? 2));
+        }
+
+        try {
+            return (float) $this->convert((string) $amount, $ledger, $default);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    public function reportAmount(float|string $ledgerAmount): float
+    {
+        $converted = $this->fromLedger($ledgerAmount);
+
+        if ($converted === null) {
+            return round((float) $ledgerAmount, 2);
+        }
+
+        return $converted;
     }
 
     public function makeDefault(Currency $currency): Currency

@@ -179,7 +179,7 @@ class SaleController extends Controller
             'variants'   => ProductVariant::query()
                 ->notTrashed()
                 ->with([
-                    'product:id,name,brand_id',
+                    'product:id,name,brand_id,base_unit_name,pack_unit_name,units_per_pack',
                     'product.brand:id,name',
                 ])
                 ->select(
@@ -198,7 +198,20 @@ class SaleController extends Controller
 
     public function store(StoreSaleRequest $request): RedirectResponse
     {
-        $sale = $this->sales->createSale($request->validated(), $request->user());
+        $data = $request->validated();
+        foreach ($data['items'] as $index => $item) {
+            $variant = ProductVariant::query()->with('product')->find($item['variant_id']);
+            $product = $variant?->product;
+            if ($product) {
+                $data['items'][$index]['quantity'] = $product->quantityToBaseUnits(
+                    (int) $item['quantity'],
+                    (string) ($item['quantity_unit'] ?? 'base')
+                );
+            }
+            unset($data['items'][$index]['quantity_unit']);
+        }
+
+        $sale = $this->sales->createSale($data, $request->user());
 
         return redirect()
             ->route('sales.show', $sale)

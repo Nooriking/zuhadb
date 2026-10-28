@@ -16,8 +16,13 @@ class InvestorWithdrawal extends Model
     protected $fillable = [
         'investor_id',
         'investment_id',
+        'currency_id',
+        'currency_code',
+        'currency_symbol',
+        'exchange_rate',
         'withdrawal_number',
         'type',
+        'amount_currency',
         'amount_afn',
         'balance_before_afn',
         'balance_after_afn',
@@ -32,6 +37,8 @@ class InvestorWithdrawal extends Model
     ];
 
     protected $casts = [
+        'exchange_rate'       => 'decimal:8',
+        'amount_currency'     => 'decimal:2',
         'amount_afn'          => 'decimal:2',
         'balance_before_afn'  => 'decimal:2',
         'balance_after_afn'   => 'decimal:2',
@@ -55,6 +62,11 @@ class InvestorWithdrawal extends Model
     public function investment(): BelongsTo
     {
         return $this->belongsTo(Investment::class, 'investment_id');
+    }
+
+    public function currency(): BelongsTo
+    {
+        return $this->belongsTo(Currency::class, 'currency_id');
     }
 
     public function approvedBy(): BelongsTo

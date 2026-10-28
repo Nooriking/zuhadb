@@ -16,7 +16,12 @@ class InvestorTransaction extends Model
     protected $fillable = [
         'investor_id',
         'investment_id',
+        'currency_id',
+        'currency_code',
+        'currency_symbol',
+        'exchange_rate',
         'type',
+        'amount_currency',
         'amount_afn',
         'balance_type',
         'balance_before_afn',
@@ -31,6 +36,8 @@ class InvestorTransaction extends Model
     protected $appends = ['type_label'];
 
     protected $casts = [
+        'exchange_rate'       => 'decimal:8',
+        'amount_currency'     => 'decimal:2',
         'amount_afn'          => 'decimal:2',
         'balance_before_afn'  => 'decimal:2',
         'balance_after_afn'   => 'decimal:2',
@@ -75,6 +82,11 @@ class InvestorTransaction extends Model
     public function investment(): BelongsTo
     {
         return $this->belongsTo(Investment::class, 'investment_id');
+    }
+
+    public function currency(): BelongsTo
+    {
+        return $this->belongsTo(Currency::class, 'currency_id');
     }
 
     public function creator(): BelongsTo
@@ -178,7 +190,12 @@ class InvestorTransaction extends Model
         return self::create([
             'investor_id'        => $investorId,
             'investment_id'      => $options['investment_id']    ?? null,
+            'currency_id'        => $options['currency_id']      ?? null,
+            'currency_code'      => $options['currency_code']    ?? null,
+            'currency_symbol'    => $options['currency_symbol']  ?? null,
+            'exchange_rate'      => $options['exchange_rate']    ?? null,
             'type'               => $type,
+            'amount_currency'    => $options['amount_currency']  ?? $amountAfn,
             'amount_afn'         => $amountAfn,
             'balance_type'       => $balanceType,
             'balance_before_afn' => $balanceBeforeAfn,

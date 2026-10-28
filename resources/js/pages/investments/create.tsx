@@ -1,4 +1,6 @@
 import { BackButton } from '@/components/form-page';
+import { MoneyField } from '@/components/money-field';
+import { defaultCurrencyId, type CatalogCurrency } from '@/lib/currencies';
 // resources/js/pages/investments/create.tsx
 
 import AppLayout from '@/layouts/app-layout';
@@ -18,6 +20,7 @@ interface Props {
     users: InvestorUser[];
     nextNumber: string;
     sourceTypes?: Record<string, string>;
+    currencies?: CatalogCurrency[];
     errors?: Record<string, string>;
 }
 
@@ -27,11 +30,18 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Create Investment', href: '/investments/create' },
 ];
 
-export default function InvestmentsCreate({ users, nextNumber, sourceTypes = { cash: 'Cash', goods: 'Goods' }, errors: initialErrors }: Props) {
+export default function InvestmentsCreate({
+    users,
+    nextNumber,
+    sourceTypes = { cash: 'Cash', goods: 'Goods' },
+    currencies = [],
+    errors: initialErrors,
+}: Props) {
     const [form, setForm] = useState({
         user_id: '',
         source_type: 'cash' as 'cash' | 'goods',
         capital_amount_afn: '',
+        currency_id: defaultCurrencyId(currencies),
         investment_date: new Date().toISOString().slice(0, 10),
         notes: '',
     });
@@ -85,6 +95,8 @@ export default function InvestmentsCreate({ users, nextNumber, sourceTypes = { c
         const payload = {
             user_id: form.user_id,
             source_type: form.source_type,
+            currency_id: isCash ? form.currency_id : null,
+            capital_amount: isCash && form.capital_amount_afn !== '' ? form.capital_amount_afn : '0',
             capital_amount_afn: isCash && form.capital_amount_afn !== '' ? form.capital_amount_afn : '0',
             investment_date: form.investment_date,
             notes: form.notes,
@@ -206,22 +218,16 @@ export default function InvestmentsCreate({ users, nextNumber, sourceTypes = { c
                         {isCash && (
                             <div className="rounded-lg border border-dashed p-4">
                                 <h3 className="mb-3 text-sm font-semibold">Capital Details</h3>
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium">Capital Amount (AFN)</label>
-                                    <input
-                                        type="number"
-                                        step="0.01"
-                                        min="0"
-                                        value={form.capital_amount_afn}
-                                        onChange={(e) => handleChange('capital_amount_afn', e.target.value)}
-                                        placeholder="e.g. 65000"
-                                        className={`w-full rounded-md border px-3 py-2 font-mono text-sm ${
-                                            errors.capital_amount_afn ? 'border-red-500' : 'border-gray-300'
-                                        }`}
-                                        required={isCash}
-                                    />
-                                    {errors.capital_amount_afn && <p className="text-sm text-red-600">{errors.capital_amount_afn}</p>}
-                                </div>
+                                <MoneyField
+                                    label="Capital amount"
+                                    required={isCash}
+                                    amount={form.capital_amount_afn}
+                                    currencyId={form.currency_id}
+                                    currencies={currencies}
+                                    onAmountChange={(val) => handleChange('capital_amount_afn', val)}
+                                    onCurrencyChange={(val) => handleChange('currency_id', val)}
+                                    error={errors.capital_amount_afn || errors.currency_id || errors.capital_amount}
+                                />
 
                                 {capitalAfn > 0 && (
                                     <div className="mt-4 rounded-lg border bg-blue-50 p-3">

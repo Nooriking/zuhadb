@@ -18,7 +18,15 @@ class StoreInvestorWithdrawalRequest extends FormRequest
             'investor_id'       => ['required', 'exists:investors,id'],
             'investment_id'     => ['nullable', 'exists:investments,id'],
             'type'              => ['required', Rule::in(['profit', 'capital'])],
-            'amount_afn'        => ['required', 'numeric', 'min:0.01'],
+            'currency_id'       => [
+                'required',
+                'integer',
+                Rule::exists('currencies', 'id')->where(
+                    fn ($q) => $q->where('trash', false)->where('status', 'active')->whereNull('deleted_at')
+                ),
+            ],
+            'amount'            => ['nullable', 'numeric', 'min:0.01'],
+            'amount_afn'        => ['nullable', 'numeric', 'min:0.01'],
             'withdrawal_date'   => ['required', 'date'],
             'status'            => ['nullable', Rule::in(['pending', 'approved', 'paid', 'rejected'])],
             'notes'             => ['nullable', 'string'],

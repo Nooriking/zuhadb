@@ -27,7 +27,7 @@ class InvestorController extends Controller
 
         $investors = Investor::query()
             ->with([
-                'wallet',
+                'wallet.currency:id,code,name,symbol',
                 'user:id,name',
                 'creator:id,name',
             ])
@@ -235,12 +235,12 @@ class InvestorController extends Controller
         }
 
         $investor->load([
-            'wallet',
+            'wallet.currency:id,code,name,symbol',
             'user:id,name,email',
             'creator:id,name,email',
-            'investments' => fn ($q) => $q->latest()->limit(10),
-            'transactions' => fn ($q) => $q->latest()->limit(20),
-            'withdrawals' => fn ($q) => $q->latest()->limit(20),
+            'investments' => fn ($q) => $q->with('currency:id,code,name,symbol')->latest()->limit(10),
+            'transactions' => fn ($q) => $q->with('currency:id,code,name,symbol')->latest()->limit(20),
+            'withdrawals' => fn ($q) => $q->with('currency:id,code,name,symbol')->latest()->limit(20),
             'batches' => fn ($q) => $q->with(['variant.product:id,name', 'variant:id,product_id,name'])
                                        ->where('remaining_quantity', '>', 0)
                                        ->latest()

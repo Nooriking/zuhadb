@@ -5,9 +5,10 @@ import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 import AppLayout from '@/layouts/app-layout';
+import { formatLedgerMoney, type SharedCurrencyPayload } from '@/lib/money';
 import { forceDeleteItem, restoreItem } from '@/lib/trash-actions';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link, router } from '@inertiajs/react';
+import { Head, Link, router, usePage } from '@inertiajs/react';
 import { ArrowLeft, RotateCcw, Trash2, Users } from 'lucide-react';
 
 interface Investor {
@@ -41,12 +42,9 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Trash', href: '/investors/trash' },
 ];
 
-const formatPrice = (value: string | number) => {
-    const num = typeof value === 'string' ? parseFloat(value) : value;
-    return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(num);
-};
-
-export default function InvestorsTrash({ investors }: Props) {
+export default function InvestorsTrash({ investors }: Props) {
+    const { currency } = usePage().props as { currency?: SharedCurrencyPayload };
+    const money = (value: string | number | null | undefined) => formatLedgerMoney(value, currency);
 
     const handlePageChange = (url: string | null) => {
         if (url) router.get(url, {}, { preserveState: true, preserveScroll: true });
@@ -105,7 +103,7 @@ export default function InvestorsTrash({ investors }: Props) {
                                             <div className="text-muted-foreground text-xs">{investor.email || ''}</div>
                                         </TableCell>
                                         <TableCell className="text-right font-mono text-xs">
-                                            {formatPrice(investor.wallet?.capital_balance_afn || 0)} USD
+                                            {money(investor.wallet?.capital_balance_afn || 0)}
                                         </TableCell>
                                         <TableCell>
                                             <Badge variant="secondary">{investor.status}</Badge>

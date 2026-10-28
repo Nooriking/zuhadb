@@ -14,7 +14,10 @@ class InvestorWallet extends Model
 
     protected $fillable = [
         'investor_id',
+        'currency_id',
+        'capital_balance_currency',
         'capital_balance_afn',
+        'profit_balance_currency',
         'profit_balance_afn',
         'total_invested_afn',
         'total_profit_earned_afn',
@@ -23,8 +26,10 @@ class InvestorWallet extends Model
     ];
 
     protected $casts = [
-        'capital_balance_afn' => 'decimal:2',
-        'profit_balance_afn'  => 'decimal:2',
+        'capital_balance_currency' => 'decimal:2',
+        'capital_balance_afn'      => 'decimal:2',
+        'profit_balance_currency'  => 'decimal:2',
+        'profit_balance_afn'       => 'decimal:2',
         'total_invested_afn'       => 'decimal:2',
         'total_profit_earned_afn'  => 'decimal:2',
         'total_withdrawn_afn'      => 'decimal:2',
@@ -38,6 +43,11 @@ class InvestorWallet extends Model
     public function investor(): BelongsTo
     {
         return $this->belongsTo(Investor::class, 'investor_id');
+    }
+
+    public function currency(): BelongsTo
+    {
+        return $this->belongsTo(Currency::class, 'currency_id');
     }
 
     public function getTotalBalanceAfnAttribute(): float

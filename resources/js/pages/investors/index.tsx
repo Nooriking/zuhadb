@@ -8,8 +8,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
+import { formatLedgerMoney, type SharedCurrencyPayload } from '@/lib/money';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link, router } from '@inertiajs/react';
+import { Head, Link, router, usePage } from '@inertiajs/react';
 import { AlertTriangle, Banknote, Plus, ToggleLeft, Trash2, TrendingUp, Users, Wallet, X } from 'lucide-react';
 import { useState } from 'react';
 
@@ -65,13 +66,10 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Investors', href: '/investors' },
 ];
 
-const formatPrice = (value: string | number) => {
-    const num = typeof value === 'string' ? parseFloat(value) : value;
-    return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(num);
-};
-
 export default function InvestorsIndex({ investors, filters, stats }: Props) {
     const { toast } = useToast();
+    const { currency } = usePage().props as { currency?: SharedCurrencyPayload };
+    const money = (value: string | number | null | undefined) => formatLedgerMoney(value, currency);
     const [search, setSearch] = useState(filters.search || '');
     const [statusFilter, setStatusFilter] = useState(filters.status || 'all');
     const [investorToDelete, setInvestorToDelete] = useState<Investor | null>(null);
@@ -170,21 +168,21 @@ export default function InvestorsIndex({ investors, filters, stats }: Props) {
                             <p className="text-muted-foreground text-xs">Total Capital</p>
                             <Wallet className="h-4 w-4 text-blue-500" />
                         </div>
-                        <p className="mt-1 text-2xl font-bold text-blue-600">{formatPrice(stats.total_capital)} USD</p>
+                        <p className="mt-1 text-2xl font-bold text-blue-600">{money(stats.total_capital)}</p>
                     </div>
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
                         <div className="flex items-center justify-between">
                             <p className="text-muted-foreground text-xs">Total Profit Earned</p>
                             <TrendingUp className="h-4 w-4 text-purple-500" />
                         </div>
-                        <p className="mt-1 text-2xl font-bold text-purple-600">{formatPrice(stats.total_profit_paid)} USD</p>
+                        <p className="mt-1 text-2xl font-bold text-purple-600">{money(stats.total_profit_paid)}</p>
                     </div>
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
                         <div className="flex items-center justify-between">
                             <p className="text-muted-foreground text-xs">Total Withdrawn</p>
                             <Banknote className="h-4 w-4 text-orange-500" />
                         </div>
-                        <p className="mt-1 text-2xl font-bold text-orange-600">{formatPrice(stats.total_withdrawn)} USD</p>
+                        <p className="mt-1 text-2xl font-bold text-orange-600">{money(stats.total_withdrawn)}</p>
                     </div>
                 </div>
 
@@ -217,7 +215,7 @@ export default function InvestorsIndex({ investors, filters, stats }: Props) {
                                 <TableHead className="w-16">#</TableHead>
                                 <TableHead>Investor</TableHead>
                                 <TableHead>Phone</TableHead>
-                                <TableHead className="text-right">Capital (USD)</TableHead>
+                                <TableHead className="text-right">Capital</TableHead>
                                 <TableHead className="text-center">Investments</TableHead>
                                 <TableHead>Status</TableHead>
                                 <TableHead className="text-center">Actions</TableHead>
@@ -242,7 +240,7 @@ export default function InvestorsIndex({ investors, filters, stats }: Props) {
                                             {investor.phone || '—'}
                                         </TableCell>
                                         <TableCell className="text-right font-mono font-semibold">
-                                            {formatPrice(investor.wallet?.capital_balance_afn || 0)} USD
+                                            {money(investor.wallet?.capital_balance_afn || 0)}
                                         </TableCell>
                                         <TableCell className="text-center">
                                             <Link href={`/investments?investor_id=${investor.id}`} className="hover:underline">

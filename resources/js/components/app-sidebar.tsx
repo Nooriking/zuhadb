@@ -148,7 +148,19 @@ const customerNavItems: NavItem[] = [
 
 const investmentNavItems: NavItem[] = [
     {
+        title: 'Investor Dashboard',
+        url: '/investors/dashboard',
+        icon: LayoutGrid,
+        module: 'investors',
+    },
+    {
         title: 'Investors',
+        url: '/investors',
+        icon: Users,
+        module: 'investors',
+    },
+    {
+        title: 'Investments',
         url: '/investments',
         icon: HandCoins,
         module: 'investments',

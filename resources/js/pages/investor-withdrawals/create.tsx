@@ -1,4 +1,6 @@
 ﻿import { BackButton } from '@/components/form-page';
+import { MoneyField } from '@/components/money-field';
+import { defaultCurrencyId, findCurrency, type CatalogCurrency } from '@/lib/currencies';
 // resources/js/pages/investor-withdrawals/create.tsx
 
 import { Button } from '@/components/ui/button';
@@ -50,13 +52,20 @@ const formatPrice = (value: string | number, digits: number = 0) => {
     return new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(num);
 };
 
-export default function InvestorWithdrawalsCreate({ investors, selectedInvestorId, nextNumber, errors: initialErrors }: Props) {
+export default function InvestorWithdrawalsCreate({
+    investors,
+    currencies = [],
+    selectedInvestorId,
+    nextNumber,
+    errors: initialErrors,
+}: Props) {
     const { toast } = useToast();
     const [form, setForm] = useState({
         investor_id: selectedInvestorId ? String(selectedInvestorId) : '',
         investment_id: '',
         type: 'profit' as 'profit' | 'capital',
         amount_afn: '',
+        currency_id: defaultCurrencyId(currencies),
         withdrawal_date: new Date().toISOString().slice(0, 10),
         status: 'pending' as 'pending' | 'approved' | 'paid' | 'rejected',
         notes: '',
@@ -92,7 +101,9 @@ export default function InvestorWithdrawalsCreate({ investors, selectedInvestorI
         const payload = {
             ...form,
             investment_id: form.investment_id || null,
+            amount: parseFloat(form.amount_afn) || 0,
             amount_afn: parseFloat(form.amount_afn) || 0,
+            currency_id: form.currency_id,
         };
 
         router.post('/investor-withdrawals', payload, {
@@ -213,27 +224,22 @@ export default function InvestorWithdrawalsCreate({ investors, selectedInvestorI
                                     />
                                 </div>
 
-                                {/* Amount */}
-                                <div className="space-y-2">
-                                    <Label>
-                                        Amount (USD) <span className="text-destructive">*</span>
-                                    </Label>
-                                    <Input
-                                        type="number"
-                                        step="0.01"
-                                        min="0.01"
-                                        value={form.amount_afn}
-                                        onChange={(e) => handleChange('amount_afn', e.target.value)}
-                                        placeholder="0.00"
-                                        className={`font-mono ${errors.amount_afn || exceedsBalance ? 'border-destructive' : ''}`}
-                                    />
-                                    {errors.amount_afn && <p className="text-destructive text-sm">{errors.amount_afn}</p>}
-                                    {exceedsBalance && !errors.amount_afn && (
-                                        <p className="text-destructive flex items-center gap-1 text-sm">
-                                            <AlertTriangle className="h-3 w-3" /> Amount exceeds available balance.
-                                        </p>
-                                    )}
-                                </div>
+                                <MoneyField
+                                    label="Amount"
+                                    required
+                                    amount={form.amount_afn}
+                                    currencyId={form.currency_id}
+                                    currencies={currencies}
+                                    onAmountChange={(val) => handleChange('amount_afn', val)}
+                                    onCurrencyChange={(val) => handleChange('currency_id', val)}
+                                    error={errors.amount_afn || errors.amount || errors.currency_id}
+                                />
+                                {exceedsBalance && !errors.amount_afn && (
+                                    <p className="text-destructive flex items-center gap-1 text-sm">
+                                        <AlertTriangle className="h-3 w-3" /> Amount exceeds available ledger balance (AFN). Converted amount is
+                                        checked on the server.
+                                    </p>
+                                )}
 
                                 {/* Notes */}
                                 <div className="space-y-2">

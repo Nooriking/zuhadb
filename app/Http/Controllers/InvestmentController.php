@@ -4,10 +4,12 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\StoreInvestmentRequest;
 use App\Http\Requests\UpdateInvestmentRequest;
+use App\Models\Currency;
 use App\Models\Investment;
 use App\Models\Investor;
 use App\Models\InvestorTransaction;
 use App\Models\User;
+use App\Services\CurrencyService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -18,6 +20,10 @@ use Inertia\Response;
 
 class InvestmentController extends Controller
 {
+    public function __construct(
+        private readonly CurrencyService $currencies,
+    ) {}
+
     /* =========================================================
      |  INDEX
      ========================================================= */
@@ -33,6 +39,7 @@ class InvestmentController extends Controller
             ->with([
                 'investor:id,full_name,phone',
                 'creator:id,name',
+                'currency:id,code,name,symbol,decimal_places,rate_to_default,is_base',
             ])
             ->withCount(['purchaseAllocations', 'productAllocations'])
             ->notTrashed()
@@ -52,6 +59,25 @@ class InvestmentController extends Controller
             ->paginate(15)
             ->withQueryString();
 
+        $moneyRows = Investment::notTrashed()
+            ->with('currency')
+            ->get()
+            ->map(fn (Investment $row) => [
+                'amount' => $row->capital_amount_currency ?? $row->capital_amount_afn,
+                'currency' => $row->currency,
+                'code' => $row->currency_code,
+                'symbol' => $row->currency_symbol,
+            ]);
+        $profitRows = Investment::notTrashed()
+            ->with('currency')
+            ->get()
+            ->map(fn (Investment $row) => [
+                'amount' => $row->profit_amount_currency ?? $row->profit_amount_afn,
+                'currency' => $row->currency,
+                'code' => $row->currency_code,
+                'symbol' => $row->currency_symbol,
+            ]);
+
         $stats = [
             'total_investments'   => Investment::notTrashed()->count(),
             'active_investments'  => Investment::notTrashed()->whereIn('status', ['active', 'partially_used'])->count(),
@@ -59,7 +85,8 @@ class InvestmentController extends Controller
             'total_available_afn' => (float) Investment::notTrashed()->sum('available_amount_afn'),
             'total_allocated_afn' => (float) Investment::notTrashed()->sum('allocated_amount_afn'),
             'total_profit_afn'    => (float) Investment::notTrashed()->sum('profit_amount_afn'),
-
+            'capital_totals'      => $this->currencies->summarize($moneyRows),
+            'profit_totals'       => $this->currencies->summarize($profitRows),
             'cash_investments'    => Investment::notTrashed()->where('source_type', 'cash')->count(),
             'goods_investments'   => Investment::notTrashed()->where('source_type', 'goods')->count(),
         ];
@@ -96,6 +123,7 @@ class InvestmentController extends Controller
                 ->get(),
             'nextNumber' => Investment::generateInvestmentNumber(),
             'sourceTypes' => Investment::SOURCE_TYPES,
+            'currencies' => Currency::formOptions(),
         ]);
     }
 
@@ -130,8 +158,29 @@ class InvestmentController extends Controller
             // مطمئن شو wallet دارد
             $investor->getOrCreateWallet();
 
-            $capitalAfn = (float) ($data['capital_amount_afn'] ?? 0);
             $sourceType = $data['source_type'] ?? 'cash';
+            $capitalEntered = (float) ($data['capital_amount'] ?? $data['capital_amount_afn'] ?? 0);
+            $capitalAfn = $capitalEntered;
+            $currencySnap = [
+                'currency_id' => null,
+                'currency_code' => null,
+                'currency_symbol' => null,
+                'exchange_rate' => null,
+                'capital_amount_currency' => $sourceType === 'cash' ? $capitalEntered : null,
+            ];
+
+            if ($sourceType === 'cash' && $capitalEntered > 0) {
+                $currency = $this->currencies->requireActive((int) ($data['currency_id'] ?? 0));
+                $capitalAfn = (float) $this->currencies->toLedger((string) $capitalEntered, $currency);
+                $snap = $this->currencies->snapshot($currency);
+                $currencySnap = [
+                    'currency_id' => $snap['id'],
+                    'currency_code' => $snap['code'],
+                    'currency_symbol' => $snap['symbol'],
+                    'exchange_rate' => $snap['rate_to_default'],
+                    'capital_amount_currency' => $capitalEntered,
+                ];
+            }
 
             // ✅ بررسی ناسازگاری: اگر investor قبلاً investment goods دارد،
             //    نباید investment نقدی جدید برایش ساخته شود و برعکس.
@@ -154,10 +203,14 @@ class InvestmentController extends Controller
 
             $data['investment_number']    = Investment::generateInvestmentNumber();
             $data['source_type']          = $sourceType;
+            $data['capital_amount_afn']   = $capitalAfn;
             $data['available_amount_afn'] = $availableAmount;
+            $data['available_amount_currency'] = $sourceType === 'cash' ? $capitalEntered : 0;
             $data['allocated_amount_afn'] = 0;
             $data['profit_amount_afn']    = 0;
             $data['withdrawn_amount_afn'] = 0;
+            $data = array_merge($data, $currencySnap);
+            unset($data['capital_amount']);
             $data['status']               = 'active';
             $data['created_by']           = Auth::id();
 
@@ -171,6 +224,11 @@ class InvestmentController extends Controller
                     'capital',
                     [
                         'investment_id'    => $investment->id,
+                        'currency_id'      => $currencySnap['currency_id'],
+                        'currency_code'    => $currencySnap['currency_code'],
+                        'currency_symbol'  => $currencySnap['currency_symbol'],
+                        'exchange_rate'    => $currencySnap['exchange_rate'],
+                        'amount_currency'  => $capitalEntered,
                         'description'      => ($sourceType === 'cash' ? 'Capital' : 'Goods') . ' deposit ' . $investment->investment_number,
                         'transaction_date' => $investment->investment_date?->toDateString(),
                     ]
@@ -212,6 +270,7 @@ class InvestmentController extends Controller
 
         $investment->load([
             'investor:id,full_name,phone,email',
+            'currency:id,code,name,symbol,decimal_places',
             'creator:id,name,email',
             'parent:id,investment_number',
             'renewals:id,investment_number,capital_amount_afn,status',
@@ -252,8 +311,9 @@ class InvestmentController extends Controller
         }
 
         return Inertia::render('investments/edit', [
-            'investment' => $investment->load('investor:id,full_name'),
+            'investment' => $investment->load(['investor:id,full_name', 'currency:id,code,name,symbol']),
             'sourceTypes' => Investment::SOURCE_TYPES,
+            'currencies' => Currency::formOptions([$investment->currency_id]),
         ]);
     }
 

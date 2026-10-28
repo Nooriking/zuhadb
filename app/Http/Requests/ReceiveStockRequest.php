@@ -22,6 +22,7 @@ class ReceiveStockRequest extends FormRequest
         return [
             'variant_id' => ['required', 'integer', 'exists:product_variants,id'],
             'quantity' => SafeData::quantity(true, 1),
+            'quantity_unit' => ['nullable', Rule::in(['base', 'pack'])],
             'purchase_price_afn' => SafeData::money(true, 0),
             'sale_price_afn' => SafeData::money(true, 0),
             'funding_source' => ['required', Rule::in(['office', 'investor'])],

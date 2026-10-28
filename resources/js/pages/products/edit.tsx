@@ -1,5 +1,8 @@
 // resources/js/pages/products/edit.tsx
 
+import { MoneyField } from '@/components/money-field';
+import { UnitConversionFields } from '@/components/unit-conversion-fields';
+import { convertToDefault, defaultCurrencyId, findCurrency, type CatalogCurrency } from '@/lib/currencies';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -68,8 +71,11 @@ interface Variant {
 
     // Prices
     purchase_price_afn: string;
+    purchase_currency_id: string;
     sale_price_afn: string;
+    sale_currency_id: string;
     wholesale_price_afn: string;
+    wholesale_currency_id: string;
     wholesale_min_qty: string;
     minimum_stock: string;
 
@@ -83,7 +89,9 @@ interface Purchase {
     investor_id: string;
     supplier_id: string;
     quantity: string;
+    quantity_unit: 'base' | 'pack';
     profit_per_unit: string;
+    profit_currency_id: string;
     line_total: string;
     line_profit: string;
     invoice_number: string;
@@ -103,13 +111,22 @@ interface ProductData {
     gender: 'male' | 'female' | 'unisex';
     status: 'active' | 'inactive';
     description: string | null;
+    base_unit_name?: string | null;
+    pack_unit_name?: string | null;
+    units_per_pack?: string | number | null;
     variants: {
         id: number;
         volume_ml: number | null;
         concentration: string | null;
         purchase_price_afn: string;
+        purchase_amount?: string | null;
+        purchase_currency_id?: number | null;
         sale_price_afn: string;
+        sale_amount?: string | null;
+        sale_currency_id?: number | null;
         wholesale_price_afn: string;
+        wholesale_amount?: string | null;
+        wholesale_currency_id?: number | null;
         wholesale_min_qty: number;
         minimum_stock: number;
         barcodes: {
@@ -146,6 +163,7 @@ interface Props {
     brands: Brand[];
     investors?: Investor[];
     suppliers?: Supplier[];
+    currencies?: CatalogCurrency[];
     errors?: Record<string, string>;
 }
 
@@ -200,8 +218,11 @@ const newVariant = (): Variant => ({
     volume_ml: '',
     concentration: '',
     purchase_price_afn: '',
+    purchase_currency_id: '',
     sale_price_afn: '',
+    sale_currency_id: '',
     wholesale_price_afn: '',
+    wholesale_currency_id: '',
     wholesale_min_qty: '10',
     minimum_stock: '0',
     barcodes: [newBarcode(true)],
@@ -213,7 +234,9 @@ const newPurchase = (variantIndex: number): Purchase => ({
     investor_id: 'store',
     supplier_id: 'none',
     quantity: '1',
+    quantity_unit: 'base',
     profit_per_unit: '0',
+    profit_currency_id: '',
     line_total: '0',
     line_profit: '0',
     invoice_number: '',
@@ -230,9 +253,12 @@ const toVariant = (v: any): Variant => ({
     id: v.id,
     volume_ml: v.volume_ml ? String(v.volume_ml) : '',
     concentration: v.concentration || '',
-    purchase_price_afn: v.purchase_price_afn || '',
-    sale_price_afn: v.sale_price_afn || '',
-    wholesale_price_afn: v.wholesale_price_afn || '',
+    purchase_price_afn: String(v.purchase_amount ?? v.purchase_price_afn ?? ''),
+    purchase_currency_id: v.purchase_currency_id ? String(v.purchase_currency_id) : '',
+    sale_price_afn: String(v.sale_amount ?? v.sale_price_afn ?? ''),
+    sale_currency_id: v.sale_currency_id ? String(v.sale_currency_id) : '',
+    wholesale_price_afn: String(v.wholesale_amount ?? v.wholesale_price_afn ?? ''),
+    wholesale_currency_id: v.wholesale_currency_id ? String(v.wholesale_currency_id) : '',
     wholesale_min_qty: v.wholesale_min_qty ? String(v.wholesale_min_qty) : '10',
     minimum_stock: v.minimum_stock ? String(v.minimum_stock) : '0',
     barcodes: (v.barcodes || []).map((b: any) => ({
@@ -251,7 +277,9 @@ const toPurchase = (p: any, variantIndex: number): Purchase => ({
     investor_id: p.investor_id ? String(p.investor_id) : 'store',
     supplier_id: p.supplier_id ? String(p.supplier_id) : 'none',
     quantity: String(p.quantity || 1),
+    quantity_unit: 'base',
     profit_per_unit: String(p.profit_per_unit || 0),
+    profit_currency_id: '',
     line_total: String(p.line_total || 0),
     line_profit: String(p.line_profit || 0),
     invoice_number: p.invoice_number || '',
@@ -300,6 +328,7 @@ export default function ProductsEdit({
     brands,
     investors = [],
     suppliers = [],
+    currencies = [],
     errors: initialErrors,
 }: Props) {
     const { toast } = useToast();
@@ -318,7 +347,12 @@ export default function ProductsEdit({
         gender: product.gender || 'unisex',
         status: product.status || 'active',
         description: product.description || '',
+        base_unit_name: product.base_unit_name || '',
+        pack_unit_name: product.pack_unit_name || '',
+        units_per_pack: product.units_per_pack != null ? String(product.units_per_pack) : '',
     });
+
+    const ledgerCurrencyId = defaultCurrencyId(currencies);
 
     /* ─── Variants ─── */
     const [variants, setVariants] = useState<Variant[]>(product.variants.length > 0 ? product.variants.map(toVariant) : [newVariant()]);
@@ -375,7 +409,15 @@ export default function ProductsEdit({
 
     const addVariant = () => {
         const nextIndex = variants.length;
-        setVariants((prev) => [...prev, newVariant()]);
+        setVariants((prev) => [
+            ...prev,
+            {
+                ...newVariant(),
+                purchase_currency_id: ledgerCurrencyId,
+                sale_currency_id: ledgerCurrencyId,
+                wholesale_currency_id: ledgerCurrencyId,
+            },
+        ]);
         setPurchases((prev) => [...prev, newPurchase(nextIndex)]);
     };
 
@@ -749,6 +791,9 @@ export default function ProductsEdit({
         if (form.description.trim()) {
             formData.append('description', form.description.trim());
         }
+        if (form.base_unit_name.trim()) formData.append('base_unit_name', form.base_unit_name.trim());
+        if (form.pack_unit_name.trim()) formData.append('pack_unit_name', form.pack_unit_name.trim());
+        if (form.units_per_pack.trim()) formData.append('units_per_pack', form.units_per_pack.trim());
 
         // Variants
         variants.forEach((v, i) => {
@@ -760,8 +805,14 @@ export default function ProductsEdit({
             }
 
             formData.append(`variants[${i}][purchase_price_afn]`, v.purchase_price_afn || '0');
+            formData.append(`variants[${i}][purchase_amount]`, v.purchase_price_afn || '0');
+            formData.append(`variants[${i}][purchase_currency_id]`, v.purchase_currency_id || ledgerCurrencyId);
             formData.append(`variants[${i}][sale_price_afn]`, v.sale_price_afn || '0');
+            formData.append(`variants[${i}][sale_amount]`, v.sale_price_afn || '0');
+            formData.append(`variants[${i}][sale_currency_id]`, v.sale_currency_id || ledgerCurrencyId);
             formData.append(`variants[${i}][wholesale_price_afn]`, v.wholesale_price_afn || '0');
+            formData.append(`variants[${i}][wholesale_amount]`, v.wholesale_price_afn || '0');
+            formData.append(`variants[${i}][wholesale_currency_id]`, v.wholesale_currency_id || ledgerCurrencyId);
             formData.append(`variants[${i}][wholesale_min_qty]`, v.wholesale_min_qty || '0');
             formData.append(`variants[${i}][minimum_stock]`, v.minimum_stock || '0');
 
@@ -789,9 +840,14 @@ export default function ProductsEdit({
             }
 
             formData.append(`purchases[${i}][quantity]`, p.quantity || '1');
+            formData.append(`purchases[${i}][quantity_unit]`, p.quantity_unit || 'base');
 
             if (isInvestorPurchase(p.investor_id)) {
                 formData.append(`purchases[${i}][profit_per_unit]`, p.profit_per_unit || '0');
+                formData.append(
+                    `purchases[${i}][profit_currency_id]`,
+                    p.profit_currency_id || variants[p.variant_index]?.sale_currency_id || ledgerCurrencyId,
+                );
             }
 
             if (p.invoice_number) {
@@ -962,6 +1018,14 @@ export default function ProductsEdit({
                                 placeholder="Optional general description for the product"
                             />
                         </div>
+
+                        <UnitConversionFields
+                            baseUnit={form.base_unit_name}
+                            packUnit={form.pack_unit_name}
+                            unitsPerPack={form.units_per_pack}
+                            onChange={(field, value) => setForm({ ...form, [field]: value })}
+                            errors={errors}
+                        />
                     </CardContent>
                 </Card>
 
@@ -1178,48 +1242,34 @@ export default function ProductsEdit({
 
                                 {/* Prices */}
                                 <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-                                    <div className="space-y-2">
-                                        <Label>Purchase Price (AFN)</Label>
-                                        <Input
-                                            type="number"
-                                            min="0"
-                                            step="0.01"
-                                            onKeyDown={preventNegative}
-                                            value={v.purchase_price_afn}
-                                            onChange={(e) => updateVariant(vIndex, 'purchase_price_afn', e.target.value)}
-                                            placeholder="6500"
-                                        />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <Label>
-                                            Sale Price (AFN) <span className="text-destructive">*</span>
-                                        </Label>
-                                        <Input
-                                            type="number"
-                                            min="0"
-                                            step="0.01"
-                                            onKeyDown={preventNegative}
-                                            value={v.sale_price_afn}
-                                            onChange={(e) => updateVariant(vIndex, 'sale_price_afn', e.target.value)}
-                                            placeholder="9750"
-                                            className={errors[`variants.${vIndex}.sale_price_afn`] ? 'border-destructive' : ''}
-                                        />
-                                        {errors[`variants.${vIndex}.sale_price_afn`] && (
-                                            <p className="text-destructive text-xs">{errors[`variants.${vIndex}.sale_price_afn`]}</p>
-                                        )}
-                                    </div>
-                                    <div className="space-y-2">
-                                        <Label>Wholesale Price (AFN)</Label>
-                                        <Input
-                                            type="number"
-                                            min="0"
-                                            step="0.01"
-                                            onKeyDown={preventNegative}
-                                            value={v.wholesale_price_afn}
-                                            onChange={(e) => updateVariant(vIndex, 'wholesale_price_afn', e.target.value)}
-                                            placeholder="8500"
-                                        />
-                                    </div>
+                                    <MoneyField
+                                        label="Purchase cost"
+                                        amount={v.purchase_price_afn}
+                                        currencyId={v.purchase_currency_id || ledgerCurrencyId}
+                                        currencies={currencies}
+                                        onAmountChange={(val) => updateVariant(vIndex, 'purchase_price_afn', val)}
+                                        onCurrencyChange={(val) => updateVariant(vIndex, 'purchase_currency_id', val)}
+                                        error={errors[`variants.${vIndex}.purchase_price_afn`] || errors[`variants.${vIndex}.purchase_currency_id`]}
+                                    />
+                                    <MoneyField
+                                        label="Selling price"
+                                        required
+                                        amount={v.sale_price_afn}
+                                        currencyId={v.sale_currency_id || ledgerCurrencyId}
+                                        currencies={currencies}
+                                        onAmountChange={(val) => updateVariant(vIndex, 'sale_price_afn', val)}
+                                        onCurrencyChange={(val) => updateVariant(vIndex, 'sale_currency_id', val)}
+                                        error={errors[`variants.${vIndex}.sale_price_afn`] || errors[`variants.${vIndex}.sale_currency_id`]}
+                                    />
+                                    <MoneyField
+                                        label="Wholesale price"
+                                        amount={v.wholesale_price_afn}
+                                        currencyId={v.wholesale_currency_id || ledgerCurrencyId}
+                                        currencies={currencies}
+                                        onAmountChange={(val) => updateVariant(vIndex, 'wholesale_price_afn', val)}
+                                        onCurrencyChange={(val) => updateVariant(vIndex, 'wholesale_currency_id', val)}
+                                        error={errors[`variants.${vIndex}.wholesale_price_afn`] || errors[`variants.${vIndex}.wholesale_currency_id`]}
+                                    />
                                     <div className="space-y-2">
                                         <Label>Wholesale Min Qty</Label>
                                         <Input

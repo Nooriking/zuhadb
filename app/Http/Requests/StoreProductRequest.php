@@ -7,6 +7,8 @@ use Illuminate\Validation\Rule;
 
 class StoreProductRequest extends FormRequest
 {
+    use Concerns\ValidatesProductMoneyAndUnits;
+
     public function authorize(): bool
     {
         return $this->user() !== null;
@@ -225,6 +227,7 @@ class StoreProductRequest extends FormRequest
             'status'      => ['required', Rule::in(['active', 'inactive'])],
             'description' => ['nullable', 'string', 'max:5000'],
             'image'       => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
+            ...$this->productUnitRules(),
 
             /* ─────────────── Variants ─────────────── */
             'variants'                       => ['required', 'array', 'min:1'],
@@ -238,6 +241,7 @@ class StoreProductRequest extends FormRequest
             'variants.*.purchase_price_afn'  => ['nullable', 'numeric', 'min:0'],
             'variants.*.sale_price_afn'      => ['required', 'numeric', 'min:0'],
             'variants.*.wholesale_price_afn' => ['nullable', 'numeric', 'min:0'],
+            ...$this->variantMoneyRules(),
             'variants.*.wholesale_min_qty'   => ['nullable', 'integer', 'min:0'],
             'variants.*.profit_per_unit'     => ['nullable', 'numeric', 'min:0'],
             'variants.*.minimum_stock'       => ['nullable', 'integer', 'min:0'],
@@ -288,6 +292,8 @@ class StoreProductRequest extends FormRequest
                     $validator->errors()->add("variants.{$index}.sale_price_afn", 'Sale price cannot be less than the purchase price.');
                 }
             }
+
+            $this->validateProductMoneyAndUnits($validator);
         });
     }
 

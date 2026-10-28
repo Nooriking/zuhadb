@@ -60,7 +60,6 @@ export default function ProductsTrash({ products }: Props) {
                                 <TableHead className="w-16">#</TableHead>
                                 <TableHead>Product</TableHead>
                                 <TableHead>Brand</TableHead>
-                                <TableHead>Category</TableHead>
                                 <TableHead>Status</TableHead>
                                 <TableHead className="text-center">Actions</TableHead>
                             </TableRow>

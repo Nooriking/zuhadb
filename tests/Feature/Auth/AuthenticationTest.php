@@ -23,10 +23,15 @@ test('users can authenticate using the login screen', function () {
 test('users can not authenticate with invalid password', function () {
     $user = User::factory()->create();
 
-    $this->post('/login', [
+    $this->from('/login')->post('/login', [
         'email' => $user->email,
         'password' => 'wrong-password',
-    ]);
+    ])->assertSessionHasErrors(['credentials'])
+        ->assertSessionMissing('errors.email')
+        ->assertSessionMissing('errors.password');
+
+    expect(session('errors')->first('credentials'))->toBe('Sign-in failed. Check your details and try again.')
+        ->and(session()->hasOldInput('password'))->toBeFalse();
 
     $this->assertGuest();
 });

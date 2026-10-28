@@ -30,6 +30,7 @@ class InvestorProfitEntryController extends Controller
                 'investment:id,investment_number',
                 'sale:id,invoice_number',
                 'payer:id,name',
+                'currency:id,code,name,symbol',
             ])
             ->when($investorId, fn ($q, $v) => $q->where('investor_id', $v))
             ->when($investmentId, fn ($q, $v) => $q->where('investment_id', $v))
@@ -41,6 +42,18 @@ class InvestorProfitEntryController extends Controller
             ->withQueryString();
 
         // Stats
+        $profitRows = InvestorProfitEntry::query()
+            ->where('entry_type', 'profit')
+            ->where('status', '!=', 'cancelled')
+            ->with('currency')
+            ->get()
+            ->map(fn (InvestorProfitEntry $row) => [
+                'amount' => $row->profit_amount_currency ?? $row->profit_amount_afn,
+                'currency' => $row->currency,
+                'code' => $row->currency_code,
+                'symbol' => $row->currency_symbol,
+            ]);
+
         $stats = [
             'total_entries'    => InvestorProfitEntry::count(),
             'pending_count'    => InvestorProfitEntry::pending()->count(),
@@ -48,6 +61,7 @@ class InvestorProfitEntryController extends Controller
             'total_profit_afn' => (float) InvestorProfitEntry::where('entry_type', 'profit')->where('status', '!=', 'cancelled')->sum('profit_amount_afn'),
             'pending_profit'   => (float) InvestorProfitEntry::pending()->sum('profit_amount_afn'),
             'paid_profit'      => (float) InvestorProfitEntry::paid()->sum('profit_amount_afn'),
+            'profit_totals'    => app(\App\Services\CurrencyService::class)->summarize($profitRows),
         ];
 
         return Inertia::render('investor-profit-entries/index', [

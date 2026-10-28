@@ -26,7 +26,8 @@ class PurchaseService
         return DB::transaction(function () use ($data, $actor, $branchId) {
             $variant = ProductVariant::with('product')->findOrFail($data['variant_id']);
             $product = $variant->product;
-            $qty = (int) $data['quantity'];
+            $qty = $product?->quantityToBaseUnits((int) $data['quantity'], (string) ($data['quantity_unit'] ?? 'base'))
+                ?? (int) $data['quantity'];
             $purchasePrice = (float) $data['purchase_price_afn'];
             $salePrice = (float) $data['sale_price_afn'];
             $exchangeRate = (float) ($data['exchange_rate'] ?? 0);

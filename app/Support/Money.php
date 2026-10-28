@@ -33,7 +33,7 @@ class Money
         if (function_exists('bcadd')) {
             $half = $decimals === 0
                 ? '0.5'
-                : '0.'.str_repeat('0', $decimals - 1).'5';
+                : '0.'.str_repeat('0', $decimals).'5';
 
             $signedHalf = str_starts_with(ltrim($amount), '-')
                 ? '-'.$half

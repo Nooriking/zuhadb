@@ -25,9 +25,14 @@ class ProductVariant extends Model
 
         // Prices
         'purchase_price_afn',
-        // ❌ 'purchase_price_usd' حذف شد
+        'purchase_amount',
+        'purchase_currency_id',
         'sale_price_afn',
+        'sale_amount',
+        'sale_currency_id',
         'wholesale_price_afn',
+        'wholesale_amount',
+        'wholesale_currency_id',
         'wholesale_min_qty',
         'profit_per_unit',
         'stock_quantity',
@@ -40,9 +45,11 @@ class ProductVariant extends Model
     protected $casts = [
         'volume_ml'            => 'integer',
         'purchase_price_afn'   => 'decimal:2',
-        // ❌ 'purchase_price_usd' حذف شد
+        'purchase_amount'      => 'decimal:2',
         'sale_price_afn'       => 'decimal:2',
+        'sale_amount'          => 'decimal:2',
         'wholesale_price_afn'  => 'decimal:2',
+        'wholesale_amount'     => 'decimal:2',
         'wholesale_min_qty'    => 'integer',
         'profit_per_unit'      => 'decimal:2',
         'stock_quantity'       => 'integer',
@@ -72,6 +79,21 @@ class ProductVariant extends Model
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class, 'product_id');
+    }
+
+    public function purchaseCurrency(): BelongsTo
+    {
+        return $this->belongsTo(Currency::class, 'purchase_currency_id');
+    }
+
+    public function saleCurrency(): BelongsTo
+    {
+        return $this->belongsTo(Currency::class, 'sale_currency_id');
+    }
+
+    public function wholesaleCurrency(): BelongsTo
+    {
+        return $this->belongsTo(Currency::class, 'wholesale_currency_id');
     }
 
     public function barcodes(): HasMany

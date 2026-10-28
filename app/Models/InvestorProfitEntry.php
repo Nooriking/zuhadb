@@ -20,8 +20,14 @@ class InvestorProfitEntry extends Model
         'investment_product_allocation_id',
         'sale_id',
         'sale_item_id',
+        'currency_id',
+        'currency_code',
+        'currency_symbol',
+        'exchange_rate',
         'quantity',
+        'profit_per_unit_currency',
         'profit_per_unit_afn',
+        'profit_amount_currency',
         'profit_amount_afn',
         'entry_type',
         'status',
@@ -33,8 +39,11 @@ class InvestorProfitEntry extends Model
 
     protected $casts = [
         'quantity'            => 'integer',
-        'profit_per_unit_afn' => 'decimal:2',
-        'profit_amount_afn'   => 'decimal:2',
+        'exchange_rate'            => 'decimal:8',
+        'profit_per_unit_currency' => 'decimal:2',
+        'profit_per_unit_afn'      => 'decimal:2',
+        'profit_amount_currency'   => 'decimal:2',
+        'profit_amount_afn'        => 'decimal:2',
         'earned_at'                => 'datetime',
         'paid_at'                  => 'datetime',
         'created_at'               => 'datetime',
@@ -84,6 +93,11 @@ class InvestorProfitEntry extends Model
     public function saleItem(): BelongsTo
     {
         return $this->belongsTo(SaleItem::class, 'sale_item_id');
+    }
+
+    public function currency(): BelongsTo
+    {
+        return $this->belongsTo(Currency::class, 'currency_id');
     }
 
     public function payer(): BelongsTo
@@ -187,6 +201,13 @@ class InvestorProfitEntry extends Model
             }
 
             $profitAmountAfn = $profitPerUnitAfn * $quantity;
+            $ledger = Currency::ledger();
+            $snapCurrencyId = $currencyId ?? $investment?->currency_id ?? $ledger?->id;
+            $snapCode = $investment?->currency_code ?? $ledger?->code;
+            $snapSymbol = $investment?->currency_symbol ?? $ledger?->symbol;
+            $snapRate = $exchangeRate ?? $investment?->exchange_rate ?? ($ledger ? 1 : null);
+            $profitPerUnitOriginal = $profitPerUnitCurrency ?? $profitPerUnitAfn;
+            $profitAmountOriginal = $profitPerUnitOriginal * $quantity;
 
             $entry = self::create([
                 'investor_id'                      => $investorId,
@@ -194,8 +215,14 @@ class InvestorProfitEntry extends Model
                 'investment_product_allocation_id' => $productAllocationId,
                 'sale_id'                          => $saleId,
                 'sale_item_id'                     => $saleItemId,
+                'currency_id'                      => $snapCurrencyId,
+                'currency_code'                    => $snapCode,
+                'currency_symbol'                  => $snapSymbol,
+                'exchange_rate'                    => $snapRate,
                 'quantity'                         => $quantity,
+                'profit_per_unit_currency'         => $profitPerUnitOriginal,
                 'profit_per_unit_afn'              => $profitPerUnitAfn,
+                'profit_amount_currency'           => $profitAmountOriginal,
                 'profit_amount_afn'                => $profitAmountAfn,
                 'entry_type'                       => 'profit',
                 'status'                           => 'pending',
@@ -225,10 +252,15 @@ class InvestorProfitEntry extends Model
                 amountAfn:   $profitAmountAfn,
                 balanceType: 'profit',
                 options:     [
-                    'investment_id'  => $investmentId,
-                    'reference_type' => Sale::class,
-                    'reference_id'   => $saleId,
-                    'description'    => "Profit from sale #{$saleId} (entry #{$entry->id})",
+                    'investment_id'    => $investmentId,
+                    'currency_id'      => $snapCurrencyId,
+                    'currency_code'    => $snapCode,
+                    'currency_symbol'  => $snapSymbol,
+                    'exchange_rate'    => $snapRate,
+                    'amount_currency'  => $profitAmountOriginal,
+                    'reference_type'   => Sale::class,
+                    'reference_id'     => $saleId,
+                    'description'      => "Profit from sale #{$saleId} (entry #{$entry->id})",
                 ]
             );
 

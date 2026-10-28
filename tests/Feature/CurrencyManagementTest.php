@@ -10,41 +10,41 @@ test('guests cannot open currencies', function () {
 });
 
 test('cashiers cannot open currencies', function () {
-    $this->actingAs(User::factory()->create(['role' => User::ROLE_CASHIER]));
-
-    $this->get('/currencies')->assertForbidden();
+    $this->actingAs(User::factory()->create(['role' => User::ROLE_CASHIER]))
+        ->get('/currencies')
+        ->assertForbidden();
 });
 
 test('admins can list and create currencies', function () {
-    $this->actingAs(User::factory()->create(['role' => User::ROLE_ADMIN]));
+    $user = User::factory()->create(['role' => User::ROLE_ADMIN]);
 
-    $this->get('/currencies')->assertOk();
-    $this->get('/currencies/create')->assertOk();
+    $this->actingAs($user)->get('/currencies')->assertOk();
+    $this->actingAs($user)->get('/currencies/create')->assertOk();
 
-    $this->post('/currencies', [
-        'code' => 'usd',
-        'name' => 'US Dollar',
-        'symbol' => '$',
+    $this->actingAs($user)->post('/currencies', [
+        'code' => 'gbp',
+        'name' => 'Pound Sterling',
+        'symbol' => '£',
         'decimal_places' => 2,
-        'rate_to_default' => '70.5',
+        'rate_to_default' => '90.5',
         'is_base' => false,
         'status' => 'active',
     ])->assertRedirect('/currencies');
 
-    $usd = Currency::query()->where('code', 'USD')->first();
+    $gbp = Currency::query()->where('code', 'GBP')->first();
 
-    expect($usd)->not->toBeNull()
-        ->and($usd->name)->toBe('US Dollar')
-        ->and((float) $usd->rate_to_default)->toBe(70.5)
-        ->and($usd->is_base)->toBeFalse();
+    expect($gbp)->not->toBeNull()
+        ->and($gbp->name)->toBe('Pound Sterling')
+        ->and((float) $gbp->rate_to_default)->toBe(90.5)
+        ->and($gbp->is_base)->toBeFalse();
 });
 
 test('currency codes must be unique three-letter codes', function () {
-    $this->actingAs(User::factory()->create(['role' => User::ROLE_ADMIN]));
+    $user = User::factory()->create(['role' => User::ROLE_ADMIN]);
 
     Currency::factory()->create(['code' => 'EUR', 'name' => 'Euro', 'symbol' => '€']);
 
-    $this->post('/currencies', [
+    $this->actingAs($user)->post('/currencies', [
         'code' => 'EU',
         'name' => 'Bad',
         'symbol' => 'x',
@@ -53,7 +53,7 @@ test('currency codes must be unique three-letter codes', function () {
         'status' => 'active',
     ])->assertSessionHasErrors('code');
 
-    $this->post('/currencies', [
+    $this->actingAs($user)->post('/currencies', [
         'code' => 'EUR',
         'name' => 'Euro again',
         'symbol' => '€',
@@ -64,20 +64,21 @@ test('currency codes must be unique three-letter codes', function () {
 });
 
 test('only one currency is the default after set-as-base', function () {
-    $this->actingAs(User::factory()->create(['role' => User::ROLE_ADMIN]));
+    $user = User::factory()->create(['role' => User::ROLE_ADMIN]);
 
     $afn = Currency::query()->where('is_base', true)->first()
         ?? Currency::factory()->create(['code' => 'AFN', 'is_base' => true, 'rate_to_default' => '1']);
 
-    $usd = Currency::factory()->create([
-        'code' => 'USD',
-        'name' => 'US Dollar',
-        'symbol' => '$',
-        'rate_to_default' => '70',
-        'is_base' => false,
-    ]);
+    $usd = Currency::query()->where('code', 'USD')->first()
+        ?? Currency::factory()->create([
+            'code' => 'USD',
+            'name' => 'US Dollar',
+            'symbol' => '$',
+            'is_base' => false,
+        ]);
+    $usd->update(['rate_to_default' => '70', 'status' => 'active', 'trash' => false]);
 
-    $this->patch("/currencies/{$usd->id}/set-as-base")->assertRedirect();
+    $this->actingAs($user)->patch("/currencies/{$usd->id}/set-as-base")->assertRedirect();
 
     expect($usd->fresh()->is_base)->toBeTrue()
         ->and((float) $usd->fresh()->rate_to_default)->toBe(1.0)
@@ -93,12 +94,9 @@ test('changing the default currency does not rewrite historical sale amounts', f
         'ledger_currency_code' => 'AFN',
     ]);
 
-    $usd = Currency::factory()->create([
-        'code' => 'USD',
-        'rate_to_default' => '80',
-        'is_base' => false,
-        'status' => 'active',
-    ]);
+    $usd = Currency::query()->where('code', 'USD')->first()
+        ?? Currency::factory()->create(['code' => 'USD', 'is_base' => false, 'status' => 'active']);
+    $usd->update(['rate_to_default' => '80', 'status' => 'active', 'trash' => false]);
 
     app(CurrencyService::class)->makeDefault($usd);
 
@@ -109,12 +107,12 @@ test('changing the default currency does not rewrite historical sale amounts', f
 });
 
 test('the default currency cannot be deactivated', function () {
-    $this->actingAs(User::factory()->create(['role' => User::ROLE_ADMIN]));
+    $user = User::factory()->create(['role' => User::ROLE_ADMIN]);
 
     $default = Currency::query()->where('is_base', true)->first()
         ?? Currency::factory()->create(['code' => 'AFN', 'is_base' => true, 'status' => 'active']);
 
-    $this->patch("/currencies/{$default->id}/toggle-status")
+    $this->actingAs($user)->patch("/currencies/{$default->id}/toggle-status")
         ->assertRedirect()
         ->assertSessionHas('error');
 

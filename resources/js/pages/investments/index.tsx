@@ -10,7 +10,8 @@ import { useState } from 'react';
 interface Investment {
     id: number;
     investment_number: string;
-    capital_amount_currency: string;
+    capital_amount_currency?: string | null;
+    currency_code?: string | null;
     capital_amount_afn: string;
     available_amount_afn: string;
     allocated_amount_afn: string;
@@ -144,15 +145,15 @@ export default function InvestmentsIndex({ investments, investors, filters, stat
                     </div>
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
                         <p className="text-xs text-gray-500">Total Capital</p>
-                        <p className="text-xl font-bold">{formatPrice(stats.total_capital_afn)} USD</p>
+                        <p className="text-xl font-bold">{formatPrice(stats.total_capital_afn)} AFN</p>
                     </div>
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
                         <p className="text-xs text-gray-500">Available</p>
-                        <p className="text-xl font-bold text-green-600">{formatPrice(stats.total_available_afn)} USD</p>
+                        <p className="text-xl font-bold text-green-600">{formatPrice(stats.total_available_afn)} AFN</p>
                     </div>
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
                         <p className="text-xs text-gray-500">Total Profit</p>
-                        <p className="text-xl font-bold text-purple-600">{formatPrice(stats.total_profit_afn)} USD</p>
+                        <p className="text-xl font-bold text-purple-600">{formatPrice(stats.total_profit_afn)} AFN</p>
                     </div>
                 </div>
 
@@ -185,10 +186,10 @@ export default function InvestmentsIndex({ investments, investors, filters, stat
                                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase">#</th>
                                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Investment</th>
                                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Investor</th>
-                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Capital USD</th>
-                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Available USD</th>
-                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Used USD</th>
-                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Profit USD</th>
+                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Capital</th>
+                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Available</th>
+                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Used</th>
+                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Profit</th>
                                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Status</th>
                                 <th className="px-4 py-3 text-center text-xs font-semibold uppercase">Actions</th>
                             </tr>
@@ -222,17 +223,21 @@ export default function InvestmentsIndex({ investments, investors, filters, stat
                                             </td>
                                             <td className="px-4 py-3 text-right font-mono">
                                                 <div className="font-semibold">
-                                                    {formatPrice(inv.capital_amount_afn)} USD
+                                                    {formatPrice(inv.capital_amount_currency ?? inv.capital_amount_afn)}{' '}
+                                                    {inv.currency?.code || inv.currency_code || 'AFN'}
                                                 </div>
+                                                {inv.currency?.code && inv.currency.code !== 'AFN' ? (
+                                                    <div className="text-muted-foreground text-xs">{formatPrice(inv.capital_amount_afn)} AFN ledger</div>
+                                                ) : null}
                                             </td>
                                             <td className="px-4 py-3 text-right font-mono font-semibold">
-                                                {formatPrice(inv.available_amount_afn)} USD
+                                                {formatPrice(inv.available_amount_afn)} AFN
                                             </td>
                                             <td className="px-4 py-3 text-right font-mono">
-                                                {formatPrice(inv.allocated_amount_afn)} USD
+                                                {formatPrice(inv.allocated_amount_afn)} AFN
                                             </td>
                                             <td className="px-4 py-3 text-right font-mono font-semibold">
-                                                {formatPrice(inv.profit_amount_afn)} USD
+                                                {formatPrice(inv.profit_amount_afn)} AFN
                                             </td>
                                             <td className="px-4 py-3">{getStatusBadge(inv.status)}</td>
                                             <td className="px-4 py-3">

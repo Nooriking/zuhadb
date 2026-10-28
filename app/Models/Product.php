@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
+use Illuminate\Validation\ValidationException;
 
 class Product extends Model
 {
@@ -30,6 +31,9 @@ class Product extends Model
         'gender',
         'status',
         'description',
+        'base_unit_name',
+        'pack_unit_name',
+        'units_per_pack',
 
         // Purchase info
         'variant_id',
@@ -83,6 +87,7 @@ class Product extends Model
         // ✅ Store profit (جدید)
         'store_profit_per_unit'  => 'decimal:2',
         'line_store_profit'      => 'decimal:2',
+        'units_per_pack'         => 'decimal:6',
 
         'created_at'             => 'datetime',
         'updated_at'             => 'datetime',
@@ -193,6 +198,64 @@ class Product extends Model
     public function scopeByGender(Builder $query, string $gender): Builder
     {
         return $query->where('gender', $gender);
+    }
+
+    public function hasUnitConversion(): bool
+    {
+        return filled($this->base_unit_name)
+            && filled($this->pack_unit_name)
+            && $this->units_per_pack !== null
+            && (float) $this->units_per_pack > 0;
+    }
+
+    public function conversionLabel(): ?string
+    {
+        if (! $this->hasUnitConversion()) {
+            return null;
+        }
+
+        $factor = rtrim(rtrim(number_format((float) $this->units_per_pack, 6, '.', ''), '0'), '.');
+
+        return '1 '.$this->pack_unit_name.' = '.$factor.' '.$this->base_unit_name;
+    }
+
+    /**
+     * Inventory and sales store quantities in the base unit.
+     */
+    public function quantityToBaseUnits(int $quantity, string $unit = 'base'): int
+    {
+        $unit = $unit === 'pack' ? 'pack' : 'base';
+
+        if ($unit === 'base') {
+            return $quantity;
+        }
+
+        if (! $this->hasUnitConversion()) {
+            throw ValidationException::withMessages([
+                'quantity_unit' => 'This product has no pack-to-base conversion defined.',
+            ]);
+        }
+
+        if (function_exists('bcmul')) {
+            $raw = bcmul((string) $quantity, (string) $this->units_per_pack, 6);
+        } else {
+            $raw = number_format($quantity * (float) $this->units_per_pack, 6, '.', '');
+        }
+
+        if (function_exists('bccomp') && bccomp($raw, (string) (int) $raw, 6) !== 0) {
+            throw ValidationException::withMessages([
+                'quantity' => 'Pack quantity must convert to a whole number of '.$this->base_unit_name.'.',
+            ]);
+        }
+
+        $base = (int) $raw;
+        if ($base < 1) {
+            throw ValidationException::withMessages([
+                'quantity' => 'Converted quantity must be at least 1 '.$this->base_unit_name.'.',
+            ]);
+        }
+
+        return $base;
     }
 
     public function scopeMainProducts(Builder $query): Builder

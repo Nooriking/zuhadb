@@ -4,10 +4,12 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\StoreInvestorWithdrawalRequest;
 use App\Models\AppSetting;
+use App\Models\Currency;
 use App\Models\Investment;
 use App\Models\Investor;
 use App\Models\InvestorTransaction;
 use App\Models\InvestorWithdrawal;
+use App\Services\CurrencyService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -17,6 +19,10 @@ use Inertia\Response;
 
 class InvestorWithdrawalController extends Controller
 {
+    public function __construct(
+        private readonly CurrencyService $currencies,
+    ) {}
+
     /* =========================================================
      |  INDEX — همه برداشت‌ها
      ========================================================= */
@@ -31,6 +37,7 @@ class InvestorWithdrawalController extends Controller
         $withdrawals = InvestorWithdrawal::query()
             ->with([
                 'investor:id,full_name,phone',
+                'currency:id,code,name,symbol',
                 'approvedBy:id,name',
                 'paidBy:id,name',
                 'creator:id,name',
@@ -80,6 +87,7 @@ class InvestorWithdrawalController extends Controller
                                 ->get(),
             'selectedInvestorId' => $investorId,
             'nextNumber' => InvestorWithdrawal::generateWithdrawalNumber(),
+            'currencies' => Currency::formOptions(),
         ]);
     }
 
@@ -95,7 +103,16 @@ class InvestorWithdrawalController extends Controller
             $investor = Investor::findOrFail($data['investor_id']);
             $wallet   = $investor->getOrCreateWallet();
 
-            $amountAfn = (float) $data['amount_afn'];
+            $currency = $this->currencies->requireActive((int) $data['currency_id']);
+            $amountEntered = (float) ($data['amount'] ?? $data['amount_afn'] ?? 0);
+            $amountAfn = (float) $this->currencies->toLedger((string) $amountEntered, $currency);
+            $snap = $this->currencies->snapshot($currency);
+            $data['currency_id'] = $snap['id'];
+            $data['currency_code'] = $snap['code'];
+            $data['currency_symbol'] = $snap['symbol'];
+            $data['exchange_rate'] = $snap['rate_to_default'];
+            $data['amount_currency'] = $amountEntered;
+            unset($data['amount']);
 
             // ⭐ بررسی موجودی
             if ($data['type'] === 'profit') {

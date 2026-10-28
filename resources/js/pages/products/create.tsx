@@ -1,4 +1,7 @@
 import { BackButton } from '@/components/form-page';
+import { MoneyField } from '@/components/money-field';
+import { UnitConversionFields } from '@/components/unit-conversion-fields';
+import { convertToDefault, defaultCurrencyId, findCurrency, type CatalogCurrency } from '@/lib/currencies';
 // resources/js/pages/products/create.tsx
 
 import { Badge } from '@/components/ui/badge';
@@ -68,8 +71,11 @@ interface Variant {
 
     // Prices
     purchase_price_afn: string;
+    purchase_currency_id: string;
     sale_price_afn: string;
+    sale_currency_id: string;
     wholesale_price_afn: string;
+    wholesale_currency_id: string;
     wholesale_min_qty: string;
     minimum_stock: string;
 
@@ -82,7 +88,9 @@ interface Purchase {
     investor_id: string;
     supplier_id: string;
     quantity: string;
+    quantity_unit: 'base' | 'pack';
     profit_per_unit: string;
+    profit_currency_id: string;
     line_total: string;
     line_profit: string;
     invoice_number: string;
@@ -98,6 +106,7 @@ interface Props {
     brands: Brand[];
     investors?: Investor[];
     suppliers?: Supplier[];
+    currencies?: CatalogCurrency[];
     errors?: Record<string, string>;
 }
 
@@ -158,8 +167,11 @@ const newVariant = (): Variant => ({
     volume_ml: '',
     concentration: '',
     purchase_price_afn: '',
+    purchase_currency_id: '',
     sale_price_afn: '',
+    sale_currency_id: '',
     wholesale_price_afn: '',
+    wholesale_currency_id: '',
     wholesale_min_qty: '10',
     minimum_stock: '0',
     barcodes: [newBarcode(true)],
@@ -171,7 +183,9 @@ const newPurchase = (variantIndex: number): Purchase => ({
     investor_id: 'store',
     supplier_id: 'none',
     quantity: '1',
+    quantity_unit: 'base',
     profit_per_unit: '0',
+    profit_currency_id: '',
     line_total: '0',
     line_profit: '0',
     invoice_number: '',
@@ -235,8 +249,10 @@ const calcProfits = (purchasePricePerUnit: number, salePricePerUnit: number, inv
  |  Component
  ═══════════════════════════════════════════════════════ */
 
-export default function ProductsCreate({ brands, investors = [], suppliers = [], errors: initialErrors }: Props) {
+export default function ProductsCreate({ brands, investors = [], suppliers = [], currencies = [], errors: initialErrors }: Props) {
     const { toast } = useToast();
+
+    const ledgerCurrencyId = defaultCurrencyId(currencies);
 
     const [form, setForm] = useState({
         name: '',
@@ -244,9 +260,19 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
         gender: 'unisex',
         status: 'active' as 'active' | 'inactive',
         description: '',
+        base_unit_name: '',
+        pack_unit_name: '',
+        units_per_pack: '',
     });
 
-    const [variants, setVariants] = useState<Variant[]>([newVariant()]);
+    const withDefaultCurrency = (variant: Variant): Variant => ({
+        ...variant,
+        purchase_currency_id: variant.purchase_currency_id || ledgerCurrencyId,
+        sale_currency_id: variant.sale_currency_id || ledgerCurrencyId,
+        wholesale_currency_id: variant.wholesale_currency_id || ledgerCurrencyId,
+    });
+
+    const [variants, setVariants] = useState<Variant[]>([withDefaultCurrency(newVariant())]);
     const [purchases, setPurchases] = useState<Purchase[]>([newPurchase(0)]);
 
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
@@ -293,7 +319,7 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
 
     const addVariant = () => {
         const nextIndex = variants.length;
-        setVariants((prev) => [...prev, newVariant()]);
+        setVariants((prev) => [...prev, withDefaultCurrency(newVariant())]);
         setPurchases((prev) => [...prev, newPurchase(nextIndex)]);
     };
 
@@ -669,6 +695,9 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
         if (form.description.trim()) {
             formData.append('description', form.description.trim());
         }
+        if (form.base_unit_name.trim()) formData.append('base_unit_name', form.base_unit_name.trim());
+        if (form.pack_unit_name.trim()) formData.append('pack_unit_name', form.pack_unit_name.trim());
+        if (form.units_per_pack.trim()) formData.append('units_per_pack', form.units_per_pack.trim());
 
         variants.forEach((v, i) => {
             if (v.volume_ml) formData.append(`variants[${i}][volume_ml]`, v.volume_ml);
@@ -677,8 +706,14 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
             }
 
             formData.append(`variants[${i}][purchase_price_afn]`, v.purchase_price_afn || '0');
+            formData.append(`variants[${i}][purchase_amount]`, v.purchase_price_afn || '0');
+            formData.append(`variants[${i}][purchase_currency_id]`, v.purchase_currency_id || ledgerCurrencyId);
             formData.append(`variants[${i}][sale_price_afn]`, v.sale_price_afn || '0');
+            formData.append(`variants[${i}][sale_amount]`, v.sale_price_afn || '0');
+            formData.append(`variants[${i}][sale_currency_id]`, v.sale_currency_id || ledgerCurrencyId);
             formData.append(`variants[${i}][wholesale_price_afn]`, v.wholesale_price_afn || '0');
+            formData.append(`variants[${i}][wholesale_amount]`, v.wholesale_price_afn || '0');
+            formData.append(`variants[${i}][wholesale_currency_id]`, v.wholesale_currency_id || ledgerCurrencyId);
             formData.append(`variants[${i}][wholesale_min_qty]`, v.wholesale_min_qty || '0');
             formData.append(`variants[${i}][minimum_stock]`, v.minimum_stock || '0');
 
@@ -704,9 +739,14 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
             }
 
             formData.append(`purchases[${i}][quantity]`, p.quantity || '1');
+            formData.append(`purchases[${i}][quantity_unit]`, p.quantity_unit || 'base');
 
             if (isInvestorPurchase(p.investor_id)) {
                 formData.append(`purchases[${i}][profit_per_unit]`, p.profit_per_unit || '0');
+                formData.append(
+                    `purchases[${i}][profit_currency_id]`,
+                    p.profit_currency_id || variants[p.variant_index]?.sale_currency_id || ledgerCurrencyId,
+                );
             }
 
             if (p.invoice_number) {
@@ -889,6 +929,14 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                 placeholder="Optional general description for the product"
                             />
                         </div>
+
+                        <UnitConversionFields
+                            baseUnit={form.base_unit_name}
+                            packUnit={form.pack_unit_name}
+                            unitsPerPack={form.units_per_pack}
+                            onChange={(field, value) => setForm({ ...form, [field]: value })}
+                            errors={errors}
+                        />
                     </CardContent>
                 </Card>
 
@@ -1111,34 +1159,27 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                                     </div>
 
                                                     {/* Investor Profit */}
-                                                    <div className="space-y-2">
-                                                        <Label className="flex items-center gap-1">
-                                                            <Wallet className="h-3 w-3 text-blue-600" />
-                                                            Investor profit / unit (AFN) {investorBuy && <span className="text-destructive">*</span>}
-                                                        </Label>
-                                                        <Input
-                                                            type="number"
-                                                            min="0"
-                                                            onKeyDown={preventNegative}
-                                                            value={p.profit_per_unit}
-                                                            onChange={(e) => {
-                                                                const val = e.target.value;
+                                                    <div className="space-y-2 md:col-span-1">
+                                                        <MoneyField
+                                                            label="Investor profit / unit"
+                                                            required={investorBuy}
+                                                            amount={p.profit_per_unit}
+                                                            currencyId={p.profit_currency_id || v?.sale_currency_id || ledgerCurrencyId}
+                                                            currencies={currencies}
+                                                            disabled={!investorBuy}
+                                                            onAmountChange={(val) => {
                                                                 if (toNum(val) < 0) return;
                                                                 updatePurchase(pIndex, 'profit_per_unit', val);
                                                             }}
-                                                            disabled={!investorBuy}
-                                                            className={errors[`purchases.${pIndex}.profit_per_unit`] ? 'border-destructive' : ''}
+                                                            onCurrencyChange={(val) => updatePurchase(pIndex, 'profit_currency_id', val)}
+                                                            error={
+                                                                errors[`purchases.${pIndex}.profit_per_unit`] ||
+                                                                errors[`purchases.${pIndex}.profit_currency_id`]
+                                                            }
                                                         />
                                                         {investorBuy && (
                                                             <p className="text-muted-foreground text-xs">
-                                                                Max allowed:{' '}
-                                                                {fmt(Math.max(0, toNum(v?.sale_price_afn) - toNum(v?.purchase_price_afn)))} AFN
-                                                            </p>
-                                                        )}
-
-                                                        {errors[`purchases.${pIndex}.profit_per_unit`] && (
-                                                            <p className="text-destructive text-xs">
-                                                                {errors[`purchases.${pIndex}.profit_per_unit`]}
+                                                                Entered in the selected currency, then converted to the ledger for stock profit.
                                                             </p>
                                                         )}
                                                     </div>
@@ -1211,68 +1252,46 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                 <div className="space-y-3 rounded-lg border p-4">
                                     <h4 className="text-sm font-semibold">Prices and rates</h4>
                                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                        <div className="space-y-2">
-                                            <Label>Purchase Price (AFN)</Label>
-                                            <Input
-                                                type="number"
-                                                min="0"
-                                                step="0.01"
-                                                onKeyDown={preventNegative}
-                                                value={v.purchase_price_afn}
-                                                onChange={(e) => {
-                                                    const val = e.target.value;
-                                                    if (toNum(val) < 0) return;
-                                                    updateVariant(vIndex, 'purchase_price_afn', val);
-                                                }}
-                                                placeholder="6500"
-                                                className={errors[`variants.${vIndex}.purchase_price_afn`] ? 'border-destructive' : ''}
-                                            />
-                                            {errors[`variants.${vIndex}.purchase_price_afn`] && (
-                                                <p className="text-destructive text-xs">{errors[`variants.${vIndex}.purchase_price_afn`]}</p>
-                                            )}
-                                        </div>
-                                        <div className="space-y-2">
-                                            <Label>
-                                                Sale Price (AFN) <span className="text-destructive">*</span>
-                                            </Label>
-                                            <Input
-                                                type="number"
-                                                min="0"
-                                                step="0.01"
-                                                onKeyDown={preventNegative}
-                                                value={v.sale_price_afn}
-                                                onChange={(e) => {
-                                                    const val = e.target.value;
-                                                    if (toNum(val) < 0) return;
-                                                    updateVariant(vIndex, 'sale_price_afn', val);
-                                                }}
-                                                placeholder="9750"
-                                                className={errors[`variants.${vIndex}.sale_price_afn`] ? 'border-destructive' : ''}
-                                            />
-                                            {errors[`variants.${vIndex}.sale_price_afn`] && (
-                                                <p className="text-destructive text-xs">{errors[`variants.${vIndex}.sale_price_afn`]}</p>
-                                            )}
-                                        </div>
-                                        <div className="space-y-2">
-                                            <Label>Wholesale Price (AFN)</Label>
-                                            <Input
-                                                type="number"
-                                                min="0"
-                                                step="0.01"
-                                                onKeyDown={preventNegative}
-                                                value={v.wholesale_price_afn}
-                                                onChange={(e) => {
-                                                    const val = e.target.value;
-                                                    if (toNum(val) < 0) return;
-                                                    updateVariant(vIndex, 'wholesale_price_afn', val);
-                                                }}
-                                                placeholder="8500"
-                                                className={errors[`variants.${vIndex}.wholesale_price_afn`] ? 'border-destructive' : ''}
-                                            />
-                                            {errors[`variants.${vIndex}.wholesale_price_afn`] && (
-                                                <p className="text-destructive text-xs">{errors[`variants.${vIndex}.wholesale_price_afn`]}</p>
-                                            )}
-                                        </div>
+                                        <MoneyField
+                                            label="Purchase cost"
+                                            amount={v.purchase_price_afn}
+                                            currencyId={v.purchase_currency_id || ledgerCurrencyId}
+                                            currencies={currencies}
+                                            onAmountChange={(val) => {
+                                                if (toNum(val) < 0) return;
+                                                updateVariant(vIndex, 'purchase_price_afn', val);
+                                            }}
+                                            onCurrencyChange={(val) => updateVariant(vIndex, 'purchase_currency_id', val)}
+                                            error={errors[`variants.${vIndex}.purchase_price_afn`] || errors[`variants.${vIndex}.purchase_currency_id`]}
+                                        />
+                                        <MoneyField
+                                            label="Selling price"
+                                            required
+                                            amount={v.sale_price_afn}
+                                            currencyId={v.sale_currency_id || ledgerCurrencyId}
+                                            currencies={currencies}
+                                            onAmountChange={(val) => {
+                                                if (toNum(val) < 0) return;
+                                                updateVariant(vIndex, 'sale_price_afn', val);
+                                            }}
+                                            onCurrencyChange={(val) => updateVariant(vIndex, 'sale_currency_id', val)}
+                                            error={errors[`variants.${vIndex}.sale_price_afn`] || errors[`variants.${vIndex}.sale_currency_id`]}
+                                        />
+                                        <MoneyField
+                                            label="Wholesale price"
+                                            amount={v.wholesale_price_afn}
+                                            currencyId={v.wholesale_currency_id || ledgerCurrencyId}
+                                            currencies={currencies}
+                                            onAmountChange={(val) => {
+                                                if (toNum(val) < 0) return;
+                                                updateVariant(vIndex, 'wholesale_price_afn', val);
+                                            }}
+                                            onCurrencyChange={(val) => updateVariant(vIndex, 'wholesale_currency_id', val)}
+                                            error={
+                                                errors[`variants.${vIndex}.wholesale_price_afn`] ||
+                                                errors[`variants.${vIndex}.wholesale_currency_id`]
+                                            }
+                                        />
                                         <div className="space-y-2">
                                             <Label>Wholesale Min Qty</Label>
                                             <Input
@@ -1325,12 +1344,29 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                         {purchases.map((p, pIndex) => {
                             const isInvestor = isInvestorPurchase(p.investor_id);
                             const variant = variants[p.variant_index];
-                            const unitPrice = toNum(variant?.purchase_price_afn);
+                            const defaultCur = findCurrency(currencies, ledgerCurrencyId);
+                            const costLedger = convertToDefault(
+                                toNum(variant?.purchase_price_afn),
+                                findCurrency(currencies, variant?.purchase_currency_id),
+                                defaultCur,
+                            );
+                            const saleLedger = convertToDefault(
+                                toNum(variant?.sale_price_afn),
+                                findCurrency(currencies, variant?.sale_currency_id),
+                                defaultCur,
+                            );
+                            const investorLedger = convertToDefault(
+                                isInvestor ? toNum(p.profit_per_unit) : 0,
+                                findCurrency(currencies, p.profit_currency_id || variant?.sale_currency_id),
+                                defaultCur,
+                            );
+                            const canCompare = costLedger !== null && saleLedger !== null && investorLedger !== null;
+                            const unitPrice = costLedger ?? toNum(variant?.purchase_price_afn);
 
                             const profits = calcProfits(
-                                toNum(variant?.purchase_price_afn),
-                                toNum(variant?.sale_price_afn),
-                                isInvestor ? toNum(p.profit_per_unit) : 0,
+                                costLedger ?? 0,
+                                saleLedger ?? 0,
+                                investorLedger ?? 0,
                                 toNum(p.quantity),
                             );
 
@@ -1363,7 +1399,10 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                         <h4 className="mb-3 text-sm font-semibold">Quantity</h4>
                                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                                             <div className="space-y-2">
-                                                <Label>Quantity</Label>
+                                                <Label>
+                                                    Quantity
+                                                    {form.base_unit_name ? ` (${p.quantity_unit === 'pack' ? form.pack_unit_name || 'pack' : form.base_unit_name})` : ''}
+                                                </Label>
                                                 <Input
                                                     type="number"
                                                     min="1"
@@ -1380,6 +1419,27 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                                     <p className="text-destructive text-xs">{errors[`purchases.${pIndex}.quantity`]}</p>
                                                 )}
                                             </div>
+                                            {form.base_unit_name && form.pack_unit_name && Number(form.units_per_pack) > 0 && (
+                                                <div className="space-y-2">
+                                                    <Label>Quantity unit</Label>
+                                                    <Select
+                                                        value={p.quantity_unit}
+                                                        onValueChange={(val) => updatePurchase(pIndex, 'quantity_unit', val as 'base' | 'pack')}
+                                                    >
+                                                        <SelectTrigger>
+                                                            <SelectValue />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="base">{form.base_unit_name} (base)</SelectItem>
+                                                            <SelectItem value="pack">{form.pack_unit_name} (1 = {form.units_per_pack} {form.base_unit_name})</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                    <p className="text-muted-foreground text-xs">
+                                                        Stock is saved in {form.base_unit_name}. Direction: 1 {form.pack_unit_name} = {form.units_per_pack}{' '}
+                                                        {form.base_unit_name}.
+                                                    </p>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
 
@@ -1393,16 +1453,25 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                         {/* ─── Header line: total profit per unit ─── */}
                                         <div className="mb-3 rounded-lg border border-dashed bg-slate-50/60 p-3 dark:bg-slate-900/20">
                                             <p className="text-xs text-slate-700 dark:text-slate-300">
-                                                <strong>Profit breakdown per unit:</strong> Sale {fmt(toNum(variant?.sale_price_afn))} − Cost{' '}
-                                                {fmt(toNum(variant?.purchase_price_afn))} = <strong>{fmt(profits.totalPerUnit)} AFN total</strong> →{' '}
-                                                {isInvestor ? (
+                                                {!canCompare ? (
                                                     <>
-                                                        Investor <strong className="text-blue-700">{fmt(profits.investorPerUnit)} AFN</strong> + Store{' '}
-                                                        <strong className="text-emerald-700">{fmt(profits.storePerUnit)} AFN</strong>
+                                                        Profit is shown only after cost and selling price can be converted with catalog rates. Amounts in
+                                                        different currencies are never added together.
                                                     </>
                                                 ) : (
                                                     <>
-                                                        Store <strong className="text-emerald-700">100% ({fmt(profits.storePerUnit)} AFN)</strong>
+                                                <strong>Profit breakdown per unit ({defaultCur?.code || 'ledger'}):</strong> Sale {fmt(saleLedger ?? 0)} − Cost{' '}
+                                                {fmt(costLedger ?? 0)} = <strong>{fmt(profits.totalPerUnit)} {defaultCur?.code} total</strong> →{' '}
+                                                {isInvestor ? (
+                                                    <>
+                                                        Investor <strong className="text-blue-700">{fmt(profits.investorPerUnit)} {defaultCur?.code}</strong> + Store{' '}
+                                                        <strong className="text-emerald-700">{fmt(profits.storePerUnit)} {defaultCur?.code}</strong>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        Store <strong className="text-emerald-700">100% ({fmt(profits.storePerUnit)} {defaultCur?.code})</strong>
+                                                    </>
+                                                )}
                                                     </>
                                                 )}
                                             </p>

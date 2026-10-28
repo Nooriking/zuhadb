@@ -52,7 +52,8 @@ class Currency extends Model
 
     public function scopeOnlyTrashed($query)
     {
-        return $query->where('trash', true);
+        return $query->withoutGlobalScope(\Illuminate\Database\Eloquent\SoftDeletingScope::class)
+            ->where('trash', true);
     }
 
     public function scopeActive($query)
@@ -146,5 +147,47 @@ class Currency extends Model
     public function isBase(): bool
     {
         return $this->is_base === true;
+    }
+
+    public function rateIsConfigured(): bool
+    {
+        if ($this->is_base) {
+            return true;
+        }
+
+        return $this->rate_to_default !== null && (float) $this->rate_to_default > 0;
+    }
+
+    /**
+     * Currencies offered on money fields. Inactive rows are included only when
+     * they are already attached to the record being edited.
+     *
+     * @param  list<int|null>  $includeIds
+     * @return \Illuminate\Support\Collection<int, array<string, mixed>>
+     */
+    public static function formOptions(array $includeIds = [])
+    {
+        if (! self::tableReady()) {
+            return collect();
+        }
+
+        $includeIds = array_values(array_unique(array_filter(array_map('intval', $includeIds))));
+
+        return self::query()
+            ->notTrashed()
+            ->where(function ($query) use ($includeIds) {
+                $query->where('status', 'active');
+                if ($includeIds !== []) {
+                    $query->orWhereIn('id', $includeIds);
+                }
+            })
+            ->orderByDesc('is_base')
+            ->orderBy('code')
+            ->get()
+            ->map(fn (self $currency) => array_merge(self::toShared($currency), [
+                'status' => $currency->status,
+                'rate_configured' => $currency->rateIsConfigured(),
+            ]))
+            ->values();
     }
 }

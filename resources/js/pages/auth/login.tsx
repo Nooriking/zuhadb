@@ -72,9 +72,11 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
 
         clearErrors();
         post(route('login'), {
-            onSuccess: () => {
+            onFinish: () => {
                 reset('password');
                 setShowPassword(false);
+            },
+            onSuccess: () => {
                 setLockSecondsLeft(0);
             },
         });
@@ -110,7 +112,7 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                 </div>
             )}
 
-            <form className="flex flex-col gap-5" onSubmit={submit} autoComplete="off">
+            <form className="flex flex-col gap-5" onSubmit={submit} method="post" autoComplete="on">
                 <div className="grid gap-2">
                     <Label htmlFor="email" className="text-neutral-300">
                         Email or username
@@ -123,15 +125,16 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                             required
                             autoFocus
                             tabIndex={1}
-                            autoComplete="off"
-                            name="zuha-login-email"
+                            autoComplete="username"
+                            name="email"
                             value={data.email}
                             onChange={(e) => setData('email', e.target.value)}
-                            onFocus={(e) => e.currentTarget.removeAttribute('readOnly')}
-                            readOnly
                             placeholder="email@example.com or username"
                             className={fieldClass}
                             disabled={isLocked || processing}
+                            spellCheck={false}
+                            autoCapitalize="none"
+                            autoCorrect="off"
                         />
                     </div>
                 </div>
@@ -154,15 +157,16 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                             type={showPassword ? 'text' : 'password'}
                             required
                             tabIndex={2}
-                            autoComplete="new-password"
-                            name="zuha-login-password"
+                            autoComplete="current-password"
+                            name="password"
                             value={data.password}
                             onChange={(e) => setData('password', e.target.value)}
-                            onFocus={(e) => e.currentTarget.removeAttribute('readOnly')}
-                            readOnly
                             placeholder="••••••••"
                             className={`${fieldClass} pr-10`}
                             disabled={isLocked || processing}
+                            spellCheck={false}
+                            autoCapitalize="none"
+                            autoCorrect="off"
                         />
                         <button
                             type="button"

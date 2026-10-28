@@ -31,6 +31,7 @@ class StoreSaleRequest extends FormRequest
             'items' => ['required', 'array', 'min:1', 'max:200'],
             'items.*.variant_id' => ['required', 'integer', 'exists:product_variants,id'],
             'items.*.quantity' => SafeData::quantity(true, 1),
+            'items.*.quantity_unit' => ['nullable', Rule::in(['base', 'pack'])],
             'items.*.sale_price_afn' => SafeData::money(true, 0),
             'items.*.discount_afn' => SafeData::money(false, 0),
 

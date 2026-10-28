@@ -1,4 +1,6 @@
 ﻿import { LazyInView } from '@/components/lazy-in-view';
+import AppLayout from '@/layouts/app-layout';
+import { formatMoney, type SharedCurrency } from '@/lib/money';
 import { Head, Link, router } from '@inertiajs/react';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -20,14 +22,20 @@ import { lazy, Suspense, useState } from 'react';
 
 const InvestorDashboardCharts = lazy(() => import('./dashboard-charts'));
 
-/* =========================================================
- |  Types
- ========================================================= */
+interface Reporting {
+    currency: SharedCurrency;
+    ledger: SharedCurrency;
+    conversion_available: boolean;
+    converts_from_ledger: boolean;
+}
 
 interface Kpis {
     total_capital: number;
     available_capital: number;
     invested_capital: number;
+    lifetime_profit: number;
+    lifetime_withdrawn: number;
+    period_contributions: number;
     total_profit: number;
     pending_profit: number;
     paid_profit: number;
@@ -36,17 +44,15 @@ interface Kpis {
     remaining_profit: number;
     capital_utilization: number;
     profit_margin: number;
-    stock_value_afn?: number;
-    stock_value_usd?: number;
+    stock_value?: number;
 }
 
 interface StockItem {
     name: string;
     quantity: number;
     remaining: number;
-    rate: number;
-    value_usd: number;
-    profit_usd: number;
+    value: number;
+    profit: number;
 }
 
 interface CapitalTrendPoint {
@@ -71,7 +77,6 @@ interface Counters {
     total_allocations: number;
     total_funded_qty: number;
     total_sold_qty: number;
-    total_remaining_qty: number;
     pending_withdrawals: number;
     pending_profit_rows: number;
 }
@@ -81,15 +86,14 @@ interface RecentInvestment {
     investment_number: string;
     investor: string | null;
     investor_phone: string | null;
-    capital_amount_afn: number;
-    available_afn: number;
-    allocated_afn: number;
-    profit_afn: number;
+    capital_amount: number;
+    available: number;
+    allocated: number;
+    profit: number;
     progress_percent: number;
     status: string;
     status_label: string;
     investment_date: string;
-    currency: string | null;
 }
 
 interface RecentProfitEntry {
@@ -97,9 +101,7 @@ interface RecentProfitEntry {
     investor: string | null;
     sale_invoice: string | null;
     quantity: number;
-    profit_amount_afn: number;
-    profit_amount_curr: number;
-    currency: string | null;
+    profit_amount: number;
     entry_type: string;
     entry_type_label: string;
     status: string;
@@ -112,9 +114,7 @@ interface RecentWithdrawal {
     withdrawal_number: string;
     investor: string | null;
     type: string;
-    amount_afn: number;
-    amount_currency: number;
-    currency: string | null;
+    amount: number;
     status: string;
     withdrawal_date: string;
 }
@@ -124,10 +124,9 @@ interface RecentTransaction {
     investor: string | null;
     type: string;
     type_label: string;
-    amount_afn: number;
+    amount: number;
     balance_type: string;
     balance_after: number;
-    currency: string | null;
     description: string | null;
     date: string;
 }
@@ -138,11 +137,8 @@ interface TopInvestor {
     phone: string;
     status: string;
     investments_count: number;
-    total_capital_afn: number;
+    total_capital: number;
     total_allocated: number;
-    capital_balance: number;
-    profit_balance: number;
-    total_invested: number;
     total_profit: number;
     total_withdrawn: number;
 }
@@ -151,7 +147,7 @@ interface TopProfitableInvestor {
     id: number;
     full_name: string;
     phone: string;
-    total_profit_afn: number;
+    total_profit: number;
 }
 
 interface Props {
@@ -170,13 +166,12 @@ interface Props {
     topProfitableInvestors: TopProfitableInvestor[];
     own?: boolean;
     stockItems?: StockItem[];
+    reporting: Reporting;
+    originalCurrencyTotals?: { code: string; total: number }[];
+    dashboardPath: string;
 }
 
-/* =========================================================
- |  Helpers
- ========================================================= */
-
-const fmt = (n: number): string => new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(n || 0);
+const countFmt = (n: number): string => new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(n || 0);
 
 const statusColor = (status: string): string => {
     switch (status) {
@@ -215,10 +210,6 @@ const balanceTypeColor = (type: string): string => {
     }
 };
 
-/* =========================================================
- |  Sub-components
- ========================================================= */
-
 interface KpiCardProps {
     label: string;
     value: string;
@@ -244,13 +235,7 @@ function KpiCard({ label, value, sub, icon: Icon, accent }: KpiCardProps) {
     );
 }
 
-interface SectionCardProps {
-    title: string;
-    children: React.ReactNode;
-    action?: React.ReactNode;
-}
-
-function SectionCard({ title, children, action }: SectionCardProps) {
+function SectionCard({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
     return (
         <div className="rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
             <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-gray-800">
@@ -266,7 +251,69 @@ function EmptyState({ message }: { message: string }) {
     return <div className="flex items-center justify-center py-8 text-sm text-gray-500 dark:text-gray-400">{message}</div>;
 }
 
-function OwnInvestorDashboard({ kpis, recentProfitEntries, stockItems = [] }: Pick<Props, 'kpis' | 'recentProfitEntries' | 'stockItems'>) {
+function money(amount: number, reporting: Reporting): string {
+    return formatMoney(amount, reporting.currency);
+}
+
+function RangeButtons({ days, range, onChange }: { days: number; range: number; onChange: (days: number) => void }) {
+    return (
+        <div className="flex items-center gap-2">
+            <Calendar className="h-4 w-4 text-gray-400" />
+            {[7, 30, 90, 365].map((d) => (
+                <button
+                    key={d}
+                    type="button"
+                    onClick={() => onChange(d)}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                        range === d
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800'
+                    }`}
+                >
+                    {d === 365 ? '1Y' : `${d}D`}
+                </button>
+            ))}
+        </div>
+    );
+}
+
+function CurrencyNote({ reporting, originalCurrencyTotals = [] }: { reporting: Reporting; originalCurrencyTotals?: { code: string; total: number }[] }) {
+    const label = reporting.currency.code;
+    if (reporting.converts_from_ledger && reporting.conversion_available) {
+        return (
+            <p className="text-muted-foreground text-xs">
+                Amounts are converted from {reporting.ledger.code} using configured rates and shown in {label}.
+            </p>
+        );
+    }
+    if (originalCurrencyTotals.length > 1) {
+        return (
+            <p className="text-muted-foreground text-xs">
+                No reliable conversion rate is available. Original totals:{' '}
+                {originalCurrencyTotals.map((row) => `${row.total.toLocaleString()} ${row.code}`).join(' · ')}
+            </p>
+        );
+    }
+    return <p className="text-muted-foreground text-xs">Amounts are shown in {label} (ledger currency).</p>;
+}
+
+function OwnInvestorDashboard({
+    days,
+    kpis,
+    recentProfitEntries,
+    stockItems = [],
+    reporting,
+    dashboardPath,
+    originalCurrencyTotals = [],
+}: Pick<Props, 'days' | 'kpis' | 'recentProfitEntries' | 'stockItems' | 'reporting' | 'dashboardPath' | 'originalCurrencyTotals'>) {
+    const [range, setRange] = useState<number>(days);
+    const moneyFmt = (n: number) => money(n, reporting);
+
+    const handleRangeChange = (newDays: number) => {
+        setRange(newDays);
+        router.get(dashboardPath, { days: newDays }, { preserveState: true, preserveScroll: true });
+    };
+
     const logout = () => {
         router.post(
             '/logout',
@@ -288,7 +335,8 @@ function OwnInvestorDashboard({ kpis, recentProfitEntries, stockItems = [] }: Pi
                         <h1 className="text-2xl font-bold">My dashboard</h1>
                         <p className="text-muted-foreground text-sm">Your capital, profit, and shop stock</p>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
+                        <RangeButtons days={days} range={range} onChange={handleRangeChange} />
                         <Link href="/settings/profile" className="rounded-lg border px-3 py-2 text-sm">
                             Change name
                         </Link>
@@ -300,68 +348,33 @@ function OwnInvestorDashboard({ kpis, recentProfitEntries, stockItems = [] }: Pi
                         </button>
                     </div>
                 </div>
+                <CurrencyNote reporting={reporting} originalCurrencyTotals={originalCurrencyTotals} />
 
                 <section className="space-y-3">
-                    <h2 className="text-sm font-semibold tracking-wide uppercase">Capital</h2>
+                    <h2 className="text-sm font-semibold tracking-wide uppercase">Capital (current)</h2>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                        <KpiCard
-                            label="Capital given"
-                            value={`${fmt(kpis.total_capital)} USD`}
-                            sub="Money you invested"
-                            icon={Wallet}
-                            accent="bg-indigo-100 text-indigo-600"
-                        />
-                        <KpiCard
-                            label="Still available"
-                            value={`${fmt(kpis.available_capital)} USD`}
-                            sub="Not yet spent on stock"
-                            icon={PiggyBank}
-                            accent="bg-emerald-100 text-emerald-600"
-                        />
-                        <KpiCard
-                            label="Used on stock"
-                            value={`${fmt(kpis.invested_capital)} USD`}
-                            sub="Allocated to purchases"
-                            icon={ShoppingCart}
-                            accent="bg-amber-100 text-amber-600"
-                        />
+                        <KpiCard label="Capital balance" value={moneyFmt(kpis.total_capital)} sub="Wallet remaining" icon={Wallet} accent="bg-indigo-100 text-indigo-600" />
+                        <KpiCard label="Still available" value={moneyFmt(kpis.available_capital)} sub="Not yet allocated" icon={PiggyBank} accent="bg-emerald-100 text-emerald-600" />
+                        <KpiCard label="Used on stock" value={moneyFmt(kpis.invested_capital)} sub="Allocated to purchases" icon={ShoppingCart} accent="bg-amber-100 text-amber-600" />
                     </div>
                 </section>
 
                 <section className="space-y-3">
-                    <h2 className="text-sm font-semibold tracking-wide uppercase">Profit</h2>
+                    <h2 className="text-sm font-semibold tracking-wide uppercase">Activity in selected period</h2>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                        <KpiCard
-                            label="Profit earned"
-                            value={`${fmt(kpis.total_profit)} USD`}
-                            sub={`${fmt(kpis.profit_margin)}% of capital`}
-                            icon={TrendingUp}
-                            accent="bg-emerald-100 text-emerald-600"
-                        />
-                        <KpiCard
-                            label="Profit waiting"
-                            value={`${fmt(kpis.pending_profit)} USD`}
-                            sub="Not paid out yet"
-                            icon={Banknote}
-                            accent="bg-amber-100 text-amber-600"
-                        />
-                        <KpiCard
-                            label="Profit paid"
-                            value={`${fmt(kpis.paid_profit)} USD`}
-                            sub={`${fmt(kpis.withdrawn_profit)} USD withdrawn`}
-                            icon={ArrowUpFromLine}
-                            accent="bg-blue-100 text-blue-600"
-                        />
+                        <KpiCard label="Contributions" value={moneyFmt(kpis.period_contributions)} sub={`Last ${range} days`} icon={Wallet} accent="bg-indigo-100 text-indigo-600" />
+                        <KpiCard label="Profit earned" value={moneyFmt(kpis.total_profit)} sub={`${moneyFmt(kpis.pending_profit)} waiting`} icon={TrendingUp} accent="bg-emerald-100 text-emerald-600" />
+                        <KpiCard label="Profit paid" value={moneyFmt(kpis.paid_profit)} sub={`${moneyFmt(kpis.withdrawn_profit)} withdrawn`} icon={ArrowUpFromLine} accent="bg-blue-100 text-blue-600" />
                     </div>
                     <SectionCard title="Profit entries">
                         {recentProfitEntries.length === 0 ? (
-                            <EmptyState message="No profit yet." />
+                            <EmptyState message="No profit in this date range." />
                         ) : (
                             <div className="space-y-2">
                                 {recentProfitEntries.map((entry) => (
                                     <div key={entry.id} className="flex items-center justify-between text-sm">
                                         <span>{entry.sale_invoice || entry.entry_type_label}</span>
-                                        <span className="font-medium">{fmt(entry.profit_amount_afn)} USD</span>
+                                        <span className="font-medium">{moneyFmt(entry.profit_amount)}</span>
                                     </div>
                                 ))}
                             </div>
@@ -370,11 +383,11 @@ function OwnInvestorDashboard({ kpis, recentProfitEntries, stockItems = [] }: Pi
                 </section>
 
                 <section className="space-y-3">
-                    <h2 className="text-sm font-semibold tracking-wide uppercase">Goods bought with your dollars</h2>
+                    <h2 className="text-sm font-semibold tracking-wide uppercase">Goods bought with your capital</h2>
                     <KpiCard
-                        label="Purchases in dollars"
-                        value={`${fmt(kpis.stock_value_usd || 0)} USD`}
-                        sub="AFN purchase cost divided by that day's dollar rate"
+                        label="Purchase cost"
+                        value={moneyFmt(kpis.stock_value || 0)}
+                        sub="Current stock purchases, same currency rules as capital"
                         icon={Package}
                         accent="bg-violet-100 text-violet-600"
                     />
@@ -390,8 +403,8 @@ function OwnInvestorDashboard({ kpis, recentProfitEntries, stockItems = [] }: Pi
                                             {item.remaining !== item.quantity ? ` · ${item.remaining} left` : ''}
                                         </span>
                                         <span className="font-medium">
-                                            {item.rate > 0 ? `${fmt(item.value_usd)} USD` : 'Rate missing'}
-                                            {item.profit_usd > 0 ? ` · profit ${fmt(item.profit_usd)} USD` : ''}
+                                            {moneyFmt(item.value)}
+                                            {item.profit > 0 ? ` · profit ${moneyFmt(item.profit)}` : ''}
                                         </span>
                                     </div>
                                 ))}
@@ -403,10 +416,6 @@ function OwnInvestorDashboard({ kpis, recentProfitEntries, stockItems = [] }: Pi
         </div>
     );
 }
-
-/* =========================================================
- |  Main Component
- ========================================================= */
 
 export default function InvestorDashboard({
     days,
@@ -424,440 +433,341 @@ export default function InvestorDashboard({
     topProfitableInvestors,
     own = false,
     stockItems = [],
+    reporting,
+    originalCurrencyTotals = [],
+    dashboardPath,
 }: Props) {
     const [range, setRange] = useState<number>(days);
+    const moneyFmt = (n: number) => money(n, reporting);
 
     if (own) {
-        return <OwnInvestorDashboard kpis={kpis} recentProfitEntries={recentProfitEntries} stockItems={stockItems} />;
+        return (
+            <OwnInvestorDashboard
+                days={days}
+                kpis={kpis}
+                recentProfitEntries={recentProfitEntries}
+                stockItems={stockItems}
+                reporting={reporting}
+                dashboardPath={dashboardPath}
+                originalCurrencyTotals={originalCurrencyTotals}
+            />
+        );
     }
 
     const handleRangeChange = (newDays: number) => {
         setRange(newDays);
-        router.get('/investors/dashboard', { days: newDays }, { preserveState: true, preserveScroll: true });
+        router.get(dashboardPath, { days: newDays }, { preserveState: true, preserveScroll: true });
     };
 
     return (
-        <>
+        <AppLayout breadcrumbs={[{ title: 'Dashboard', href: '/dashboard' }, { title: 'Investor Dashboard', href: '/investors/dashboard' }]}>
             <Head title="Investor Dashboard" />
 
-            <div className="bg-background min-h-screen">
-                <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-                    {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-                    <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Investor Dashboard</h1>
-                            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Overview of capital, investments, and profits</p>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                            <Calendar className="h-4 w-4 text-gray-400" />
-                            {[7, 30, 90, 365].map((d) => (
-                                <button
-                                    key={d}
-                                    onClick={() => handleRangeChange(d)}
-                                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-                                        range === d
-                                            ? 'bg-indigo-600 text-white'
-                                            : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800'
-                                    }`}
-                                >
-                                    {d === 365 ? '1Y' : `${d}D`}
-                                </button>
-                            ))}
-                        </div>
+            <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+                <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Investor Dashboard</h1>
+                        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Current balances match the Investors list. Period figures use the selected range.</p>
                     </div>
+                    <RangeButtons days={days} range={range} onChange={handleRangeChange} />
+                </div>
+                <div className="mb-4">
+                    <CurrencyNote reporting={reporting} originalCurrencyTotals={originalCurrencyTotals} />
+                </div>
 
-                    {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€ KPI Row 1 â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                        <KpiCard
-                            label="Total Capital"
-                            value={`${fmt(kpis.total_capital)} USD`}
-                            sub={`${kpis.capital_utilization}% utilized`}
-                            icon={Wallet}
-                            accent="bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400"
-                        />
-                        <KpiCard
-                            label="Available Capital"
-                            value={`${fmt(kpis.available_capital)} USD`}
-                            sub="Ready to allocate"
-                            icon={PiggyBank}
-                            accent="bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400"
-                        />
-                        <KpiCard
-                            label="Invested Capital"
-                            value={`${fmt(kpis.invested_capital)} USD`}
-                            sub="Allocated to purchases"
-                            icon={TrendingUp}
-                            accent="bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400"
-                        />
-                        <KpiCard
-                            label="Total Profit"
-                            value={`${fmt(kpis.total_profit)} USD`}
-                            sub={`${fmt(kpis.pending_profit)} pending • ${kpis.profit_margin}% margin`}
-                            icon={Banknote}
-                            accent="bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400"
-                        />
-                    </div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <KpiCard label="Current capital" value={moneyFmt(kpis.total_capital)} sub={`${kpis.capital_utilization}% allocated vs capital`} icon={Wallet} accent="bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400" />
+                    <KpiCard label="Available capital" value={moneyFmt(kpis.available_capital)} sub="Ready to allocate" icon={PiggyBank} accent="bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400" />
+                    <KpiCard label="Allocated capital" value={moneyFmt(kpis.invested_capital)} sub="Assigned to purchases" icon={TrendingUp} accent="bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400" />
+                    <KpiCard label="Remaining profit" value={moneyFmt(kpis.remaining_profit)} sub="Wallet profit balance" icon={Banknote} accent="bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400" />
+                </div>
 
-                    {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€ KPI Row 2 â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-                    <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                        <KpiCard
-                            label="Paid Profit"
-                            value={`${fmt(kpis.paid_profit)} USD`}
-                            icon={ArrowUpFromLine}
-                            accent="bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400"
+                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <KpiCard label="Contributions in period" value={moneyFmt(kpis.period_contributions)} sub={`Last ${range} days`} icon={Wallet} accent="bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400" />
+                    <KpiCard label="Profit in period" value={moneyFmt(kpis.total_profit)} sub={`${moneyFmt(kpis.pending_profit)} pending`} icon={TrendingUp} accent="bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400" />
+                    <KpiCard label="Withdrawn profit" value={moneyFmt(kpis.withdrawn_profit)} sub={`${moneyFmt(kpis.paid_profit)} marked paid`} icon={ArrowDownToLine} accent="bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400" />
+                    <KpiCard label="Withdrawn capital" value={moneyFmt(kpis.withdrawn_capital)} sub={`Lifetime withdrawn ${moneyFmt(kpis.lifetime_withdrawn)}`} icon={TrendingDown} accent="bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400" />
+                </div>
+
+                <LazyInView minHeight={620} className="mt-6">
+                    <Suspense fallback={<div className="bg-muted/40 h-[620px] animate-pulse rounded-xl" />}>
+                        <InvestorDashboardCharts
+                            capitalTrend={capitalTrend}
+                            profitByInvestor={profitByInvestor}
+                            withdrawalBreakdown={withdrawalBreakdown}
+                            investmentStatus={investmentStatus}
+                            currencyCode={reporting.currency.code}
                         />
-                        <KpiCard
-                            label="Withdrawn Profit"
-                            value={`${fmt(kpis.withdrawn_profit)} USD`}
-                            icon={ArrowDownToLine}
-                            accent="bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400"
-                        />
-                        <KpiCard
-                            label="Remaining Profit"
-                            value={`${fmt(kpis.remaining_profit)} USD`}
-                            sub="Available for withdrawal"
-                            icon={TrendingDown}
-                            accent="bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400"
-                        />
-                        <KpiCard
-                            label="Withdrawn Capital"
-                            value={`${fmt(kpis.withdrawn_capital)} USD`}
-                            icon={Wallet}
-                            accent="bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
-                        />
-                    </div>
+                    </Suspense>
+                </LazyInView>
 
-                    {/* Charts (lazy + in-view) */}
-                    <LazyInView minHeight={620} className="mt-6">
-                        <Suspense fallback={<div className="bg-muted/40 h-[620px] animate-pulse rounded-xl" />}>
-                            <InvestorDashboardCharts
-                                capitalTrend={capitalTrend}
-                                profitByInvestor={profitByInvestor}
-                                withdrawalBreakdown={withdrawalBreakdown}
-                                investmentStatus={investmentStatus}
-                            />
-                        </Suspense>
-                    </LazyInView>
+                <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+                    {[
+                        { label: 'Total Investors', value: counters.total_investors, icon: Users, href: '/investors' },
+                        { label: 'Active Investors', value: counters.active_investors, icon: Users, href: '/investors?status=active' },
+                        { label: 'Investments', value: counters.total_investments, icon: TrendingUp, href: '/investments' },
+                        { label: 'Funded Qty', value: counters.total_funded_qty, icon: Package, href: '/investment-product-allocations' },
+                        { label: 'Sold Qty', value: counters.total_sold_qty, icon: ShoppingCart, href: '/investment-product-allocations' },
+                        { label: 'Pending WD', value: counters.pending_withdrawals, icon: AlertCircle, href: '/investor-withdrawals' },
+                    ].map((c) => (
+                        <Link key={c.label} href={c.href} className="rounded-xl border border-gray-200 bg-white p-4 text-center dark:border-gray-800 dark:bg-gray-900">
+                            <c.icon className="mx-auto h-4 w-4 text-gray-400" />
+                            <p className="mt-2 text-xl font-bold text-gray-900 dark:text-white">{countFmt(c.value)}</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">{c.label}</p>
+                        </Link>
+                    ))}
+                </div>
 
-                    {/* Counters */}
-                    <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-                        {[
-                            { label: 'Total Investors', value: counters.total_investors, icon: Users },
-                            { label: 'Active Investors', value: counters.active_investors, icon: Users },
-                            { label: 'Investments', value: counters.total_investments, icon: TrendingUp },
-                            { label: 'Funded Qty', value: counters.total_funded_qty, icon: Package },
-                            { label: 'Sold Qty', value: counters.total_sold_qty, icon: ShoppingCart },
-                            { label: 'Pending WD', value: counters.pending_withdrawals, icon: AlertCircle },
-                        ].map((c, i) => (
-                            <div key={i} className="rounded-xl border border-gray-200 bg-white p-4 text-center dark:border-gray-800 dark:bg-gray-900">
-                                <c.icon className="mx-auto h-4 w-4 text-gray-400" />
-                                <p className="mt-2 text-xl font-bold text-gray-900 dark:text-white">{fmt(c.value)}</p>
-                                <p className="text-xs text-gray-500 dark:text-gray-400">{c.label}</p>
-                            </div>
-                        ))}
-                    </div>
-
-                    {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€ Top Investors + Top Profitable â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-                    <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
-                        <div className="lg:col-span-2">
-                            <SectionCard
-                                title="Top Investors by Capital"
-                                action={
-                                    <Link
-                                        href="/investors"
-                                        className="text-xs font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400"
-                                    >
-                                        View all â†’
-                                    </Link>
-                                }
-                            >
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-sm">
-                                        <thead>
-                                            <tr className="border-b border-gray-100 text-left text-xs text-gray-500 uppercase dark:border-gray-800 dark:text-gray-400">
-                                                <th className="pr-3 pb-2">
-                                                    <Trophy className="inline h-3.5 w-3.5" /> #
-                                                </th>
-                                                <th className="pr-3 pb-2">Investor</th>
-                                                <th className="pr-3 pb-2 text-right">Capital</th>
-                                                <th className="pr-3 pb-2 text-right">Allocated</th>
-                                                <th className="pr-3 pb-2 text-right">Profit</th>
-                                                <th className="pr-3 pb-2 text-center">Inv.</th>
-                                                <th className="pb-2 text-center">Status</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {topInvestors.map((inv, i) => (
-                                                <tr
-                                                    key={inv.id}
-                                                    className="border-b border-gray-50 hover:bg-gray-50 dark:border-gray-800/50 dark:hover:bg-gray-800/30"
-                                                >
-                                                    <td className="py-3 pr-3 font-semibold text-gray-500">{i + 1}</td>
-                                                    <td className="py-3 pr-3">
-                                                        <Link
-                                                            href={`/investors/${inv.id}`}
-                                                            className="font-medium text-gray-900 hover:text-indigo-600 dark:text-white"
-                                                        >
-                                                            {inv.full_name}
-                                                        </Link>
-                                                        {inv.phone && <p className="text-xs text-gray-500">{inv.phone}</p>}
-                                                    </td>
-                                                    <td className="py-3 pr-3 text-right font-medium">{fmt(inv.total_capital_afn)}</td>
-                                                    <td className="py-3 pr-3 text-right text-gray-600 dark:text-gray-400">
-                                                        {fmt(inv.total_allocated)}
-                                                    </td>
-                                                    <td className="py-3 pr-3 text-right font-medium text-emerald-600 dark:text-emerald-400">
-                                                        {fmt(inv.total_profit)}
-                                                    </td>
-                                                    <td className="py-3 pr-3 text-center">
-                                                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium dark:bg-gray-800">
-                                                            {inv.investments_count}
-                                                        </span>
-                                                    </td>
-                                                    <td className="py-3 text-center">
-                                                        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(inv.status)}`}>
-                                                            {inv.status}
-                                                        </span>
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                    {topInvestors.length === 0 && <EmptyState message="No investors yet" />}
-                                </div>
-                            </SectionCard>
-                        </div>
-
-                        <SectionCard title="Top by Profit">
-                            <div className="space-y-2">
-                                {topProfitableInvestors.map((inv, i) => (
-                                    <div
-                                        key={inv.id}
-                                        className="flex items-center justify-between rounded-lg border border-gray-100 p-3 dark:border-gray-800"
-                                    >
-                                        <div className="flex min-w-0 items-center gap-3">
-                                            <span
-                                                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-                                                    i === 0
-                                                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
-                                                        : i === 1
-                                                          ? 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
-                                                          : i === 2
-                                                            ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
-                                                            : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
-                                                }`}
-                                            >
-                                                {i + 1}
-                                            </span>
-                                            <div className="min-w-0">
-                                                <p className="truncate text-sm font-medium text-gray-900 dark:text-white">{inv.full_name}</p>
-                                                {inv.phone && <p className="truncate text-xs text-gray-500">{inv.phone}</p>}
-                                            </div>
-                                        </div>
-                                        <p className="ml-3 shrink-0 text-sm font-semibold text-emerald-600 dark:text-emerald-400">
-                                            {fmt(inv.total_profit_afn)}
-                                        </p>
-                                    </div>
-                                ))}
-                                {topProfitableInvestors.length === 0 && <EmptyState message="No profit data yet" />}
-                            </div>
-                        </SectionCard>
-                    </div>
-
-                    {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€ Recent Activity â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-                    <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-                        {/* Recent Investments */}
+                <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
+                    <div className="lg:col-span-2">
                         <SectionCard
-                            title="Recent Investments"
+                            title="Top Investors by Capital"
                             action={
-                                <Link href="/investments" className="text-xs text-indigo-600 dark:text-indigo-400">
-                                    View all â†’
-                                </Link>
-                            }
-                        >
-                            <div className="space-y-3">
-                                {recentInvestments.map((inv) => (
-                                    <Link
-                                        key={inv.id}
-                                        href={`/investments/${inv.id}`}
-                                        className="block rounded-xl border border-gray-100 p-3 transition hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800/40"
-                                    >
-                                        <div className="flex items-start justify-between gap-2">
-                                            <div className="min-w-0">
-                                                <p className="truncate text-sm font-semibold text-gray-900 dark:text-white">
-                                                    {inv.investment_number}
-                                                </p>
-                                                <p className="truncate text-xs text-gray-500">
-                                                    {inv.investor ?? '—'} • {inv.investment_date}
-                                                </p>
-                                            </div>
-                                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(inv.status)}`}>
-                                                {inv.status_label}
-                                            </span>
-                                        </div>
-                                        <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-                                            <div>
-                                                <p className="text-gray-500">Capital</p>
-                                                <p className="font-semibold">{fmt(inv.capital_amount_afn)}</p>
-                                            </div>
-                                            <div>
-                                                <p className="text-gray-500">Allocated</p>
-                                                <p className="font-semibold">{fmt(inv.allocated_afn)}</p>
-                                            </div>
-                                            <div>
-                                                <p className="text-gray-500">Profit</p>
-                                                <p className="font-semibold text-emerald-600">{fmt(inv.profit_afn)}</p>
-                                            </div>
-                                        </div>
-                                        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
-                                            <div className="h-full bg-indigo-500" style={{ width: `${Math.min(100, inv.progress_percent)}%` }} />
-                                        </div>
-                                    </Link>
-                                ))}
-                                {recentInvestments.length === 0 && <EmptyState message="No investments yet" />}
-                            </div>
-                        </SectionCard>
-
-                        {/* Recent Profit Entries */}
-                        <SectionCard
-                            title="Recent Profit Entries"
-                            action={
-                                <Link href="/investor-profit-entries" className="text-xs text-indigo-600 dark:text-indigo-400">
-                                    View all â†’
-                                </Link>
-                            }
-                        >
-                            <div className="space-y-2">
-                                {recentProfitEntries.map((e) => (
-                                    <div
-                                        key={e.id}
-                                        className="flex items-center justify-between rounded-lg border border-gray-100 p-3 dark:border-gray-800"
-                                    >
-                                        <div className="min-w-0 flex-1">
-                                            <p className="truncate text-sm font-medium text-gray-900 dark:text-white">{e.investor ?? '—'}</p>
-                                            <p className="truncate text-xs text-gray-500">
-                                                {e.sale_invoice ?? '—'} • Qty: {e.quantity}
-                                            </p>
-                                        </div>
-                                        <div className="ml-3 shrink-0 text-right">
-                                            <p className="text-sm font-semibold text-emerald-600 dark:text-emerald-400">
-                                                +{fmt(e.profit_amount_afn)} USD
-                                            </p>
-                                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusColor(e.status)}`}>
-                                                {e.status_label}
-                                            </span>
-                                        </div>
-                                    </div>
-                                ))}
-                                {recentProfitEntries.length === 0 && <EmptyState message="No profit entries yet" />}
-                            </div>
-                        </SectionCard>
-                    </div>
-
-                    {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€ Recent Withdrawals â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-                    <div className="mt-6">
-                        <SectionCard
-                            title="Recent Withdrawals"
-                            action={
-                                <Link href="/investor-withdrawals" className="text-xs text-indigo-600 dark:text-indigo-400">
-                                    View all â†’
+                                <Link href="/investors" className="text-xs font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">
+                                    View all
                                 </Link>
                             }
                         >
                             <div className="overflow-x-auto">
                                 <table className="w-full text-sm">
                                     <thead>
-                                        <tr className="border-b border-gray-100 text-left text-xs text-gray-500 uppercase dark:border-gray-800">
-                                            <th className="pr-3 pb-2">#</th>
+                                        <tr className="border-b border-gray-100 text-left text-xs text-gray-500 uppercase dark:border-gray-800 dark:text-gray-400">
+                                            <th className="pr-3 pb-2">
+                                                <Trophy className="inline h-3.5 w-3.5" /> #
+                                            </th>
                                             <th className="pr-3 pb-2">Investor</th>
-                                            <th className="pr-3 pb-2">Type</th>
-                                            <th className="pr-3 pb-2 text-right">Amount</th>
-                                            <th className="pr-3 pb-2">Date</th>
+                                            <th className="pr-3 pb-2 text-right">Capital</th>
+                                            <th className="pr-3 pb-2 text-right">Allocated</th>
+                                            <th className="pr-3 pb-2 text-right">Profit</th>
+                                            <th className="pr-3 pb-2 text-center">Inv.</th>
                                             <th className="pb-2 text-center">Status</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {recentWithdrawals.map((w) => (
-                                            <tr key={w.id} className="border-b border-gray-50 hover:bg-gray-50 dark:border-gray-800/50">
-                                                <td className="py-3 pr-3 text-xs text-gray-500">{w.withdrawal_number}</td>
-                                                <td className="py-3 pr-3 font-medium">{w.investor ?? '—'}</td>
+                                        {topInvestors.map((inv, i) => (
+                                            <tr key={inv.id} className="border-b border-gray-50 hover:bg-gray-50 dark:border-gray-800/50 dark:hover:bg-gray-800/30">
+                                                <td className="py-3 pr-3 font-semibold text-gray-500">{i + 1}</td>
                                                 <td className="py-3 pr-3">
-                                                    <span
-                                                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                                                            w.type === 'profit'
-                                                                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-                                                                : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
-                                                        }`}
-                                                    >
-                                                        {w.type}
-                                                    </span>
+                                                    <Link href={`/investors/${inv.id}`} className="font-medium text-gray-900 hover:text-indigo-600 dark:text-white">
+                                                        {inv.full_name}
+                                                    </Link>
+                                                    {inv.phone && <p className="text-xs text-gray-500">{inv.phone}</p>}
                                                 </td>
-                                                <td className="py-3 pr-3 text-right font-semibold">{fmt(w.amount_afn)} USD</td>
-                                                <td className="py-3 pr-3 text-xs text-gray-500">{w.withdrawal_date}</td>
+                                                <td className="py-3 pr-3 text-right font-medium">{moneyFmt(inv.total_capital)}</td>
+                                                <td className="py-3 pr-3 text-right text-gray-600 dark:text-gray-400">{moneyFmt(inv.total_allocated)}</td>
+                                                <td className="py-3 pr-3 text-right font-medium text-emerald-600 dark:text-emerald-400">{moneyFmt(inv.total_profit)}</td>
+                                                <td className="py-3 pr-3 text-center">
+                                                    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium dark:bg-gray-800">{inv.investments_count}</span>
+                                                </td>
                                                 <td className="py-3 text-center">
-                                                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(w.status)}`}>
-                                                        {w.status}
-                                                    </span>
+                                                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(inv.status)}`}>{inv.status}</span>
                                                 </td>
                                             </tr>
                                         ))}
                                     </tbody>
                                 </table>
-                                {recentWithdrawals.length === 0 && <EmptyState message="No withdrawals yet" />}
+                                {topInvestors.length === 0 && <EmptyState message="No investors yet" />}
                             </div>
                         </SectionCard>
                     </div>
 
-                    {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€ Recent Transactions â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-                    <div className="mt-6">
-                        <SectionCard
-                            title="Recent Transactions (Ledger)"
-                            action={
-                                <Link href="/investor-transactions" className="text-xs text-indigo-600 dark:text-indigo-400">
-                                    View all â†’
+                    <SectionCard title="Top by profit in period">
+                        <div className="space-y-2">
+                            {topProfitableInvestors.map((inv, i) => (
+                                <Link
+                                    key={inv.id}
+                                    href={`/investors/${inv.id}`}
+                                    className="flex items-center justify-between rounded-lg border border-gray-100 p-3 dark:border-gray-800"
+                                >
+                                    <div className="flex min-w-0 items-center gap-3">
+                                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-100 text-xs font-bold dark:bg-gray-800">{i + 1}</span>
+                                        <div className="min-w-0">
+                                            <p className="truncate text-sm font-medium text-gray-900 dark:text-white">{inv.full_name}</p>
+                                            {inv.phone && <p className="truncate text-xs text-gray-500">{inv.phone}</p>}
+                                        </div>
+                                    </div>
+                                    <p className="ml-3 shrink-0 text-sm font-semibold text-emerald-600 dark:text-emerald-400">{moneyFmt(inv.total_profit)}</p>
                                 </Link>
-                            }
-                        >
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-sm">
-                                    <thead>
-                                        <tr className="border-b border-gray-100 text-left text-xs text-gray-500 uppercase dark:border-gray-800">
-                                            <th className="pr-3 pb-2">Investor</th>
-                                            <th className="pr-3 pb-2">Type</th>
-                                            <th className="pr-3 pb-2">Balance</th>
-                                            <th className="pr-3 pb-2 text-right">Amount</th>
-                                            <th className="pr-3 pb-2 text-right">After</th>
-                                            <th className="pr-3 pb-2">Date</th>
+                            ))}
+                            {topProfitableInvestors.length === 0 && <EmptyState message="No profit in this date range" />}
+                        </div>
+                    </SectionCard>
+                </div>
+
+                <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+                    <SectionCard
+                        title="Recent Investments"
+                        action={
+                            <Link href="/investments" className="text-xs text-indigo-600 dark:text-indigo-400">
+                                View all
+                            </Link>
+                        }
+                    >
+                        <div className="space-y-3">
+                            {recentInvestments.map((inv) => (
+                                <Link
+                                    key={inv.id}
+                                    href={`/investments/${inv.id}`}
+                                    className="block rounded-xl border border-gray-100 p-3 transition hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800/40"
+                                >
+                                    <div className="flex items-start justify-between gap-2">
+                                        <div className="min-w-0">
+                                            <p className="truncate text-sm font-semibold text-gray-900 dark:text-white">{inv.investment_number}</p>
+                                            <p className="truncate text-xs text-gray-500">
+                                                {inv.investor ?? '—'} • {inv.investment_date}
+                                            </p>
+                                        </div>
+                                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(inv.status)}`}>{inv.status_label}</span>
+                                    </div>
+                                    <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                                        <div>
+                                            <p className="text-gray-500">Capital</p>
+                                            <p className="font-semibold">{moneyFmt(inv.capital_amount)}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-gray-500">Allocated</p>
+                                            <p className="font-semibold">{moneyFmt(inv.allocated)}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-gray-500">Profit</p>
+                                            <p className="font-semibold text-emerald-600">{moneyFmt(inv.profit)}</p>
+                                        </div>
+                                    </div>
+                                    <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
+                                        <div className="h-full bg-indigo-500" style={{ width: `${Math.min(100, inv.progress_percent)}%` }} />
+                                    </div>
+                                </Link>
+                            ))}
+                            {recentInvestments.length === 0 && <EmptyState message="No investments in this date range" />}
+                        </div>
+                    </SectionCard>
+
+                    <SectionCard
+                        title="Recent Profit Entries"
+                        action={
+                            <Link href="/investor-profit-entries" className="text-xs text-indigo-600 dark:text-indigo-400">
+                                View all
+                            </Link>
+                        }
+                    >
+                        <div className="space-y-2">
+                            {recentProfitEntries.map((e) => (
+                                <Link key={e.id} href={`/investor-profit-entries/${e.id}`} className="flex items-center justify-between rounded-lg border border-gray-100 p-3 dark:border-gray-800">
+                                    <div className="min-w-0 flex-1">
+                                        <p className="truncate text-sm font-medium text-gray-900 dark:text-white">{e.investor ?? '—'}</p>
+                                        <p className="truncate text-xs text-gray-500">
+                                            {e.sale_invoice ?? '—'} • Qty: {e.quantity}
+                                        </p>
+                                    </div>
+                                    <div className="ml-3 shrink-0 text-right">
+                                        <p className="text-sm font-semibold text-emerald-600 dark:text-emerald-400">+{moneyFmt(e.profit_amount)}</p>
+                                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusColor(e.status)}`}>{e.status_label}</span>
+                                    </div>
+                                </Link>
+                            ))}
+                            {recentProfitEntries.length === 0 && <EmptyState message="No profit entries in this date range" />}
+                        </div>
+                    </SectionCard>
+                </div>
+
+                <div className="mt-6">
+                    <SectionCard
+                        title="Recent Withdrawals"
+                        action={
+                            <Link href="/investor-withdrawals" className="text-xs text-indigo-600 dark:text-indigo-400">
+                                View all
+                            </Link>
+                        }
+                    >
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr className="border-b border-gray-100 text-left text-xs text-gray-500 uppercase dark:border-gray-800">
+                                        <th className="pr-3 pb-2">#</th>
+                                        <th className="pr-3 pb-2">Investor</th>
+                                        <th className="pr-3 pb-2">Type</th>
+                                        <th className="pr-3 pb-2 text-right">Amount</th>
+                                        <th className="pr-3 pb-2">Date</th>
+                                        <th className="pb-2 text-center">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {recentWithdrawals.map((w) => (
+                                        <tr key={w.id} className="border-b border-gray-50 hover:bg-gray-50 dark:border-gray-800/50">
+                                            <td className="py-3 pr-3 text-xs text-gray-500">
+                                                <Link href={`/investor-withdrawals/${w.id}`} className="hover:underline">
+                                                    {w.withdrawal_number}
+                                                </Link>
+                                            </td>
+                                            <td className="py-3 pr-3 font-medium">{w.investor ?? '—'}</td>
+                                            <td className="py-3 pr-3">
+                                                <span
+                                                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                                                        w.type === 'profit'
+                                                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                                                            : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                                                    }`}
+                                                >
+                                                    {w.type}
+                                                </span>
+                                            </td>
+                                            <td className="py-3 pr-3 text-right font-semibold">{moneyFmt(w.amount)}</td>
+                                            <td className="py-3 pr-3 text-xs text-gray-500">{w.withdrawal_date}</td>
+                                            <td className="py-3 text-center">
+                                                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(w.status)}`}>{w.status}</span>
+                                            </td>
                                         </tr>
-                                    </thead>
-                                    <tbody>
-                                        {recentTransactions.map((t) => (
-                                            <tr key={t.id} className="border-b border-gray-50 hover:bg-gray-50 dark:border-gray-800/50">
-                                                <td className="py-3 pr-3 font-medium">{t.investor ?? '—'}</td>
-                                                <td className="py-3 pr-3">
-                                                    <span className="text-xs text-gray-600 dark:text-gray-400">{t.type_label}</span>
-                                                </td>
-                                                <td className="py-3 pr-3">
-                                                    <span
-                                                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${balanceTypeColor(t.balance_type)}`}
-                                                    >
-                                                        {t.balance_type}
-                                                    </span>
-                                                </td>
-                                                <td className="py-3 pr-3 text-right font-semibold">{fmt(t.amount_afn)} USD</td>
-                                                <td className="py-3 pr-3 text-right text-gray-600 dark:text-gray-400">{fmt(t.balance_after)}</td>
-                                                <td className="py-3 pr-3 text-xs text-gray-500">{t.date}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                                {recentTransactions.length === 0 && <EmptyState message="No transactions yet" />}
-                            </div>
-                        </SectionCard>
-                    </div>
+                                    ))}
+                                </tbody>
+                            </table>
+                            {recentWithdrawals.length === 0 && <EmptyState message="No withdrawals in this date range" />}
+                        </div>
+                    </SectionCard>
+                </div>
+
+                <div className="mt-6">
+                    <SectionCard
+                        title="Recent Transactions (Ledger)"
+                        action={
+                            <Link href="/investor-transactions" className="text-xs text-indigo-600 dark:text-indigo-400">
+                                View all
+                            </Link>
+                        }
+                    >
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr className="border-b border-gray-100 text-left text-xs text-gray-500 uppercase dark:border-gray-800">
+                                        <th className="pr-3 pb-2">Investor</th>
+                                        <th className="pr-3 pb-2">Type</th>
+                                        <th className="pr-3 pb-2">Balance</th>
+                                        <th className="pr-3 pb-2 text-right">Amount</th>
+                                        <th className="pr-3 pb-2 text-right">After</th>
+                                        <th className="pr-3 pb-2">Date</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {recentTransactions.map((t) => (
+                                        <tr key={t.id} className="border-b border-gray-50 hover:bg-gray-50 dark:border-gray-800/50">
+                                            <td className="py-3 pr-3 font-medium">{t.investor ?? '—'}</td>
+                                            <td className="py-3 pr-3">
+                                                <span className="text-xs text-gray-600 dark:text-gray-400">{t.type_label}</span>
+                                            </td>
+                                            <td className="py-3 pr-3">
+                                                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${balanceTypeColor(t.balance_type)}`}>{t.balance_type}</span>
+                                            </td>
+                                            <td className="py-3 pr-3 text-right font-semibold">{moneyFmt(t.amount)}</td>
+                                            <td className="py-3 pr-3 text-right text-gray-600 dark:text-gray-400">{moneyFmt(t.balance_after)}</td>
+                                            <td className="py-3 pr-3 text-xs text-gray-500">{t.date}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                            {recentTransactions.length === 0 && <EmptyState message="No transactions in this date range" />}
+                        </div>
+                    </SectionCard>
                 </div>
             </div>
-        </>
+        </AppLayout>
     );
 }
