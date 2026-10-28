@@ -47,6 +47,8 @@ function shopSections(): array
         '/investor-transactions',
         '/expenses',
         '/expenses/create',
+        '/currencies',
+        '/currencies/create',
         '/product-price-histories',
         '/settings/profile',
     ];
@@ -103,18 +105,18 @@ test('each role only opens the sections that role is allowed to use', function (
 })->with([
     'admin' => [
         User::ROLE_ADMIN,
-        ['/dashboard', '/users', '/products', '/products/receive', '/sales', '/sales/create', '/inventory', '/customers', '/investors', '/expenses', '/app-settings'],
+        ['/dashboard', '/users', '/products', '/products/receive', '/sales', '/sales/create', '/inventory', '/customers', '/investors', '/expenses', '/app-settings', '/currencies'],
         ['/branches'],
     ],
     'branch manager' => [
         User::ROLE_BRANCH_MANAGER,
         ['/dashboard', '/dashboard/branch', '/users', '/users/create', '/products', '/sales', '/inventory', '/customers', '/stock-transfers'],
-        ['/investors', '/expenses', '/branches', '/app-settings'],
+        ['/investors', '/expenses', '/branches', '/app-settings', '/currencies'],
     ],
     'cashier' => [
         User::ROLE_CASHIER,
         ['/dashboard', '/dashboard/cashier', '/sales', '/sales/create', '/customers', '/inventory', '/sale-returns', '/receipts'],
-        ['/products', '/users', '/investors', '/expenses', '/stock-transfers'],
+        ['/products', '/users', '/investors', '/expenses', '/stock-transfers', '/currencies'],
     ],
     'salesperson' => [
         User::ROLE_SALESPERSON,
@@ -132,7 +134,7 @@ test('each role only opens the sections that role is allowed to use', function (
             '/receipts',
             '/inventory',
         ],
-        ['/users', '/investors', '/expenses', '/stock-transfers', '/app-settings'],
+        ['/users', '/investors', '/expenses', '/stock-transfers', '/app-settings', '/currencies'],
     ],
     'stock keeper' => [
         User::ROLE_STOCK_KEEPER,
@@ -141,7 +143,7 @@ test('each role only opens the sections that role is allowed to use', function (
     ],
     'accountant' => [
         User::ROLE_ACCOUNTANT,
-        ['/dashboard', '/dashboard/accountant', '/products', '/investors', '/investments', '/expenses', '/investor-withdrawals'],
+        ['/dashboard', '/dashboard/accountant', '/products', '/investors', '/investments', '/expenses', '/investor-withdrawals', '/currencies'],
         ['/sales', '/customers', '/users', '/inventory'],
     ],
     'investor' => [

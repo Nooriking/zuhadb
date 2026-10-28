@@ -9,6 +9,7 @@ import {
     Banknote,
     BarChart3,
     BookOpen,
+    Coins,
     DatabaseBackup,
     FileClock,
     HandCoins,
@@ -177,6 +178,12 @@ const investmentNavItems: NavItem[] = [
  ========================================================= */
 
 const financialNavItems: NavItem[] = [
+    {
+        title: 'Currencies',
+        url: '/currencies',
+        icon: Coins,
+        module: 'currencies',
+    },
     {
         title: 'Expenses',
         url: '/expenses',

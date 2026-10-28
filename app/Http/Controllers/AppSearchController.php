@@ -205,6 +205,7 @@ class AppSearchController extends Controller
             ['title' => 'Suppliers', 'url' => '/suppliers', 'category' => 'Sales', 'module' => 'suppliers'],
             ['title' => 'Investors', 'url' => '/investors', 'category' => 'Investments', 'module' => 'investors'],
             ['title' => 'Investments', 'url' => '/investments', 'category' => 'Investments', 'module' => 'investments'],
+            ['title' => 'Currencies', 'url' => '/currencies', 'category' => 'Financial', 'module' => 'currencies'],
             ['title' => 'Expenses', 'url' => '/expenses', 'category' => 'Financial', 'module' => 'expenses'],
             ['title' => 'Settings', 'url' => '/app-settings', 'category' => 'Settings', 'module' => 'settings'],
         ];

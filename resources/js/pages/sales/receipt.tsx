@@ -145,10 +145,6 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
                         </tbody>
                     </table>
                     <dl className="bill-totals">
-                        <div>
-                            <dt>Subtotal</dt>
-                            <dd>{money(sale.subtotal_afn)} AFN</dd>
-                        </div>
                         {parseFloat(sale.discount_afn) > 0 && (
                             <div>
                                 <dt>Discount</dt>
@@ -161,14 +157,18 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
                                 <dd>+{money(sale.tax_afn)} AFN</dd>
                             </div>
                         )}
-                        <div>
-                            <dt>Previous due</dt>
-                            <dd>{money(sale.previous_due_afn || 0)} AFN</dd>
-                        </div>
-                        <div>
-                            <dt>Today</dt>
-                            <dd>{money(sale.new_sale_amount_afn || sale.total_afn)} AFN</dd>
-                        </div>
+                        {parseFloat(sale.previous_due_afn || '0') > 0 && (
+                            <>
+                                <div>
+                                    <dt>Previous due</dt>
+                                    <dd>{money(sale.previous_due_afn || 0)} AFN</dd>
+                                </div>
+                                <div>
+                                    <dt>This sale</dt>
+                                    <dd>{money(sale.new_sale_amount_afn || sale.total_afn)} AFN</dd>
+                                </div>
+                            </>
+                        )}
                         <div className="bill-grand">
                             <dt>Total</dt>
                             <dd>{money(sale.grand_total_due_afn || sale.total_afn)} AFN</dd>
@@ -177,21 +177,18 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
                             <dt>Paid</dt>
                             <dd>{money(sale.received_now_afn || sale.paid_afn)} AFN</dd>
                         </div>
+                        {sale.payments.length > 1 &&
+                            sale.payments.map((payment) => (
+                                <div key={payment.id}>
+                                    <dt>{methodLabel(payment.payment_method)}</dt>
+                                    <dd>{money(payment.amount_afn)} AFN</dd>
+                                </div>
+                            ))}
                         <div className="bill-due">
                             <dt>Remaining</dt>
                             <dd>{money(sale.remaining_due_afn || sale.due_afn)} AFN</dd>
                         </div>
                     </dl>
-                    {sale.payments.length > 0 && (
-                        <ul className="bill-pays">
-                            {sale.payments.map((payment) => (
-                                <li key={payment.id}>
-                                    <span>{methodLabel(payment.payment_method)}</span>
-                                    <span>{money(payment.amount_afn)} AFN</span>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
                     <p className="bill-status">{status}</p>
                     {sale.notes && <p className="bill-note">{sale.notes}</p>}
                     <footer className="bill-foot">
@@ -207,10 +204,10 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
                 </article>
             </main>
             <style>{`
-                html, body { margin: 0; background: #f4f4f5; color: #111; }
-                .bill-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; background: #fff; border-bottom: 1px solid #e5e5e5; }
+                html, body, #app { margin: 0; padding: 0; background: #f4f4f5; color: #111; }
+                .bill-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #fff; border-bottom: 1px solid #e5e5e5; }
                 .bill-toolbar a, .bill-toolbar button { display: inline-flex; gap: 6px; align-items: center; border: 1px solid #d4d4d4; background: #fff; border-radius: 6px; padding: 6px 10px; font-size: 12px; cursor: pointer; color: inherit; text-decoration: none; }
-                .bill-page { display: flex; justify-content: center; padding: 24px 12px; }
+                .bill-page { display: flex; justify-content: center; padding: 8px 8px 12px; margin: 0; }
                 .bill {
                     display: inline-block;
                     width: fit-content;
@@ -218,7 +215,7 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
                     max-width: min(100%, 120mm);
                     height: auto;
                     background: #fff;
-                    padding: 14px 14px 18px;
+                    padding: 10px 12px 14px;
                     box-shadow: 0 8px 24px rgba(0,0,0,.08);
                     font-family: "Segoe UI", Tahoma, sans-serif;
                     font-size: 12px;
@@ -228,30 +225,29 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
                 }
                 .bill * { font-weight: 700; }
                 .bill-head, .bill-foot, .bill-kind, .bill-status { text-align: center; }
-                .bill-logo { display: block; height: auto; max-height: 80px; width: auto; max-width: 100%; margin: 0 auto 8px; object-fit: contain; }
+                .bill-logo { display: block; height: auto; max-height: 48px; width: auto; max-width: 100%; margin: 0 auto 4px; object-fit: contain; }
                 .bill-brand { margin: 0; font-size: 18px; letter-spacing: .08em; }
                 .bill-head p, .bill-foot p { margin: 2px 0; }
-                .bill-kind { margin: 10px 0 0; font-size: 12px; letter-spacing: .18em; border-top: 1px solid #111; border-bottom: 1px solid #111; padding: 4px 0; }
-                .bill-meta, .bill-totals { margin: 10px 0; }
-                .bill-meta div, .bill-totals div, .bill-pays li { display: flex; justify-content: space-between; gap: 12px; margin: 3px 0; }
+                .bill-kind { margin: 8px 0 0; font-size: 12px; letter-spacing: .18em; border-top: 1px solid #111; border-bottom: 1px solid #111; padding: 4px 0; }
+                .bill-meta, .bill-totals { margin: 8px 0; }
+                .bill-meta div, .bill-totals div { display: flex; justify-content: space-between; gap: 12px; margin: 3px 0; }
                 .bill-meta dt, .bill-totals dt { color: #111; }
                 .bill-meta dd, .bill-totals dd { margin: 0; text-align: right; white-space: nowrap; }
-                .bill-items { width: 100%; border-collapse: collapse; margin-top: 8px; table-layout: auto; }
+                .bill-items { width: 100%; border-collapse: collapse; margin-top: 6px; table-layout: auto; }
                 .bill-items th { border-bottom: 1px solid #111; text-align: right; font-size: 11px; letter-spacing: .04em; padding: 4px 0; white-space: nowrap; }
                 .bill-items th:first-child, .bill-items td:first-child { text-align: left; white-space: normal; word-break: break-word; }
                 .bill-items td { padding: 4px 0; vertical-align: top; border-bottom: 1px dotted #ccc; white-space: nowrap; }
                 .bill-grand { margin-top: 6px; padding-top: 6px; border-top: 1px solid #111; font-size: 14px; }
                 .bill-due { font-size: 13px; }
-                .bill-pays { list-style: none; margin: 8px 0 0; padding: 8px 0 0; border-top: 1px dotted #111; }
-                .bill-status { margin: 12px 0 0; letter-spacing: .16em; }
+                .bill-status { margin: 10px 0 0; letter-spacing: .16em; }
                 .bill-note { text-align: center; margin: 8px 0 0; }
-                .bill-foot { margin-top: 12px; padding-top: 8px; border-top: 1px solid #111; font-size: 11px; }
+                .bill-foot { margin-top: 10px; padding-top: 6px; border-top: 1px solid #111; font-size: 11px; }
                 @media print {
-                    html, body { background: #fff; }
+                    html, body, #app { margin: 0; padding: 0; background: #fff; }
                     .no-print { display: none !important; }
-                    .bill-page { padding: 0; display: block; }
-                    .bill { width: fit-content; min-width: 72mm; max-width: 120mm; height: auto; box-shadow: none; }
-                    @page { size: auto; margin: 4mm; }
+                    .bill-page { padding: 0; margin: 0; display: block; }
+                    .bill { width: fit-content; min-width: 72mm; max-width: 120mm; height: auto; box-shadow: none; padding: 0; }
+                    @page { size: auto; margin: 2mm; }
                 }
             `}</style>
         </>

@@ -1,5 +1,6 @@
 <?php
 
+use App\Services\CurrencyService;
 use App\Services\CustomerLedgerService;
 use App\Services\SaleNotifier;
 use App\Services\SaleService;
@@ -8,6 +9,7 @@ test('SaleService calculateTotal subtracts discount and floors at zero', functio
     $service = new SaleService(
         app(CustomerLedgerService::class),
         app(SaleNotifier::class),
+        app(CurrencyService::class),
     );
 
     expect($service->calculateTotal(5000, 500))->toBe(4500.0)

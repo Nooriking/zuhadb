@@ -114,6 +114,7 @@ const SEARCH_ITEMS: SearchItem[] = [
     { title: 'Investments', url: '/investments', category: 'Investments' },
     { title: 'Profit Entries', url: '/investor-profit-entries', category: 'Investments' },
     { title: 'Payments', url: '/payments', category: 'Financial' },
+    { title: 'Currencies', url: '/currencies', category: 'Financial' },
     { title: 'Expenses', url: '/expenses', category: 'Financial' },
 ];
 

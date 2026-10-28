@@ -1,6 +1,7 @@
 // resources/js/pages/sale-returns/edit.tsx
 // فقط خلاصه — مشابه create.tsx ولی با data از saleReturn
 
+import { ExpenseBearerToggle, type ExpenseBearer } from '@/components/expense-bearer-toggle';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -18,11 +19,19 @@ interface Props {
     saleReturn: any;
 }
 
+interface ItemEntry {
+    quantity: string;
+    condition: string;
+    reason: string;
+    expense_amount: string;
+    expense_bearer: ExpenseBearer;
+}
+
 const CONDITION_OPTIONS = [
     { value: 'good', label: 'Good — returned to stock' },
     { value: 'damaged', label: 'Damaged — not returned to stock' },
     { value: 'expired', label: 'Expired — not returned to stock' },
-    { value: 'used', label: 'Used — expense, amount reduced' },
+    { value: 'used', label: 'Used — full amount is expense' },
     { value: 'other', label: 'Other' },
 ];
 
@@ -44,14 +53,15 @@ export default function SaleReturnsEdit({ saleReturn }: Props) {
                     condition: it.condition,
                     reason: it.reason || '',
                     expense_amount: String(it.expense_amount_afn || ''),
+                    expense_bearer: (it.expense_bearer || 'customer') as ExpenseBearer,
                 },
             ]),
-        ) as Record<number, { quantity: string; condition: string; reason: string; expense_amount: string }>,
+        ) as Record<number, ItemEntry>,
     );
 
     const [loading, setLoading] = useState(false);
 
-    const updateItem = (id: number, field: 'quantity' | 'condition' | 'reason' | 'expense_amount', value: string) => {
+    const updateItem = (id: number, field: keyof ItemEntry, value: string) => {
         setItems((prev) => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
     };
 
@@ -65,6 +75,7 @@ export default function SaleReturnsEdit({ saleReturn }: Props) {
             condition: entry.condition,
             reason: entry.reason || null,
             expense_amount_afn: parseFloat(entry.expense_amount || '0') || 0,
+            expense_bearer: entry.expense_bearer,
         }));
 
         router.put(
@@ -154,14 +165,22 @@ export default function SaleReturnsEdit({ saleReturn }: Props) {
                                                     </Select>
                                                 </td>
                                                 <td className="p-3 text-right">
-                                                    <Input
-                                                        type="number"
-                                                        min="0"
-                                                        step="0.01"
-                                                        value={entry.expense_amount}
-                                                        onChange={(e) => updateItem(item.id, 'expense_amount', e.target.value)}
-                                                        className="w-28 text-right font-mono"
-                                                    />
+                                                    <div className="flex flex-col items-end gap-1.5">
+                                                        <Input
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.01"
+                                                            value={entry.expense_amount}
+                                                            onChange={(e) => updateItem(item.id, 'expense_amount', e.target.value)}
+                                                            disabled={entry.condition === 'used'}
+                                                            placeholder={entry.condition === 'used' ? 'Full amount' : '0'}
+                                                            className="w-28 text-right font-mono"
+                                                        />
+                                                        <ExpenseBearerToggle
+                                                            value={entry.expense_bearer}
+                                                            onChange={(v) => updateItem(item.id, 'expense_bearer', v)}
+                                                        />
+                                                    </div>
                                                 </td>
                                                 <td className="p-3 text-center">
                                                     <Input

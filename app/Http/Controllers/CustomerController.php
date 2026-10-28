@@ -8,6 +8,7 @@ use App\Models\Customer;
 use App\Models\Receipt;
 use App\Models\SalePayment;
 use App\Services\ActivityLogger;
+use App\Services\CurrencyService;
 use App\Services\CustomerLedgerService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -327,7 +328,7 @@ class CustomerController extends Controller
                 ->get();
             $sale = $openSales->first();
 
-            $payment = SalePayment::create([
+            $payment = SalePayment::create(array_merge(app(CurrencyService::class)->ledgerSnapshot(), [
                 'sale_id'           => $sale?->id,
                 'customer_id'       => $customer->id,
                 'amount_afn'        => $amount,
@@ -337,7 +338,7 @@ class CustomerController extends Controller
                 'notes'             => $validated['notes'] ?? null,
                 'paid_at'           => now(),
                 'received_by'       => Auth::id(),
-            ]);
+            ]));
 
             $left = $amount;
             foreach ($openSales as $openSale) {

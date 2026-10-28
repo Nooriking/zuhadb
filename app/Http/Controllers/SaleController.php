@@ -14,6 +14,8 @@ use App\Models\ProductVariant;
 use App\Models\Receipt;
 use App\Models\Sale;
 use App\Models\SaleItem;
+use App\Models\SaleReturn;
+use App\Models\User;
 use App\Services\SaleService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -304,7 +306,7 @@ class SaleController extends Controller
 
     /* =========================================================
      |  UPDATE
-     |  ✅ نام فیلد صحیح: remaining_quantity
+     |  âœ… Ù†Ø§Ù… ÙÛŒÙ„Ø¯ ØµØ­ÛŒØ­: remaining_quantity
      ========================================================= */
 
     public function update(UpdateSaleRequest $request, Sale $sale): RedirectResponse
@@ -324,9 +326,9 @@ class SaleController extends Controller
             $items = $data['items'];
             unset($data['items'], $data['payments']);
 
-            // ═══════════════════════════════════════════════════
-            //  ✅ 1. REVERT: برگرداندن اثر فروش قبلی
-            // ═══════════════════════════════════════════════════
+            // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+            //  âœ… 1. REVERT: Ø¨Ø±Ú¯Ø±Ø¯Ø§Ù†Ø¯Ù† Ø§Ø«Ø± ÙØ±ÙˆØ´ Ù‚Ø¨Ù„ÛŒ
+            // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
             $sale->loadMissing(['items.batch']);
 
@@ -346,10 +348,10 @@ class SaleController extends Controller
                     }
                 }
             } else {
-                Log::warning('SaleController@update: ستون موجودی در product_batches پیدا نشد.');
+                Log::warning('SaleController@update: Ø³ØªÙˆÙ† Ù…ÙˆØ¬ÙˆØ¯ÛŒ Ø¯Ø± product_batches Ù¾ÛŒØ¯Ø§ Ù†Ø´Ø¯.');
             }
 
-            // برگرداندن قرض مشتری قبلی
+            // Ø¨Ø±Ú¯Ø±Ø¯Ø§Ù†Ø¯Ù† Ù‚Ø±Ø¶ Ù…Ø´ØªØ±ÛŒ Ù‚Ø¨Ù„ÛŒ
             if ($sale->customer_id && (float) $sale->remaining_due_afn > 0) {
                 $oldCustomer = Customer::lockForUpdate()->find($sale->customer_id);
                 if ($oldCustomer) {
@@ -357,12 +359,12 @@ class SaleController extends Controller
                 }
             }
 
-            // حذف SaleItem های قبلی
+            // Ø­Ø°Ù SaleItem Ù‡Ø§ÛŒ Ù‚Ø¨Ù„ÛŒ
             SaleItem::where('sale_id', $sale->id)->delete();
 
-            // ═══════════════════════════════════════════════════
-            //  ✅ 2. RE-APPLY
-            // ═══════════════════════════════════════════════════
+            // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+            //  âœ… 2. RE-APPLY
+            // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
             if (! empty($data['customer_id']) && is_numeric($data['customer_id'])) {
                 $customer = Customer::find((int) $data['customer_id']);
@@ -408,7 +410,7 @@ class SaleController extends Controller
                 SaleItem::create($line);
             }
 
-            // اعمال قرض جدید مشتری
+            // Ø§Ø¹Ù…Ø§Ù„ Ù‚Ø±Ø¶ Ø¬Ø¯ÛŒØ¯ Ù…Ø´ØªØ±ÛŒ
             if ($sale->customer_id && (float) $sale->remaining_due_afn > 0) {
                 $newCustomer = Customer::lockForUpdate()->find($sale->customer_id);
                 if ($newCustomer) {
@@ -423,18 +425,18 @@ class SaleController extends Controller
     }
 
     /* =========================================================
-     |  🆘 تشخیص خودکار نام فیلد موجودی
-     |  ✅ نام صحیح: remaining_quantity
+     |  ðŸ†˜ ØªØ´Ø®ÛŒØµ Ø®ÙˆØ¯Ú©Ø§Ø± Ù†Ø§Ù… ÙÛŒÙ„Ø¯ Ù…ÙˆØ¬ÙˆØ¯ÛŒ
+     |  âœ… Ù†Ø§Ù… ØµØ­ÛŒØ­: remaining_quantity
      ========================================================= */
 
     private static ?string $batchQtyColumnCache = null;
     private static bool $batchQtyColumnChecked = false;
 
     /**
-     * نام فیلد موجودی در product_batches را برمی‌گرداند.
+     * Ù†Ø§Ù… ÙÛŒÙ„Ø¯ Ù…ÙˆØ¬ÙˆØ¯ÛŒ Ø¯Ø± product_batches Ø±Ø§ Ø¨Ø±Ù…ÛŒâ€ŒÚ¯Ø±Ø¯Ø§Ù†Ø¯.
      *
-     * ⚠️ نکته مهم: 'quantity' را در لیست نمی‌گذاریم چون مقدار اولیه است،
-     * نه موجودی فعلی. موجودی فعلی 'remaining_quantity' است.
+     * âš ï¸ Ù†Ú©ØªÙ‡ Ù…Ù‡Ù…: 'quantity' Ø±Ø§ Ø¯Ø± Ù„ÛŒØ³Øª Ù†Ù…ÛŒâ€ŒÚ¯Ø°Ø§Ø±ÛŒÙ… Ú†ÙˆÙ† Ù…Ù‚Ø¯Ø§Ø± Ø§ÙˆÙ„ÛŒÙ‡ Ø§Ø³ØªØŒ
+     * Ù†Ù‡ Ù…ÙˆØ¬ÙˆØ¯ÛŒ ÙØ¹Ù„ÛŒ. Ù…ÙˆØ¬ÙˆØ¯ÛŒ ÙØ¹Ù„ÛŒ 'remaining_quantity' Ø§Ø³Øª.
      */
     private static function detectBatchQtyColumn(): ?string
     {
@@ -447,8 +449,8 @@ class SaleController extends Controller
         try {
             $columns = Schema::getColumnListing('product_batches');
 
-            // ✅ 'remaining_quantity' اولویت اول — نام واقعی در پروژه
-            // ⚠️ 'quantity' حذف شد چون مقدار اولیه است
+            // âœ… 'remaining_quantity' Ø§ÙˆÙ„ÙˆÛŒØª Ø§ÙˆÙ„ â€” Ù†Ø§Ù… ÙˆØ§Ù‚Ø¹ÛŒ Ø¯Ø± Ù¾Ø±ÙˆÚ˜Ù‡
+            // âš ï¸ 'quantity' Ø­Ø°Ù Ø´Ø¯ Ú†ÙˆÙ† Ù…Ù‚Ø¯Ø§Ø± Ø§ÙˆÙ„ÛŒÙ‡ Ø§Ø³Øª
             $candidates = [
                 'remaining_quantity',
                 'remaining_qty',
@@ -466,13 +468,13 @@ class SaleController extends Controller
             foreach ($candidates as $col) {
                 if (in_array($col, $columns, true)) {
                     self::$batchQtyColumnCache = $col;
-                    Log::info("SaleController: از ستون '{$col}' برای موجودی product_batches استفاده می‌شود.");
+                    Log::info("SaleController: Ø§Ø² Ø³ØªÙˆÙ† '{$col}' Ø¨Ø±Ø§ÛŒ Ù…ÙˆØ¬ÙˆØ¯ÛŒ product_batches Ø§Ø³ØªÙØ§Ø¯Ù‡ Ù…ÛŒâ€ŒØ´ÙˆØ¯.");
                     return $col;
                 }
             }
 
             Log::error(
-                'SaleController: هیچ ستون موجودی در product_batches پیدا نشد. ستون‌های موجود: '
+                'SaleController: Ù‡ÛŒÚ† Ø³ØªÙˆÙ† Ù…ÙˆØ¬ÙˆØ¯ÛŒ Ø¯Ø± product_batches Ù¾ÛŒØ¯Ø§ Ù†Ø´Ø¯. Ø³ØªÙˆÙ†â€ŒÙ‡Ø§ÛŒ Ù…ÙˆØ¬ÙˆØ¯: '
                 . implode(', ', $columns)
             );
         } catch (\Throwable $e) {
@@ -666,242 +668,306 @@ class SaleController extends Controller
         return back()->with('success', 'Receipt printed successfully.');
     }
 
-
-
     /* =========================================================
- |  SALES REPORT
- ========================================================= */
+     |  SALES REPORT
+     ========================================================= */
 
-/* =========================================================
- |  SALES REPORT
- ========================================================= */
+    public function report(Request $request): Response
+    {
+        $search        = $request->query('search');
+        $branchId      = $request->query('branch_id');
+        $customerId    = $request->query('customer_id');
+        $salespersonId = $request->query('salesperson_id');
+        $paymentStatus = $request->query('payment_status');
+        $status        = $request->query('status') ?: 'completed';
+        $onlyDue       = $request->boolean('only_due');
+        $dateFrom      = $request->query('date_from');
+        $dateTo        = $request->query('date_to');
+        $user          = $request->user();
 
-/* =========================================================
- |  SALES REPORT
- ========================================================= */
+        if ($user?->isBranchScoped()) {
+            $branchId = $user->branch_id;
+        }
 
-/* =========================================================
- |  SALES REPORT
- ========================================================= */
+        $buildBase = function () use ($search, $branchId, $customerId, $salespersonId, $paymentStatus, $status, $onlyDue, $dateFrom, $dateTo) {
+            return Sale::query()
+                ->where('sales.trash', false)
+                ->whereNull('sales.deleted_at')
+                ->when($search, function ($q, $s) {
+                    $digits = preg_replace('/\D+/', '', (string) $s);
+                    $q->where(function ($q) use ($s, $digits) {
+                        $q->where('sales.invoice_number', 'like', "%{$s}%")
+                          ->orWhere('sales.receipt_no', 'like', "%{$s}%")
+                          ->orWhere('sales.customer_phone_snapshot', 'like', "%{$s}%")
+                          ->orWhereHas('customer', function ($customer) use ($s, $digits) {
+                              $customer->where('name', 'like', "%{$s}%")
+                                  ->orWhere('phone', 'like', "%{$s}%");
+                              if ($digits !== '') {
+                                  $customer->orWhere('phone', 'like', "%{$digits}%");
+                              }
+                          });
+                    });
+                })
+                ->when($branchId, fn ($q, $v) => $q->where('sales.branch_id', $v))
+                ->when($customerId, fn ($q, $v) => $q->where('sales.customer_id', $v))
+                ->when($salespersonId, fn ($q, $v) => $q->where('sales.created_by', $v))
+                ->when($paymentStatus, fn ($q, $v) => $q->where('sales.payment_status', $v))
+                ->when($status, fn ($q, $v) => $q->where('sales.status', $v))
+                ->when($onlyDue, fn ($q) => $q->where('sales.remaining_due_afn', '>', 0))
+                ->when($dateFrom, fn ($q, $v) => $q->whereDate('sales.sale_date', '>=', $v))
+                ->when($dateTo, fn ($q, $v) => $q->whereDate('sales.sale_date', '<=', $v));
+        };
 
-public function report(Request $request): Response
-{
-    $search        = $request->query('search');
-    $branchId      = $request->query('branch_id');
-    $customerId    = $request->query('customer_id');
-    $paymentStatus = $request->query('payment_status');
-    $status        = $request->query('status');
-    $onlyDue       = $request->boolean('only_due');
-    $dateFrom      = $request->query('date_from');
-    $dateTo        = $request->query('date_to');
-    $user          = $request->user();
+        $returnsBase = function () use ($branchId, $customerId, $dateFrom, $dateTo) {
+            return SaleReturn::query()
+                ->notTrashed()
+                ->completed()
+                ->when($branchId, fn ($q, $v) => $q->where('branch_id', $v))
+                ->when($customerId, fn ($q, $v) => $q->where('customer_id', $v))
+                ->when($dateFrom, fn ($q, $v) => $q->whereDate('return_date', '>=', $v))
+                ->when($dateTo, fn ($q, $v) => $q->whereDate('return_date', '<=', $v));
+        };
 
-    if ($user?->isBranchScoped()) {
-        $branchId = $user->branch_id;
-    }
+        $sales = $buildBase()
+            ->with([
+                'branch:id,name,code',
+                'customer:id,name,phone',
+                'creator:id,name',
+                'returns' => fn ($q) => $q->notTrashed()->completed()->select('id', 'sale_id', 'total_afn', 'return_number'),
+                'returns.items' => fn ($q) => $q->select('id', 'sale_return_id', 'expense_bearer', 'expense_amount_afn', 'condition'),
+            ])
+            ->withCount('items')
+            ->withSum([
+                'returns as return_amount_afn' => fn ($q) => $q->notTrashed()->completed(),
+            ], 'total_afn')
+            ->orderByDesc('sales.sale_date')
+            ->orderByDesc('sales.id')
+            ->paginate(25)
+            ->withQueryString()
+            ->through(function (Sale $sale) {
+                $returnAmount = (float) ($sale->return_amount_afn ?? 0);
+                $net = (float) $sale->total_afn;
+                $gross = $net + $returnAmount;
+                $types = $sale->returns
+                    ->flatMap->items
+                    ->filter(fn ($item) => $item->isUsed() || (float) $item->expense_amount_afn > 0)
+                    ->pluck('expense_bearer')
+                    ->unique()
+                    ->values();
 
-    /* ─── Base Query Builder ─── */
-    $buildBase = function () use ($search, $branchId, $customerId, $paymentStatus, $status, $onlyDue, $dateFrom, $dateTo) {
-        return Sale::query()
+                return [
+                    'id'                => $sale->id,
+                    'invoice_number'    => $sale->invoice_number,
+                    'sale_date'         => $sale->sale_date,
+                    'items_count'       => $sale->items_count,
+                    'amount_afn'        => round($gross, 2),
+                    'return_amount_afn' => round($returnAmount, 2),
+                    'net_afn'           => round($net, 2),
+                    'return_type'       => $types->count() > 1 ? 'mixed' : ($types->first() ?: null),
+                    'payment_status'    => $sale->payment_status,
+                    'status'            => $sale->status,
+                    'branch'            => $sale->branch,
+                    'customer'          => $sale->customer,
+                    'creator'           => $sale->creator,
+                ];
+            });
+
+        $summaryRow = $buildBase()
+            ->selectRaw('
+                COALESCE(SUM(sales.total_afn), 0) as net_sales,
+                COALESCE(SUM(sales.paid_afn), 0) as total_paid,
+                COALESCE(SUM(sales.remaining_due_afn), 0) as total_due,
+                COALESCE(SUM(sales.total_cost_afn), 0) as total_cost,
+                COALESCE(SUM(sales.total_profit_afn), 0) as total_profit,
+                COALESCE(SUM(sales.store_profit_afn), 0) as store_profit,
+                COALESCE(SUM(sales.total_investor_profit_afn), 0) as investor_profit,
+                COUNT(*) as count,
+                COUNT(DISTINCT sales.customer_id) as customer_count
+            ')
+            ->first();
+
+        $totalReturns = (float) $returnsBase()->sum('total_afn');
+        $netSales = (float) $summaryRow->net_sales;
+        $grossSales = $netSales + $totalReturns;
+
+        $totalItems = DB::table('sale_items')
+            ->join('sales', 'sale_items.sale_id', '=', 'sales.id')
             ->where('sales.trash', false)
             ->whereNull('sales.deleted_at')
-            ->when($search, function ($q, $s) {
-                $digits = preg_replace('/\D+/', '', (string) $s);
-                $q->where(function ($q) use ($s, $digits) {
-                    $q->where('sales.invoice_number', 'like', "%{$s}%")
-                      ->orWhere('sales.receipt_no', 'like', "%{$s}%")
-                      ->orWhere('sales.customer_phone_snapshot', 'like', "%{$s}%")
-                      ->orWhereHas('customer', function ($customer) use ($s, $digits) {
-                          $customer->where('name', 'like', "%{$s}%")
-                              ->orWhere('phone', 'like', "%{$s}%");
-                          if ($digits !== '') {
-                              $customer->orWhere('phone', 'like', "%{$digits}%");
-                          }
-                      });
-                });
-            })
             ->when($branchId, fn ($q, $v) => $q->where('sales.branch_id', $v))
             ->when($customerId, fn ($q, $v) => $q->where('sales.customer_id', $v))
+            ->when($salespersonId, fn ($q, $v) => $q->where('sales.created_by', $v))
             ->when($paymentStatus, fn ($q, $v) => $q->where('sales.payment_status', $v))
             ->when($status, fn ($q, $v) => $q->where('sales.status', $v))
             ->when($onlyDue, fn ($q) => $q->where('sales.remaining_due_afn', '>', 0))
             ->when($dateFrom, fn ($q, $v) => $q->whereDate('sales.sale_date', '>=', $v))
-            ->when($dateTo, fn ($q, $v) => $q->whereDate('sales.sale_date', '<=', $v));
-    };
+            ->when($dateTo, fn ($q, $v) => $q->whereDate('sales.sale_date', '<=', $v))
+            ->sum('sale_items.quantity');
 
-    /* ─── Sales List ─── */
-    $sales = $buildBase()
-        ->with(['branch:id,name,code', 'customer:id,name,phone', 'creator:id,name'])
-        ->withCount('items')
-        ->orderByDesc('sales.sale_date')
-        ->orderByDesc('sales.id')
-        ->get();
+        $summary = [
+            'gross_sales'     => round($grossSales, 2),
+            'total_returns'   => round($totalReturns, 2),
+            'net_sales'       => round($netSales, 2),
+            'total_sales'     => round($netSales, 2),
+            'total_paid'      => (float) $summaryRow->total_paid,
+            'total_due'       => (float) $summaryRow->total_due,
+            'total_cost'      => (float) $summaryRow->total_cost,
+            'total_profit'    => (float) $summaryRow->total_profit,
+            'store_profit'    => (float) $summaryRow->store_profit,
+            'investor_profit' => (float) $summaryRow->investor_profit,
+            'count'           => (int) $summaryRow->count,
+            'customer_count'  => (int) $summaryRow->customer_count,
+            'total_items'     => (int) $totalItems,
+            'avg_sale'        => $summaryRow->count > 0
+                ? round($netSales / (int) $summaryRow->count, 2)
+                : 0,
+        ];
 
-    /* ─── Summary ─── */
-    $summaryRow = $buildBase()
-        ->selectRaw('
-            COALESCE(SUM(sales.total_afn), 0) as total_sales,
-            COALESCE(SUM(sales.paid_afn), 0) as total_paid,
-            COALESCE(SUM(sales.remaining_due_afn), 0) as total_due,
-            COALESCE(SUM(sales.total_cost_afn), 0) as total_cost,
-            COALESCE(SUM(sales.total_profit_afn), 0) as total_profit,
-            COALESCE(SUM(sales.store_profit_afn), 0) as store_profit,
-            COALESCE(SUM(sales.total_investor_profit_afn), 0) as investor_profit,
-            COUNT(*) as count
-        ')
-        ->first();
+        $byBranch = $buildBase()
+            ->join('branches', 'sales.branch_id', '=', 'branches.id')
+            ->selectRaw('
+                sales.branch_id,
+                branches.name as branch_name,
+                COALESCE(SUM(sales.total_afn), 0) as total_sales,
+                COALESCE(SUM(sales.total_profit_afn), 0) as total_profit,
+                COALESCE(SUM(sales.remaining_due_afn), 0) as total_due,
+                COUNT(*) as count
+            ')
+            ->groupBy('sales.branch_id', 'branches.name')
+            ->orderByDesc('total_sales')
+            ->get()
+            ->map(fn ($row) => [
+                'branch_id'    => $row->branch_id,
+                'branch_name'  => $row->branch_name,
+                'total_sales'  => (float) $row->total_sales,
+                'total_profit' => (float) $row->total_profit,
+                'total_due'    => (float) $row->total_due,
+                'count'        => (int) $row->count,
+            ]);
 
-    $totalItems = DB::table('sale_items')
-        ->join('sales', 'sale_items.sale_id', '=', 'sales.id')
-        ->where('sales.trash', false)
-        ->whereNull('sales.deleted_at')
-        ->when($branchId, fn ($q, $v) => $q->where('sales.branch_id', $v))
-        ->when($customerId, fn ($q, $v) => $q->where('sales.customer_id', $v))
-        ->when($paymentStatus, fn ($q, $v) => $q->where('sales.payment_status', $v))
-        ->when($status, fn ($q, $v) => $q->where('sales.status', $v))
-        ->when($onlyDue, fn ($q) => $q->where('sales.remaining_due_afn', '>', 0))
-        ->when($dateFrom, fn ($q, $v) => $q->whereDate('sales.sale_date', '>=', $v))
-        ->when($dateTo, fn ($q, $v) => $q->whereDate('sales.sale_date', '<=', $v))
-        ->sum('sale_items.quantity');
+        $salesByDay = $buildBase()
+            ->selectRaw('
+                DATE(sales.sale_date) as date,
+                COALESCE(SUM(sales.total_afn), 0) as net_sales,
+                COUNT(*) as count
+            ')
+            ->groupByRaw('DATE(sales.sale_date)')
+            ->orderBy('date')
+            ->limit(90)
+            ->get()
+            ->keyBy('date');
 
-    $summary = [
-        'total_sales'     => (float) $summaryRow->total_sales,
-        'total_paid'      => (float) $summaryRow->total_paid,
-        'total_due'       => (float) $summaryRow->total_due,
-        'total_cost'      => (float) $summaryRow->total_cost,
-        'total_profit'    => (float) $summaryRow->total_profit,
-        'store_profit'    => (float) $summaryRow->store_profit,
-        'investor_profit' => (float) $summaryRow->investor_profit,
-        'count'           => (int) $summaryRow->count,
-        'total_items'     => (int) $totalItems,
-        'avg_sale'        => $summaryRow->count > 0
-            ? round((float) $summaryRow->total_sales / (int) $summaryRow->count, 2)
-            : 0,
-    ];
+        $returnsByDay = $returnsBase()
+            ->selectRaw('DATE(return_date) as date, COALESCE(SUM(total_afn), 0) as total_returns')
+            ->groupByRaw('DATE(return_date)')
+            ->pluck('total_returns', 'date');
 
-    /* ─── By Branch ─── */
-    $byBranch = $buildBase()
-        ->join('branches', 'sales.branch_id', '=', 'branches.id')
-        ->selectRaw('
-            sales.branch_id,
-            branches.name as branch_name,
-            COALESCE(SUM(sales.total_afn), 0) as total_sales,
-            COALESCE(SUM(sales.total_profit_afn), 0) as total_profit,
-            COALESCE(SUM(sales.remaining_due_afn), 0) as total_due,
-            COUNT(*) as count
-        ')
-        ->groupBy('sales.branch_id', 'branches.name')
-        ->orderByDesc('total_sales')
-        ->get()
-        ->map(fn ($row) => [
-            'branch_id'    => $row->branch_id,
-            'branch_name'  => $row->branch_name,
-            'total_sales'  => (float) $row->total_sales,
-            'total_profit' => (float) $row->total_profit,
-            'total_due'    => (float) $row->total_due,
-            'count'        => (int) $row->count,
+        $allDates = $salesByDay->keys()->merge($returnsByDay->keys())->unique()->sort()->values();
+
+        $byDay = $allDates->map(function ($date) use ($salesByDay, $returnsByDay) {
+            $net = (float) ($salesByDay[$date]->net_sales ?? 0);
+            $returns = (float) ($returnsByDay[$date] ?? 0);
+
+            return [
+                'date'          => $date,
+                'net_sales'     => $net,
+                'total_returns' => $returns,
+                'gross_sales'   => $net + $returns,
+                'total_sales'   => $net,
+                'total_profit'  => 0,
+                'count'         => (int) ($salesByDay[$date]->count ?? 0),
+            ];
+        })->values();
+
+        $byCustomer = $buildBase()
+            ->leftJoin('customers', 'sales.customer_id', '=', 'customers.id')
+            ->selectRaw('
+                sales.customer_id,
+                COALESCE(customers.name, "Walk-in") as customer_name,
+                COALESCE(SUM(sales.total_afn), 0) as total_sales,
+                COALESCE(SUM(sales.remaining_due_afn), 0) as total_due,
+                COUNT(*) as count
+            ')
+            ->groupBy('sales.customer_id', 'customers.name')
+            ->orderByDesc('total_sales')
+            ->limit(50)
+            ->get()
+            ->map(fn ($row) => [
+                'customer_id'   => $row->customer_id,
+                'customer_name' => $row->customer_name,
+                'total_sales'   => (float) $row->total_sales,
+                'total_due'     => (float) $row->total_due,
+                'count'         => (int) $row->count,
+            ]);
+
+        $byProduct = DB::table('sale_items')
+            ->join('sales', 'sale_items.sale_id', '=', 'sales.id')
+            ->join('product_variants', 'sale_items.variant_id', '=', 'product_variants.id')
+            ->join('products', 'product_variants.product_id', '=', 'products.id')
+            ->where('sales.trash', false)
+            ->whereNull('sales.deleted_at')
+            ->when($branchId, fn ($q, $v) => $q->where('sales.branch_id', $v))
+            ->when($customerId, fn ($q, $v) => $q->where('sales.customer_id', $v))
+            ->when($salespersonId, fn ($q, $v) => $q->where('sales.created_by', $v))
+            ->when($paymentStatus, fn ($q, $v) => $q->where('sales.payment_status', $v))
+            ->when($status, fn ($q, $v) => $q->where('sales.status', $v))
+            ->when($onlyDue, fn ($q) => $q->where('sales.remaining_due_afn', '>', 0))
+            ->when($dateFrom, fn ($q, $v) => $q->whereDate('sales.sale_date', '>=', $v))
+            ->when($dateTo, fn ($q, $v) => $q->whereDate('sales.sale_date', '<=', $v))
+            ->selectRaw('
+                sale_items.variant_id,
+                products.name as product_name,
+                product_variants.name as variant_name,
+                COALESCE(SUM(sale_items.quantity), 0) as total_quantity,
+                COALESCE(SUM(sale_items.line_total_afn), 0) as total_sales,
+                COALESCE(SUM(sale_items.store_profit_afn), 0) as total_profit,
+                COALESCE(SUM(sale_items.store_profit_afn - sale_items.investor_profit_afn), 0) as store_profit,
+                COALESCE(SUM(sale_items.investor_profit_afn), 0) as investor_profit
+            ')
+            ->groupBy('sale_items.variant_id', 'products.name', 'product_variants.name')
+            ->orderByDesc('total_quantity')
+            ->limit(50)
+            ->get()
+            ->map(fn ($row) => [
+                'variant_id'      => $row->variant_id,
+                'product_name'    => $row->product_name,
+                'variant_name'    => $row->variant_name,
+                'total_quantity'  => (int) $row->total_quantity,
+                'total_sales'     => (float) $row->total_sales,
+                'total_profit'    => (float) $row->total_profit,
+                'store_profit'    => (float) $row->store_profit,
+                'investor_profit' => (float) $row->investor_profit,
+            ]);
+
+        $salespeople = User::query()
+            ->whereIn('role', [User::ROLE_CASHIER, User::ROLE_SALESPERSON, User::ROLE_ADMIN, User::ROLE_BRANCH_MANAGER])
+            ->where('trash', false)
+            ->select('id', 'name')
+            ->orderBy('name')
+            ->get();
+
+        return Inertia::render('sales/report', [
+            'sales'       => $sales,
+            'summary'     => $summary,
+            'byBranch'    => $byBranch,
+            'byDay'       => $byDay,
+            'byCustomer'  => $byCustomer,
+            'byProduct'   => $byProduct,
+            'branches'    => Branch::notTrashed()->visibleTo($user)->select('id', 'name', 'code')->get(),
+            'customers'   => Customer::notTrashed()->select('id', 'name', 'phone')->orderBy('name')->get(),
+            'salespeople' => $salespeople,
+            'filters'     => [
+                'search'         => $search,
+                'branch_id'      => $branchId,
+                'customer_id'    => $customerId,
+                'salesperson_id' => $salespersonId,
+                'payment_status' => $paymentStatus,
+                'status'         => $status,
+                'only_due'       => $onlyDue,
+                'date_from'      => $dateFrom,
+                'date_to'        => $dateTo,
+            ],
+            'canEditCompleted' => $user?->isSuperAdmin() ?? false,
         ]);
-
-    /* ─── By Day ─── */
-    $byDay = $buildBase()
-        ->selectRaw('
-            DATE(sales.sale_date) as date,
-            COALESCE(SUM(sales.total_afn), 0) as total_sales,
-            COALESCE(SUM(sales.total_profit_afn), 0) as total_profit,
-            COUNT(*) as count
-        ')
-        ->groupByRaw('DATE(sales.sale_date)')
-        ->orderByDesc('date')
-        ->limit(60)
-        ->get()
-        ->map(fn ($row) => [
-            'date'         => $row->date,
-            'total_sales'  => (float) $row->total_sales,
-            'total_profit' => (float) $row->total_profit,
-            'count'        => (int) $row->count,
-        ]);
-
-    /* ─── By Customer ─── */
-    $byCustomer = $buildBase()
-        ->leftJoin('customers', 'sales.customer_id', '=', 'customers.id')
-        ->selectRaw('
-            sales.customer_id,
-            COALESCE(customers.name, "Walk-in") as customer_name,
-            COALESCE(SUM(sales.total_afn), 0) as total_sales,
-            COALESCE(SUM(sales.remaining_due_afn), 0) as total_due,
-            COUNT(*) as count
-        ')
-        ->groupBy('sales.customer_id', 'customers.name')
-        ->orderByDesc('total_sales')
-        ->limit(50)
-        ->get()
-        ->map(fn ($row) => [
-            'customer_id'   => $row->customer_id,
-            'customer_name' => $row->customer_name,
-            'total_sales'   => (float) $row->total_sales,
-            'total_due'     => (float) $row->total_due,
-            'count'         => (int) $row->count,
-        ]);
-
-    /* ─── By Product — با ستون‌های واقعی sale_items ─── */
-    $byProduct = DB::table('sale_items')
-        ->join('sales', 'sale_items.sale_id', '=', 'sales.id')
-        ->join('product_variants', 'sale_items.variant_id', '=', 'product_variants.id')
-        ->join('products', 'product_variants.product_id', '=', 'products.id')
-        ->where('sales.trash', false)
-        ->whereNull('sales.deleted_at')
-        ->when($branchId, fn ($q, $v) => $q->where('sales.branch_id', $v))
-        ->when($customerId, fn ($q, $v) => $q->where('sales.customer_id', $v))
-        ->when($paymentStatus, fn ($q, $v) => $q->where('sales.payment_status', $v))
-        ->when($status, fn ($q, $v) => $q->where('sales.status', $v))
-        ->when($onlyDue, fn ($q) => $q->where('sales.remaining_due_afn', '>', 0))
-        ->when($dateFrom, fn ($q, $v) => $q->whereDate('sales.sale_date', '>=', $v))
-        ->when($dateTo, fn ($q, $v) => $q->whereDate('sales.sale_date', '<=', $v))
-        ->selectRaw('
-            sale_items.variant_id,
-            products.name as product_name,
-            product_variants.name as variant_name,
-            COALESCE(SUM(sale_items.quantity), 0) as total_quantity,
-            COALESCE(SUM(sale_items.line_total_afn), 0) as total_sales,
-            COALESCE(SUM(sale_items.store_profit_afn + sale_items.investor_profit_afn), 0) as total_profit,
-            COALESCE(SUM(sale_items.store_profit_afn), 0) as store_profit,
-            COALESCE(SUM(sale_items.investor_profit_afn), 0) as investor_profit
-        ')
-        ->groupBy('sale_items.variant_id', 'products.name', 'product_variants.name')
-        ->orderByDesc('total_quantity')
-        ->limit(50)
-        ->get()
-        ->map(fn ($row) => [
-            'variant_id'      => $row->variant_id,
-            'product_name'    => $row->product_name,
-            'variant_name'    => $row->variant_name,
-            'total_quantity'  => (int) $row->total_quantity,
-            'total_sales'     => (float) $row->total_sales,
-            'total_profit'    => (float) $row->total_profit,
-            'store_profit'    => (float) $row->store_profit,
-            'investor_profit' => (float) $row->investor_profit,
-        ]);
-
-    return Inertia::render('sales/report', [
-        'sales'      => $sales,
-        'summary'    => $summary,
-        'byBranch'   => $byBranch,
-        'byDay'      => $byDay,
-        'byCustomer' => $byCustomer,
-        'byProduct'  => $byProduct,
-        'branches'   => Branch::notTrashed()->visibleTo($user)->select('id', 'name', 'code')->get(),
-        'customers'  => Customer::notTrashed()->select('id', 'name', 'phone')->orderBy('name')->get(),
-        'filters'    => [
-            'search'         => $search,
-            'branch_id'      => $branchId,
-            'customer_id'    => $customerId,
-            'payment_status' => $paymentStatus,
-            'status'         => $status,
-            'only_due'       => $onlyDue,
-            'date_from'      => $dateFrom,
-            'date_to'        => $dateTo,
-        ],
-        'canEditCompleted' => $user?->isSuperAdmin() ?? false,
-    ]);
-}
+    }
 }

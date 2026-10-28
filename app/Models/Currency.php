@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\Schema;
 
 class Currency extends Model
 {
@@ -17,6 +18,8 @@ class Currency extends Model
         'code',
         'name',
         'symbol',
+        'decimal_places',
+        'rate_to_default',
         'is_base',
         'status',
         'trash',
@@ -24,25 +27,23 @@ class Currency extends Model
     ];
 
     protected $casts = [
-        'is_base'    => 'boolean',
-        'trash'      => 'boolean',
+        'decimal_places' => 'integer',
+        'rate_to_default' => 'decimal:8',
+        'is_base' => 'boolean',
+        'trash' => 'boolean',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
         'deleted_at' => 'datetime',
     ];
 
-    /* =========================================================
-     |  Relationships
-     ========================================================= */
+    protected $appends = [
+        'is_default',
+    ];
 
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'user_id');
     }
-
-    /* =========================================================
-     |  Scopes
-     ========================================================= */
 
     public function scopeNotTrashed($query)
     {
@@ -64,13 +65,82 @@ class Currency extends Model
         return $query->where('is_base', true);
     }
 
-    /* =========================================================
-     |  Helpers
-     ========================================================= */
+    public function getIsDefaultAttribute(): bool
+    {
+        return (bool) $this->is_base;
+    }
+
+    public static function tableReady(): bool
+    {
+        return Schema::hasTable('currencies');
+    }
 
     public static function getBase(): ?self
     {
-        return self::notTrashed()->base()->first();
+        if (! self::tableReady()) {
+            return null;
+        }
+
+        return self::query()->notTrashed()->base()->first();
+    }
+
+    public static function getDefault(): ?self
+    {
+        return self::getBase();
+    }
+
+    /**
+     * Currency of stored POS amounts (AFN ledger). Independent of which
+     * catalog row is currently marked as the default/base.
+     */
+    public static function ledger(): ?self
+    {
+        if (! self::tableReady()) {
+            return null;
+        }
+
+        $code = (string) config('business.default_currency', 'AFN');
+
+        return self::query()->notTrashed()->where('code', $code)->first()
+            ?? self::getDefault();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public static function sharedPayload(): array
+    {
+        $default = self::getDefault();
+        $ledger = self::ledger();
+
+        return [
+            'default' => $default ? self::toShared($default) : null,
+            'ledger' => $ledger ? self::toShared($ledger) : [
+                'code' => (string) config('business.default_currency', 'AFN'),
+                'name' => 'Afghan Afghani',
+                'symbol' => '؋',
+                'decimal_places' => 2,
+                'rate_to_default' => '1',
+                'is_default' => true,
+            ],
+            'rate_definition' => 'One unit of this currency equals rate_to_default units of the default currency.',
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public static function toShared(self $currency): array
+    {
+        return [
+            'id' => $currency->id,
+            'code' => $currency->code,
+            'name' => $currency->name,
+            'symbol' => $currency->symbol,
+            'decimal_places' => (int) $currency->decimal_places,
+            'rate_to_default' => (string) $currency->rate_to_default,
+            'is_default' => (bool) $currency->is_base,
+        ];
     }
 
     public function isBase(): bool

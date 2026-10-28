@@ -24,6 +24,7 @@ class SaleReturnItem extends Model
         'reason',
         'expense_id',
         'expense_amount_afn',
+        'expense_bearer',
     ];
 
     protected $casts = [
@@ -51,6 +52,14 @@ class SaleReturnItem extends Model
         'expired' => 'Expired',
         'other'   => 'Other',
         'used'    => 'Used',
+    ];
+
+    const BEARER_SHOP     = 'shop';
+    const BEARER_CUSTOMER = 'customer';
+
+    const BEARERS = [
+        'shop'     => 'Shop',
+        'customer' => 'Customer',
     ];
 
     /* =========================================================
@@ -114,6 +123,38 @@ class SaleReturnItem extends Model
     public function isUsed(): bool
     {
         return $this->condition === self::CONDITION_USED;
+    }
+
+    public function isShopExpense(): bool
+    {
+        return $this->expense_bearer === self::BEARER_SHOP;
+    }
+
+    /**
+     * مبلغ مصرف این قلم (حداکثر به اندازه مبلغ کل قلم)
+     */
+    public function effectiveExpenseAmount(): float
+    {
+        $line = (float) $this->total_afn;
+
+        if ($this->isUsed()) {
+            return $line;
+        }
+
+        return min($line, max(0, (float) $this->expense_amount_afn));
+    }
+
+    /**
+     * مبلغی که به مشتری برگردانده/از باقی‌داری او کم می‌شود.
+     * مصرف دوکان → کل مبلغ قلم به مشتری؛ مصرف مشتری → از مبلغ مشتری کم می‌شود.
+     */
+    public function customerCreditAmount(): float
+    {
+        $line = (float) $this->total_afn;
+
+        return $this->isShopExpense()
+            ? $line
+            : max(0, $line - $this->effectiveExpenseAmount());
     }
 
     /**

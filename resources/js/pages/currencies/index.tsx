@@ -1,5 +1,3 @@
-// resources/js/pages/currencies/index.tsx
-
 import { FilterField, IndexFilters } from '@/components/index-filters';
 import { EditAction, RowAction, RowActions, ViewAction } from '@/components/row-actions';
 import { Badge } from '@/components/ui/badge';
@@ -8,8 +6,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
+import { formatRate } from '@/lib/money';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link, router } from '@inertiajs/react';
+import { Head, Link, router, usePage } from '@inertiajs/react';
 import { AlertTriangle, Coins, Plus, Star, ToggleLeft, ToggleRight, Trash2, X } from 'lucide-react';
 import { useState } from 'react';
 
@@ -18,6 +17,8 @@ interface Currency {
     code: string;
     name: string;
     symbol: string | null;
+    decimal_places: number;
+    rate_to_default: string | number;
     is_base: boolean;
     status: 'active' | 'inactive';
     creator: { id: number; name: string } | null;
@@ -39,6 +40,7 @@ interface Props {
         search: string | null;
         status: string | null;
     };
+    rateDefinition: string;
 }
 
 const breadcrumbs: BreadcrumbItem[] = [
@@ -46,11 +48,13 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Currencies', href: '/currencies' },
 ];
 
-export default function CurrenciesIndex({ currencies, filters }: Props) {
+export default function CurrenciesIndex({ currencies, filters, rateDefinition }: Props) {
     const { toast } = useToast();
+    const flash = (usePage().props as { flash?: { error?: string; success?: string } }).flash;
     const [search, setSearch] = useState(filters.search || '');
     const [statusFilter, setStatusFilter] = useState(filters.status || 'all');
     const [currencyToDelete, setCurrencyToDelete] = useState<Currency | null>(null);
+    const [busyId, setBusyId] = useState<number | null>(null);
 
     const handleSearch = () => {
         router.get(
@@ -64,25 +68,39 @@ export default function CurrenciesIndex({ currencies, filters }: Props) {
     };
 
     const handleToggleStatus = (currency: Currency) => {
+        setBusyId(currency.id);
         router.patch(
             `/currencies/${currency.id}/toggle-status`,
             {},
             {
                 preserveScroll: true,
-                onSuccess: () => toast({ title: 'Status Changed', description: `Currency ${currency.code} status updated.` }),
-                onError: () => toast({ title: 'Error', description: 'Cannot change status.', variant: 'destructive' }),
+                onFinish: () => setBusyId(null),
+                onSuccess: () => toast({ title: 'Status changed', description: `Currency ${currency.code} status updated.` }),
+                onError: (errors) =>
+                    toast({
+                        title: 'Cannot change status',
+                        description: (errors as { message?: string }).message || 'The default currency cannot be deactivated.',
+                        variant: 'destructive',
+                    }),
             },
         );
     };
 
-    const handleSetAsBase = (currency: Currency) => {
+    const handleSetAsDefault = (currency: Currency) => {
+        setBusyId(currency.id);
         router.patch(
             `/currencies/${currency.id}/set-as-base`,
             {},
             {
                 preserveScroll: true,
-                onSuccess: () => toast({ title: 'Base Currency', description: `${currency.code} is now the base currency.` }),
-                onError: () => toast({ title: 'Error', description: 'Cannot set as base.', variant: 'destructive' }),
+                onFinish: () => setBusyId(null),
+                onSuccess: () => toast({ title: 'Default currency', description: `${currency.code} is now the default currency.` }),
+                onError: (errors) =>
+                    toast({
+                        title: 'Cannot set default',
+                        description: Object.values(errors)[0] || 'Cannot set this currency as default.',
+                        variant: 'destructive',
+                    }),
             },
         );
     };
@@ -93,12 +111,12 @@ export default function CurrenciesIndex({ currencies, filters }: Props) {
         router.delete(`/currencies/${currencyToDelete.id}`, {
             preserveScroll: true,
             onSuccess: () => {
-                toast({ title: 'Moved to Trash', description: `Currency ${currencyToDelete.code} moved to trash.` });
+                toast({ title: 'Moved to trash', description: `Currency ${currencyToDelete.code} moved to trash.` });
                 setCurrencyToDelete(null);
             },
             onError: (errors) => {
                 toast({
-                    title: 'Delete Failed',
+                    title: 'Delete failed',
                     description: errors.message || 'Cannot delete this currency.',
                     variant: 'destructive',
                 });
@@ -119,7 +137,6 @@ export default function CurrenciesIndex({ currencies, filters }: Props) {
             <Head title="Currencies" />
 
             <div className="flex flex-col gap-6 p-6">
-                {/* Header */}
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-3">
                         <Coins className="text-primary h-6 w-6" />
@@ -140,6 +157,14 @@ export default function CurrenciesIndex({ currencies, filters }: Props) {
                     </div>
                 </div>
 
+                <p className="text-muted-foreground text-sm">{rateDefinition} Sales and payments stay in their original ledger currency (AFN) and are not rewritten when the default changes.</p>
+
+                {flash?.error && (
+                    <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-md border px-4 py-3 text-sm" role="alert">
+                        {flash.error}
+                    </div>
+                )}
+
                 <IndexFilters search={search} onSearchChange={setSearch} onSearch={handleSearch} placeholder="Search by code, name, symbol...">
                     <FilterField label="Status">
                         <Select
@@ -149,7 +174,7 @@ export default function CurrenciesIndex({ currencies, filters }: Props) {
                                 setTimeout(handleSearch, 0);
                             }}
                         >
-                            <SelectTrigger className="w-full">
+                            <SelectTrigger className="w-full" aria-label="Filter by status">
                                 <SelectValue placeholder="All Status" />
                             </SelectTrigger>
                             <SelectContent>
@@ -161,8 +186,7 @@ export default function CurrenciesIndex({ currencies, filters }: Props) {
                     </FilterField>
                 </IndexFilters>
 
-                {/* Table */}
-                <div className="rounded-md border">
+                <div className="overflow-x-auto rounded-md border">
                     <Table>
                         <TableHeader>
                             <TableRow>
@@ -170,7 +194,9 @@ export default function CurrenciesIndex({ currencies, filters }: Props) {
                                 <TableHead>Code</TableHead>
                                 <TableHead>Name</TableHead>
                                 <TableHead>Symbol</TableHead>
-                                <TableHead>Base</TableHead>
+                                <TableHead className="text-right">Decimals</TableHead>
+                                <TableHead className="text-right">Rate to default</TableHead>
+                                <TableHead>Default</TableHead>
                                 <TableHead>Status</TableHead>
                                 <TableHead className="text-center">Actions</TableHead>
                             </TableRow>
@@ -178,8 +204,8 @@ export default function CurrenciesIndex({ currencies, filters }: Props) {
                         <TableBody>
                             {currencies.data.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={7} className="text-muted-foreground h-24 text-center">
-                                        No currencies found.
+                                    <TableCell colSpan={9} className="text-muted-foreground h-24 text-center">
+                                        No currencies found. Add a currency to get started.
                                     </TableCell>
                                 </TableRow>
                             ) : (
@@ -193,21 +219,24 @@ export default function CurrenciesIndex({ currencies, filters }: Props) {
                                         <TableCell>
                                             <span className="text-lg">{currency.symbol || '—'}</span>
                                         </TableCell>
+                                        <TableCell className="text-right font-mono">{currency.decimal_places}</TableCell>
+                                        <TableCell className="text-right font-mono">{formatRate(currency.rate_to_default)}</TableCell>
                                         <TableCell>
                                             {currency.is_base ? (
                                                 <Badge variant="success" className="gap-1">
                                                     <Star className="h-3 w-3" />
-                                                    Base
+                                                    Default
                                                 </Badge>
                                             ) : (
                                                 <Button
                                                     variant="ghost"
                                                     size="sm"
-                                                    onClick={() => handleSetAsBase(currency)}
+                                                    disabled={busyId === currency.id || currency.status !== 'active'}
+                                                    onClick={() => handleSetAsDefault(currency)}
                                                     className="text-muted-foreground hover:text-primary gap-1 text-xs"
                                                 >
                                                     <Star className="h-3 w-3" />
-                                                    Set as base
+                                                    Set as default
                                                 </Button>
                                             )}
                                         </TableCell>
@@ -216,7 +245,11 @@ export default function CurrenciesIndex({ currencies, filters }: Props) {
                                             <RowActions>
                                                 <ViewAction href={`/currencies/${currency.id}`} />
                                                 <EditAction href={`/currencies/${currency.id}/edit`} />
-                                                <RowAction title="Toggle Status" onClick={() => handleToggleStatus(currency)} disabled={currency.is_base}>
+                                                <RowAction
+                                                    title="Toggle status"
+                                                    onClick={() => handleToggleStatus(currency)}
+                                                    disabled={currency.is_base || busyId === currency.id}
+                                                >
                                                     {currency.status === 'active' ? (
                                                         <ToggleRight className="h-4 w-4 text-green-600" />
                                                     ) : (
@@ -235,13 +268,12 @@ export default function CurrenciesIndex({ currencies, filters }: Props) {
                     </Table>
                 </div>
 
-                {/* Pagination */}
                 {currencies.last_page > 1 && (
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div className="text-muted-foreground text-sm">
                             Showing {currencies.from || 0} to {currencies.to || 0} of {currencies.total} results
                         </div>
-                        <div className="flex gap-1">
+                        <div className="flex flex-wrap gap-1">
                             {currencies.links.map((link, i) => (
                                 <Button
                                     key={i}
@@ -258,16 +290,22 @@ export default function CurrenciesIndex({ currencies, filters }: Props) {
                 )}
             </div>
 
-            {/* Delete Confirmation Modal */}
             {currencyToDelete && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setCurrencyToDelete(null)}>
-                    <div className="bg-background w-full max-w-md rounded-lg border shadow-lg" onClick={(e) => e.stopPropagation()}>
+                    <div
+                        role="dialog"
+                        aria-labelledby="delete-currency-title"
+                        className="bg-background w-full max-w-md rounded-lg border shadow-lg"
+                        onClick={(e) => e.stopPropagation()}
+                    >
                         <div className="flex items-start gap-4 p-6">
                             <div className="bg-destructive/10 text-destructive flex h-10 w-10 shrink-0 items-center justify-center rounded-full">
                                 <AlertTriangle className="h-5 w-5" />
                             </div>
                             <div className="flex-1">
-                                <h3 className="text-lg font-semibold">Are you sure?</h3>
+                                <h3 id="delete-currency-title" className="text-lg font-semibold">
+                                    Are you sure?
+                                </h3>
                                 <p className="text-muted-foreground mt-1 text-sm">
                                     Currency <strong>{currencyToDelete.code}</strong> will be moved to trash.
                                 </p>
@@ -276,6 +314,7 @@ export default function CurrenciesIndex({ currencies, filters }: Props) {
                                 type="button"
                                 onClick={() => setCurrencyToDelete(null)}
                                 className="text-muted-foreground hover:text-foreground transition-colors"
+                                aria-label="Close"
                             >
                                 <X className="h-5 w-5" />
                             </button>

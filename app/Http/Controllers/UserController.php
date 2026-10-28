@@ -137,8 +137,18 @@ class UserController extends Controller
         $user = User::create($data);
 
         if ($user->role === User::ROLE_BRANCH_MANAGER && $user->branch_id) {
-            Branch::where('id', $user->branch_id)
-                ->update(['manager_user_id' => $user->id]);
+            $branch = Branch::find($user->branch_id);
+            if ($branch) {
+                try {
+                    $branch->assignManager($user);
+                } catch (\InvalidArgumentException $e) {
+                    $user->update(['branch_id' => null]);
+
+                    return back()
+                        ->withErrors(['branch_id' => $e->getMessage()])
+                        ->withInput();
+                }
+            }
         }
 
         return redirect()
@@ -297,8 +307,16 @@ class UserController extends Controller
         }
 
         if ($user->role === User::ROLE_BRANCH_MANAGER && $user->branch_id) {
-            Branch::where('id', $user->branch_id)
-                ->update(['manager_user_id' => $user->id]);
+            $branch = Branch::find($user->branch_id);
+            if ($branch && (int) $branch->manager_user_id !== (int) $user->id) {
+                try {
+                    $branch->assignManager($user);
+                } catch (\InvalidArgumentException $e) {
+                    return back()
+                        ->withErrors(['branch_id' => $e->getMessage()])
+                        ->withInput();
+                }
+            }
         }
 
         return redirect()

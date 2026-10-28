@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Requests\StoreCurrencyRequest;
 use App\Http\Requests\UpdateCurrencyRequest;
 use App\Models\Currency;
+use App\Services\CurrencyService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -14,9 +15,9 @@ use Inertia\Response;
 
 class CurrencyController extends Controller
 {
-    /* =========================================================
-     |  INDEX
-     ========================================================= */
+    public function __construct(
+        private readonly CurrencyService $currencies,
+    ) {}
 
     public function index(Request $request): Response
     {
@@ -29,8 +30,8 @@ class CurrencyController extends Controller
             ->when($search, function ($query, $search) {
                 $query->where(function ($q) use ($search) {
                     $q->where('code', 'like', "%{$search}%")
-                      ->orWhere('name', 'like', "%{$search}%")
-                      ->orWhere('symbol', 'like', "%{$search}%");
+                        ->orWhere('name', 'like', "%{$search}%")
+                        ->orWhere('symbol', 'like', "%{$search}%");
                 });
             })
             ->when($status, fn ($q, $s) => $q->where('status', $s))
@@ -41,48 +42,50 @@ class CurrencyController extends Controller
 
         return Inertia::render('currencies/index', [
             'currencies' => $currencies,
-            'filters'    => [
+            'filters' => [
                 'search' => $search,
                 'status' => $status,
             ],
+            'rateDefinition' => 'One unit of this currency equals this many units of the default currency.',
         ]);
     }
 
-    /* =========================================================
-     |  CREATE
-     ========================================================= */
-
     public function create(): Response
     {
-        return Inertia::render('currencies/create');
+        return Inertia::render('currencies/create', [
+            'hasDefault' => Currency::query()->notTrashed()->base()->exists(),
+            'rateDefinition' => 'One unit of this currency equals this many units of the default currency.',
+        ]);
     }
-
-    /* =========================================================
-     |  STORE
-     ========================================================= */
 
     public function store(StoreCurrencyRequest $request): RedirectResponse
     {
         $data = $request->validated();
         $data['user_id'] = Auth::id();
-        $data['is_base'] = $data['is_base'] ?? false;
+        $data['is_base'] = (bool) ($data['is_base'] ?? false);
 
-        // اگر is_base=true، بقیه را false کن
-        DB::transaction(function () use (&$data) {
-            if (! empty($data['is_base'])) {
-                Currency::where('is_base', true)->update(['is_base' => false]);
+        $hasDefault = Currency::query()->notTrashed()->base()->exists();
+        if (! $hasDefault) {
+            $data['is_base'] = true;
+            $data['rate_to_default'] = 1;
+        }
+
+        if ($data['is_base']) {
+            $data['status'] = 'active';
+        }
+
+        DB::transaction(function () use ($data) {
+            $currency = Currency::create($data);
+
+            if ($currency->is_base) {
+                $this->currencies->makeDefault($currency);
             }
-            Currency::create($data);
         });
 
         return redirect()
             ->route('currencies.index')
             ->with('success', "Currency \"{$data['code']}\" was created successfully.");
     }
-
-    /* =========================================================
-     |  SHOW
-     ========================================================= */
 
     public function show(Currency $currency): Response
     {
@@ -94,12 +97,9 @@ class CurrencyController extends Controller
 
         return Inertia::render('currencies/show', [
             'currency' => $currency,
+            'rateDefinition' => 'One unit of this currency equals this many units of the default currency.',
         ]);
     }
-
-    /* =========================================================
-     |  EDIT
-     ========================================================= */
 
     public function edit(Currency $currency): Response
     {
@@ -109,26 +109,42 @@ class CurrencyController extends Controller
 
         return Inertia::render('currencies/edit', [
             'currency' => $currency,
+            'rateDefinition' => 'One unit of this currency equals this many units of the default currency.',
         ]);
     }
-
-    /* =========================================================
-     |  UPDATE
-     ========================================================= */
 
     public function update(UpdateCurrencyRequest $request, Currency $currency): RedirectResponse
     {
         $data = $request->validated();
         $data['user_id'] = Auth::id();
-        $data['is_base'] = $data['is_base'] ?? false;
+        $data['is_base'] = (bool) ($data['is_base'] ?? false);
 
-        DB::transaction(function () use ($currency, &$data) {
-            if (! empty($data['is_base'])) {
-                Currency::where('id', '!=', $currency->id)
-                    ->where('is_base', true)
-                    ->update(['is_base' => false]);
-            }
+        if ($currency->is_base && $data['is_base'] === false) {
+            return back()->withErrors([
+                'is_base' => 'Choose another default currency first. The system must always have one default.',
+            ]);
+        }
+
+        if ($currency->is_base && ($data['status'] ?? '') === 'inactive') {
+            return back()->withErrors([
+                'status' => 'The default currency cannot be inactive.',
+            ]);
+        }
+
+        if ($data['is_base']) {
+            $data['status'] = 'active';
+        }
+
+        DB::transaction(function () use ($currency, $data) {
+            $becomingDefault = ! empty($data['is_base']) && ! $currency->is_base;
+
             $currency->update($data);
+
+            if ($becomingDefault) {
+                $this->currencies->makeDefault($currency->fresh());
+            } elseif ($currency->is_base) {
+                $currency->update(['rate_to_default' => 1]);
+            }
         });
 
         return redirect()
@@ -136,20 +152,16 @@ class CurrencyController extends Controller
             ->with('success', "Currency \"{$currency->code}\" was updated successfully.");
     }
 
-    /* =========================================================
-     |  DESTROY — move to trash
-     ========================================================= */
-
     public function destroy(Currency $currency): RedirectResponse
     {
         if ($currency->is_base) {
-            return back()->with('error', 'You cannot trash the base currency.');
+            return back()->with('error', 'You cannot trash the default currency.');
         }
 
         $code = $currency->code;
 
         $currency->update([
-            'trash'   => true,
+            'trash' => true,
             'user_id' => Auth::id(),
         ]);
 
@@ -158,16 +170,12 @@ class CurrencyController extends Controller
             ->with('success', "Currency \"{$code}\" was moved to trash.");
     }
 
-    /* =========================================================
-     |  RESTORE
-     ========================================================= */
-
     public function restore(int $id): RedirectResponse
     {
         $currency = Currency::onlyTrashed()->findOrFail($id);
 
         $currency->update([
-            'trash'   => false,
+            'trash' => false,
             'user_id' => Auth::id(),
         ]);
 
@@ -176,13 +184,13 @@ class CurrencyController extends Controller
             ->with('success', "Currency \"{$currency->code}\" was restored.");
     }
 
-    /* =========================================================
-     |  FORCE DELETE
-     ========================================================= */
-
     public function forceDelete(int $id): RedirectResponse
     {
         $currency = Currency::onlyTrashed()->findOrFail($id);
+
+        if ($currency->is_base) {
+            return back()->with('error', 'You cannot permanently delete the default currency.');
+        }
 
         $code = $currency->code;
         $currency->forceDelete();
@@ -191,10 +199,6 @@ class CurrencyController extends Controller
             ->route('currencies.index')
             ->with('success', "Currency \"{$code}\" was permanently deleted.");
     }
-
-    /* =========================================================
-     |  TRASH LIST
-     ========================================================= */
 
     public function trash(): Response
     {
@@ -208,43 +212,24 @@ class CurrencyController extends Controller
         ]);
     }
 
-    /* =========================================================
-     |  TOGGLE STATUS
-     ========================================================= */
-
     public function toggleStatus(Currency $currency): RedirectResponse
     {
         if ($currency->is_base && $currency->status === 'active') {
-            return back()->with('error', 'You cannot deactivate the base currency.');
+            return back()->with('error', 'You cannot deactivate the default currency.');
         }
 
         $currency->update([
-            'status'  => $currency->status === 'active' ? 'inactive' : 'active',
+            'status' => $currency->status === 'active' ? 'inactive' : 'active',
             'user_id' => Auth::id(),
         ]);
 
         return back()->with('success', "Currency status changed to {$currency->status}.");
     }
 
-    /* =========================================================
-     |  SET AS BASE
-     ========================================================= */
-
     public function setAsBase(Currency $currency): RedirectResponse
     {
-        if ($currency->trash) {
-            return back()->with('error', 'Cannot set a trashed currency as base.');
-        }
+        $this->currencies->makeDefault($currency);
 
-        DB::transaction(function () use ($currency) {
-            Currency::where('is_base', true)->update(['is_base' => false]);
-            $currency->update([
-                'is_base' => true,
-                'status'  => 'active',
-                'user_id' => Auth::id(),
-            ]);
-        });
-
-        return back()->with('success', "Currency \"{$currency->code}\" is now the base currency.");
+        return back()->with('success', "Currency \"{$currency->code}\" is now the default currency.");
     }
 }

@@ -135,6 +135,8 @@ return [
             'expenses.view', 'expenses.create', 'expenses.update',
             // Settings
             'settings.view', 'settings.update',
+            // Currencies
+            'currencies.view', 'currencies.create', 'currencies.update',
         ],
 
         'branch_manager' => [

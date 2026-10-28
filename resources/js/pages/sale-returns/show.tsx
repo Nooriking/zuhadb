@@ -21,6 +21,7 @@ interface ReturnItem {
     unit_price_afn: string;
     total_afn: string;
     expense_amount_afn: string;
+    expense_bearer: 'shop' | 'customer';
     condition: 'good' | 'damaged' | 'expired' | 'other' | 'used';
     reason: string | null;
     expense: { id: number; expense_number: string; title: string; amount_afn: string } | null;
@@ -113,7 +114,16 @@ export default function SaleReturnsShow({ saleReturn, expenses = [] }: Props) {
     const previousDue = parseFloat(saleReturn.previous_due_afn || '0');
     const newDue = parseFloat(saleReturn.new_due_afn || '0');
     const refund = parseFloat(saleReturn.refund_amount_afn || '0');
-    const usedAfn = saleReturn.items.reduce((sum, item) => sum + parseFloat(item.expense_amount_afn || '0'), 0);
+    const itemExpense = (item: ReturnItem) => {
+        const line = parseFloat(item.total_afn || '0');
+        return item.condition === 'used' ? line : Math.min(line, parseFloat(item.expense_amount_afn || '0'));
+    };
+    const shopExpenseAfn = saleReturn.items
+        .filter((item) => item.expense_bearer === 'shop')
+        .reduce((sum, item) => sum + itemExpense(item), 0);
+    const customerExpenseAfn = saleReturn.items
+        .filter((item) => item.expense_bearer !== 'shop')
+        .reduce((sum, item) => sum + itemExpense(item), 0);
 
     const handleMarkCompleted = () => {
         if (!confirm('Mark as completed? Good items return to stock and the customer due is updated.')) return;
@@ -357,15 +367,21 @@ export default function SaleReturnsShow({ saleReturn, expenses = [] }: Props) {
                                             <TableCell className="text-right font-mono font-semibold">{formatPrice(item.total_afn)}</TableCell>
                                             <TableCell>{getConditionBadge(item.condition)}</TableCell>
                                             <TableCell className="text-right">
-                                                {item.expense ? (
-                                                    <Link href={`/expenses/${item.expense.id}`} className="hover:underline">
-                                                        <span className="block font-mono text-xs font-semibold">{item.expense.expense_number}</span>
-                                                        <span className="text-muted-foreground block text-xs">
-                                                            {formatPrice(item.expense.amount_afn)} AFN
-                                                        </span>
-                                                    </Link>
-                                                ) : parseFloat(item.expense_amount_afn || '0') > 0 ? (
-                                                    <span className="font-mono text-xs">{formatPrice(item.expense_amount_afn)} AFN</span>
+                                                {itemExpense(item) > 0 ? (
+                                                    <div className="flex flex-col items-end gap-1">
+                                                        <span className="font-mono text-xs font-semibold">{formatPrice(itemExpense(item))} AFN</span>
+                                                        <Badge
+                                                            variant="outline"
+                                                            className={item.expense_bearer === 'shop' ? 'border-blue-300 text-blue-700' : 'border-orange-300 text-orange-700'}
+                                                        >
+                                                            {item.expense_bearer === 'shop' ? 'Shop (دوکان)' : 'Customer (مشتری)'}
+                                                        </Badge>
+                                                        {item.expense && (
+                                                            <Link href={`/expenses/${item.expense.id}`} className="font-mono text-xs hover:underline">
+                                                                {item.expense.expense_number}
+                                                            </Link>
+                                                        )}
+                                                    </div>
                                                 ) : (
                                                     <span className="text-muted-foreground text-xs">—</span>
                                                 )}
@@ -391,12 +407,18 @@ export default function SaleReturnsShow({ saleReturn, expenses = [] }: Props) {
                         {/* Summary */}
                         <div className="mt-4 ml-auto max-w-sm rounded-lg border-2 border-emerald-300 bg-emerald-50 p-4">
                             <div className="grid grid-cols-2 gap-y-2 text-sm">
+                                {customerExpenseAfn > 0 && (
+                                    <>
+                                        <span className="text-orange-700">Expense — customer (deducted):</span>
+                                        <span className="text-right font-mono text-orange-700">-{formatPrice(customerExpenseAfn)} AFN</span>
+                                    </>
+                                )}
                                 <span className="font-bold">Return credit:</span>
                                 <span className="text-right font-mono font-bold">{formatPrice(saleReturn.total_afn)} AFN</span>
-                                {usedAfn > 0 && (
+                                {shopExpenseAfn > 0 && (
                                     <>
-                                        <span className="font-bold text-orange-700">Item expense:</span>
-                                        <span className="text-right font-mono font-bold text-orange-700">{formatPrice(usedAfn)} AFN</span>
+                                        <span className="text-blue-700">Expense — shop (office expense):</span>
+                                        <span className="text-right font-mono text-blue-700">{formatPrice(shopExpenseAfn)} AFN</span>
                                     </>
                                 )}
                             </div>
@@ -407,7 +429,7 @@ export default function SaleReturnsShow({ saleReturn, expenses = [] }: Props) {
                 {expenses.length > 0 && (
                     <Card>
                         <CardHeader>
-                            <CardTitle>Used item expenses</CardTitle>
+                            <CardTitle>Shop expenses (office)</CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-2 text-sm">
                             {expenses.map((expense) => (

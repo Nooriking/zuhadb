@@ -16,6 +16,9 @@ class SalePayment extends Model
         'sale_id',
         'customer_id',
         'amount_afn',
+        'ledger_currency_code',
+        'ledger_currency_symbol',
+        'ledger_decimal_places',
         'remaining_due_afn',
         'payment_method',
         'reference_number',
@@ -26,6 +29,7 @@ class SalePayment extends Model
 
     protected $casts = [
         'amount_afn'         => 'decimal:2',
+        'ledger_decimal_places' => 'integer',
         'remaining_due_afn'  => 'decimal:2',
         'paid_at'            => 'datetime',
         'created_at'         => 'datetime',

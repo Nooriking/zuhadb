@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { ExpenseBearerToggle, type ExpenseBearer } from '@/components/expense-bearer-toggle';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
@@ -76,13 +77,26 @@ const formatPrice = (value: number | string) => {
     return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(num || 0);
 };
 
-const CONDITION_OPTIONS = [
+    const CONDITION_OPTIONS = [
     { value: 'good', label: 'Good — returned to stock', color: 'text-green-600' },
     { value: 'damaged', label: 'Damaged — not returned to stock', color: 'text-red-600' },
     { value: 'expired', label: 'Expired — not returned to stock', color: 'text-amber-600' },
-    { value: 'used', label: 'Used — expense, amount reduced', color: 'text-orange-700' },
+    { value: 'used', label: 'Used — full amount is expense', color: 'text-orange-700' },
     { value: 'other', label: 'Other', color: 'text-gray-600' },
 ];
+
+interface ItemEntry {
+    quantity: string;
+    condition: string;
+    reason: string;
+    expense_amount: string;
+    expense_bearer: ExpenseBearer;
+}
+
+const EMPTY_ENTRY: ItemEntry = { quantity: '', condition: 'good', reason: '', expense_amount: '', expense_bearer: 'customer' };
+
+const itemExpense = (entry: ItemEntry, lineTotal: number) =>
+    entry.condition === 'used' ? lineTotal : Math.min(lineTotal, Math.max(0, parseFloat(entry.expense_amount || '0') || 0));
 
 /* ═══════════════════════════════════════════════════════
  |  Component
@@ -108,7 +122,7 @@ export default function SaleReturnsCreate({
 
     const [invoice, setInvoice] = useState(invoiceQuery || selectedSale?.invoice_number || '');
     const [saleFilter, setSaleFilter] = useState('');
-    const [items, setItems] = useState<Record<number, { quantity: string; condition: string; reason: string; expense_amount: string }>>({});
+    const [items, setItems] = useState<Record<number, ItemEntry>>({});
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
     const [loading, setLoading] = useState(false);
 
@@ -120,14 +134,9 @@ export default function SaleReturnsCreate({
     }, [selectedSale?.id, selectedSale?.invoice_number]);
 
     useEffect(() => {
-        const next: Record<number, { quantity: string; condition: string; reason: string; expense_amount: string }> = {};
+        const next: Record<number, ItemEntry> = {};
         saleItems.forEach((item) => {
-            next[item.id] = {
-                quantity: '',
-                condition: 'good',
-                reason: '',
-                expense_amount: '',
-            };
+            next[item.id] = { ...EMPTY_ENTRY };
         });
         setItems(next);
     }, [saleItems]);
@@ -186,16 +195,17 @@ export default function SaleReturnsCreate({
         findByInvoice();
     };
 
-    const updateItem = (saleItemId: number, field: 'quantity' | 'condition' | 'reason' | 'expense_amount', value: string) => {
+    const updateItem = (saleItemId: number, field: keyof ItemEntry, value: string) => {
         setItems((prev) => ({
             ...prev,
-            [saleItemId]: { ...(prev[saleItemId] || { quantity: '', condition: 'good', reason: '', expense_amount: '' }), [field]: value },
+            [saleItemId]: { ...(prev[saleItemId] || EMPTY_ENTRY), [field]: value },
         }));
     };
 
     const totals = useMemo(() => {
-        let subtotalAfn = 0;
-        let expenseAfn = 0;
+        let grossAfn = 0;
+        let shopExpenseAfn = 0;
+        let customerExpenseAfn = 0;
         let itemCount = 0;
 
         saleItems.forEach((item) => {
@@ -203,17 +213,21 @@ export default function SaleReturnsCreate({
             if (!entry) return;
             const qty = parseFloat(entry.quantity || '0') || 0;
             if (qty > 0) {
-                subtotalAfn += qty * item.sale_price_afn;
-                expenseAfn += parseFloat(entry.expense_amount || '0') || 0;
+                const lineTotal = qty * item.sale_price_afn;
+                const expense = itemExpense(entry, lineTotal);
+                grossAfn += lineTotal;
+                if (entry.expense_bearer === 'shop') shopExpenseAfn += expense;
+                else customerExpenseAfn += expense;
                 itemCount++;
             }
         });
 
         const previousDueAfn = selectedSale?.customer ? parseFloat(selectedSale.customer.current_due_afn || '0') : 0;
-        const newDueAfn = Math.max(0, previousDueAfn - subtotalAfn);
-        const refundAmountAfn = Math.max(0, subtotalAfn - previousDueAfn);
+        const creditAfn = Math.max(0, grossAfn - customerExpenseAfn);
+        const newDueAfn = Math.max(0, previousDueAfn - creditAfn);
+        const refundAmountAfn = Math.max(0, creditAfn - previousDueAfn);
 
-        return { subtotalAfn, expenseAfn, itemCount, previousDueAfn, newDueAfn, refundAmountAfn };
+        return { grossAfn, creditAfn, shopExpenseAfn, customerExpenseAfn, itemCount, previousDueAfn, newDueAfn, refundAmountAfn };
     }, [items, saleItems, selectedSale]);
 
     const handleSubmit = (e: React.FormEvent) => {
@@ -229,6 +243,7 @@ export default function SaleReturnsCreate({
                 condition: entry.condition,
                 reason: entry.reason || null,
                 expense_amount_afn: parseFloat(entry.expense_amount || '0') || 0,
+                expense_bearer: entry.expense_bearer,
             }));
 
         if (itemsPayload.length === 0) {
@@ -389,7 +404,10 @@ export default function SaleReturnsCreate({
                     <Card>
                         <CardHeader>
                             <CardTitle>Step 2: Select Items & Quantities</CardTitle>
-                            <CardDescription>Set the return quantity and item condition for lines on this invoice.</CardDescription>
+                            <CardDescription>
+                                Set the return quantity and condition. For any item expense, choose who pays it: Shop (recorded in office
+                                expenses) or Customer (deducted from the customer's return amount).
+                            </CardDescription>
                         </CardHeader>
                         <CardContent>
                             <div className="overflow-x-auto rounded-md border">
@@ -409,9 +427,10 @@ export default function SaleReturnsCreate({
                                     </thead>
                                     <tbody>
                                         {saleItems.map((item) => {
-                                            const entry = items[item.id] || { quantity: '', condition: 'good', reason: '', expense_amount: '' };
+                                            const entry = items[item.id] || EMPTY_ENTRY;
                                             const qty = parseFloat(entry.quantity || '0') || 0;
                                             const lineTotal = qty * item.sale_price_afn;
+                                            const expense = itemExpense(entry, lineTotal);
                                             const disabled = item.max_returnable <= 0;
 
                                             return (
@@ -464,16 +483,32 @@ export default function SaleReturnsCreate({
                                                         </Select>
                                                     </td>
                                                     <td className="p-3 text-right">
-                                                        <Input
-                                                            type="number"
-                                                            min="0"
-                                                            step="0.01"
-                                                            value={entry.expense_amount}
-                                                            onChange={(e) => updateItem(item.id, 'expense_amount', e.target.value)}
-                                                            disabled={disabled || qty <= 0}
-                                                            placeholder="0"
-                                                            className="w-28 text-right font-mono"
-                                                        />
+                                                        <div className="flex flex-col items-end gap-1.5">
+                                                            <Input
+                                                                type="number"
+                                                                min="0"
+                                                                step="0.01"
+                                                                value={entry.condition === 'used' ? String(lineTotal) : entry.expense_amount}
+                                                                onChange={(e) => updateItem(item.id, 'expense_amount', e.target.value)}
+                                                                disabled={disabled || qty <= 0 || entry.condition === 'used'}
+                                                                placeholder="0"
+                                                                className="w-28 text-right font-mono"
+                                                            />
+                                                            <ExpenseBearerToggle
+                                                                value={entry.expense_bearer}
+                                                                onChange={(v) => updateItem(item.id, 'expense_bearer', v)}
+                                                                disabled={disabled || qty <= 0}
+                                                            />
+                                                            {expense > 0 && (
+                                                                <span
+                                                                    className={`text-[11px] ${entry.expense_bearer === 'shop' ? 'text-blue-700' : 'text-orange-700'}`}
+                                                                >
+                                                                    {entry.expense_bearer === 'shop'
+                                                                        ? 'Goes to office expenses'
+                                                                        : 'Deducted from customer'}
+                                                                </span>
+                                                            )}
+                                                        </div>
                                                     </td>
                                                     <td className="p-3 text-right font-mono font-semibold">{formatPrice(lineTotal)}</td>
                                                 </tr>
@@ -542,14 +577,26 @@ export default function SaleReturnsCreate({
                                         <span className="text-muted-foreground">Items Selected:</span>
                                         <span className="text-right font-mono font-semibold">{totals.itemCount}</span>
 
-                                        <span className="text-muted-foreground">Return credit:</span>
-                                        <span className="text-right font-mono font-semibold">{formatPrice(totals.subtotalAfn)} AFN</span>
+                                        <span className="text-muted-foreground">Returned items value:</span>
+                                        <span className="text-right font-mono font-semibold">{formatPrice(totals.grossAfn)} AFN</span>
 
-                                        {totals.expenseAfn > 0 && (
+                                        {totals.customerExpenseAfn > 0 && (
                                             <>
-                                                <span className="text-orange-700">Item expense:</span>
+                                                <span className="text-orange-700">Expense — customer (deducted):</span>
                                                 <span className="text-right font-mono font-semibold text-orange-700">
-                                                    {formatPrice(totals.expenseAfn)} AFN
+                                                    -{formatPrice(totals.customerExpenseAfn)} AFN
+                                                </span>
+                                            </>
+                                        )}
+
+                                        <span className="font-semibold">Return credit:</span>
+                                        <span className="text-right font-mono font-bold">{formatPrice(totals.creditAfn)} AFN</span>
+
+                                        {totals.shopExpenseAfn > 0 && (
+                                            <>
+                                                <span className="text-blue-700">Expense — shop (office expense):</span>
+                                                <span className="text-right font-mono font-semibold text-blue-700">
+                                                    {formatPrice(totals.shopExpenseAfn)} AFN
                                                 </span>
                                             </>
                                         )}
@@ -577,6 +624,7 @@ export default function SaleReturnsCreate({
                                                 </span>
                                             </>
                                         )}
+
                                     </div>
                                 </div>
 
@@ -584,8 +632,18 @@ export default function SaleReturnsCreate({
                                     <div className="flex items-start gap-2 rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
                                         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                                         <span>
-                                            The refund is larger than the customer due. Return {formatPrice(totals.refundAmountAfn)} AFN to the
-                                            customer.
+                                            The return credit is larger than the customer due. Refund {formatPrice(totals.refundAmountAfn)} AFN
+                                            in cash to the customer.
+                                        </span>
+                                    </div>
+                                )}
+
+                                {totals.shopExpenseAfn > 0 && (
+                                    <div className="flex items-start gap-2 rounded border border-blue-300 bg-blue-50 p-3 text-xs text-blue-800">
+                                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                                        <span>
+                                            {formatPrice(totals.shopExpenseAfn)} AFN will be recorded in office expenses when the return is
+                                            completed.
                                         </span>
                                     </div>
                                 )}

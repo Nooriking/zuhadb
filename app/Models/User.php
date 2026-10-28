@@ -101,7 +101,7 @@ class User extends Authenticatable
             'stock-transfers', 'sales', 'sale-returns',
             'investors', 'investments', 'investor-withdrawals',
             'investor-profit-entries', 'investor-transactions',
-            'expenses', 'reports', 'settings',
+            'expenses', 'currencies', 'reports', 'settings',
         ],
 
         self::ROLE_BRANCH_MANAGER => [
@@ -116,6 +116,7 @@ class User extends Authenticatable
             'investors', 'investments', 'investor-withdrawals',
             'investor-profit-entries', 'investor-transactions',
             'expenses',
+            'currencies',
             'reports', 'products',
         ],
 
@@ -153,7 +154,7 @@ class User extends Authenticatable
         self::ROLE_ADMIN => [
             'users.view', 'users.create', 'users.update', 'users.block', 'users.unblock',
             'products.view', 'products.create', 'products.update', 'products.delete',
-            'brands.view', 'brands.create',
+            'brands.view', 'brands.create', 'brands.update', 'brands.delete',
             'suppliers.view', 'suppliers.create',
             'customers.view', 'customers.create', 'customers.update', 'customers.delete',
             'inventory.view', 'inventory.adjust',
@@ -168,12 +169,13 @@ class User extends Authenticatable
             'expenses.view', 'expenses.create', 'expenses.update',
             'reports.view',
             'settings.view', 'settings.update',
+            'currencies.view', 'currencies.create', 'currencies.update',
         ],
 
         self::ROLE_BRANCH_MANAGER => [
             'users.view', 'users.create', 'users.update', 'users.block', 'users.unblock',
             'products.view', 'products.create', 'products.update', 'products.delete',
-            'brands.view', 'brands.create',
+            'brands.view', 'brands.create', 'brands.update', 'brands.delete',
             'suppliers.view', 'suppliers.create',
             'customers.view', 'customers.create', 'customers.update', 'customers.delete',
             'inventory.view', 'inventory.adjust',
@@ -191,11 +193,12 @@ class User extends Authenticatable
             'profit-entries.view',
             'expenses.view', 'expenses.create',
             'reports.view',
+            'currencies.view', 'currencies.create', 'currencies.update',
         ],
 
         self::ROLE_STOCK_KEEPER => [
             'products.view', 'products.create', 'products.update', 'products.delete',
-            'brands.view', 'brands.create',
+            'brands.view', 'brands.create', 'brands.update', 'brands.delete',
             'suppliers.view', 'suppliers.create',
             'inventory.view', 'inventory.adjust',
             'purchases.view', 'purchases.create',

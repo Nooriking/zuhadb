@@ -1,5 +1,3 @@
-// resources/js/pages/currencies/edit.tsx
-
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -17,6 +15,8 @@ interface Currency {
     code: string;
     name: string;
     symbol: string | null;
+    decimal_places: number;
+    rate_to_default: string | number;
     is_base: boolean;
     status: 'active' | 'inactive';
 }
@@ -24,14 +24,17 @@ interface Currency {
 interface Props {
     currency: Currency;
     errors?: Record<string, string>;
+    rateDefinition: string;
 }
 
-export default function CurrenciesEdit({ currency, errors: initialErrors }: Props) {
+export default function CurrenciesEdit({ currency, errors: initialErrors, rateDefinition }: Props) {
     const { toast } = useToast();
     const [form, setForm] = useState({
         code: currency.code,
         name: currency.name,
         symbol: currency.symbol || '',
+        decimal_places: String(currency.decimal_places ?? 2),
+        rate_to_default: String(currency.rate_to_default ?? '1'),
         is_base: currency.is_base,
         status: currency.status,
     });
@@ -50,26 +53,33 @@ export default function CurrenciesEdit({ currency, errors: initialErrors }: Prop
         setLoading(true);
         setErrors({});
 
-        router.put(`/currencies/${currency.id}`, form, {
-            onSuccess: () => {
-                toast({ title: 'Success', description: `Currency "${form.code}" was updated successfully.` });
-                setLoading(false);
+        router.put(
+            `/currencies/${currency.id}`,
+            {
+                ...form,
+                decimal_places: Number(form.decimal_places),
             },
-            onError: (err) => {
-                setErrors(err);
-                setLoading(false);
-                toast({ title: 'Error', description: 'There was a problem updating the currency.', variant: 'destructive' });
+            {
+                onSuccess: () => {
+                    toast({ title: 'Success', description: `Currency "${form.code}" was updated successfully.` });
+                    setLoading(false);
+                },
+                onError: (err) => {
+                    setErrors(err);
+                    setLoading(false);
+                    toast({ title: 'Error', description: 'There was a problem updating the currency.', variant: 'destructive' });
+                },
             },
-        });
+        );
     };
 
     const handleChange = (field: string, value: string | boolean) => {
         setForm((prev) => ({ ...prev, [field]: value }));
         if (errors[field]) {
             setErrors((prev) => {
-                const newErrors = { ...prev };
-                delete newErrors[field];
-                return newErrors;
+                const next = { ...prev };
+                delete next[field];
+                return next;
             });
         }
     };
@@ -79,7 +89,7 @@ export default function CurrenciesEdit({ currency, errors: initialErrors }: Prop
             <Head title={`Edit ${currency.code}`} />
 
             <div className="flex flex-col gap-6 p-6">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-3">
                         <Coins className="text-primary h-6 w-6" />
                         <h1 className="text-2xl font-bold tracking-tight">Edit Currency</h1>
@@ -92,56 +102,109 @@ export default function CurrenciesEdit({ currency, errors: initialErrors }: Prop
                     </Link>
                 </div>
 
-                <form onSubmit={handleSubmit}>
+                <form onSubmit={handleSubmit} aria-busy={loading}>
                     <Card>
                         <CardHeader>
-                            <CardTitle>Edit Currency Information</CardTitle>
-                            <CardDescription>Update the information for currency {currency.code}.</CardDescription>
+                            <CardTitle>Edit currency information</CardTitle>
+                            <CardDescription>{rateDefinition}</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-6">
                             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                                 <div className="space-y-2">
-                                    <Label>
-                                        Currency Code <span className="text-destructive">*</span>
+                                    <Label htmlFor="code">
+                                        Currency code <span className="text-destructive">*</span>
                                     </Label>
                                     <Input
+                                        id="code"
                                         value={form.code}
                                         onChange={(e) => handleChange('code', e.target.value.toUpperCase())}
-                                        maxLength={10}
+                                        maxLength={3}
+                                        required
+                                        aria-invalid={Boolean(errors.code)}
                                         className={`font-mono uppercase ${errors.code ? 'border-destructive' : ''}`}
                                     />
                                     {errors.code && <p className="text-destructive text-sm">{errors.code}</p>}
                                 </div>
 
                                 <div className="space-y-2">
-                                    <Label>
-                                        Currency Name <span className="text-destructive">*</span>
+                                    <Label htmlFor="name">
+                                        Currency name <span className="text-destructive">*</span>
                                     </Label>
                                     <Input
+                                        id="name"
                                         value={form.name}
                                         onChange={(e) => handleChange('name', e.target.value)}
+                                        required
+                                        aria-invalid={Boolean(errors.name)}
                                         className={errors.name ? 'border-destructive' : ''}
                                     />
                                     {errors.name && <p className="text-destructive text-sm">{errors.name}</p>}
                                 </div>
 
                                 <div className="space-y-2">
-                                    <Label>Symbol</Label>
+                                    <Label htmlFor="symbol">
+                                        Symbol <span className="text-destructive">*</span>
+                                    </Label>
                                     <Input
+                                        id="symbol"
                                         value={form.symbol}
                                         onChange={(e) => handleChange('symbol', e.target.value)}
-                                        maxLength={10}
+                                        maxLength={16}
+                                        required
+                                        aria-invalid={Boolean(errors.symbol)}
                                         className={`text-lg ${errors.symbol ? 'border-destructive' : ''}`}
                                     />
                                     {errors.symbol && <p className="text-destructive text-sm">{errors.symbol}</p>}
                                 </div>
 
                                 <div className="space-y-2">
-                                    <Label>
+                                    <Label htmlFor="decimal_places">
+                                        Decimal places <span className="text-destructive">*</span>
+                                    </Label>
+                                    <Input
+                                        id="decimal_places"
+                                        type="number"
+                                        min={0}
+                                        max={8}
+                                        value={form.decimal_places}
+                                        onChange={(e) => handleChange('decimal_places', e.target.value)}
+                                        required
+                                        aria-invalid={Boolean(errors.decimal_places)}
+                                        className={errors.decimal_places ? 'border-destructive' : ''}
+                                    />
+                                    {errors.decimal_places && <p className="text-destructive text-sm">{errors.decimal_places}</p>}
+                                </div>
+
+                                <div className="space-y-2 md:col-span-2">
+                                    <Label htmlFor="rate_to_default">
+                                        Exchange rate to default <span className="text-destructive">*</span>
+                                    </Label>
+                                    <Input
+                                        id="rate_to_default"
+                                        type="number"
+                                        step="any"
+                                        min="0.00000001"
+                                        value={form.is_base ? '1' : form.rate_to_default}
+                                        onChange={(e) => handleChange('rate_to_default', e.target.value)}
+                                        disabled={form.is_base}
+                                        required
+                                        aria-invalid={Boolean(errors.rate_to_default)}
+                                        className={errors.rate_to_default ? 'border-destructive' : ''}
+                                    />
+                                    {errors.rate_to_default && <p className="text-destructive text-sm">{errors.rate_to_default}</p>}
+                                    <p className="text-muted-foreground text-xs">{rateDefinition}</p>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <Label htmlFor="status">
                                         Status <span className="text-destructive">*</span>
                                     </Label>
-                                    <Select value={form.status} onValueChange={(v) => handleChange('status', v as 'active' | 'inactive')}>
-                                        <SelectTrigger className={errors.status ? 'border-destructive' : ''}>
+                                    <Select
+                                        value={form.status}
+                                        onValueChange={(v) => handleChange('status', v as 'active' | 'inactive')}
+                                        disabled={form.is_base}
+                                    >
+                                        <SelectTrigger id="status" className={errors.status ? 'border-destructive' : ''}>
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -159,21 +222,23 @@ export default function CurrenciesEdit({ currency, errors: initialErrors }: Prop
                                         type="checkbox"
                                         id="is_base"
                                         checked={form.is_base}
+                                        disabled={currency.is_base}
                                         onChange={(e) => handleChange('is_base', e.target.checked)}
                                         className="h-4 w-4 rounded"
                                     />
                                     <div>
                                         <Label htmlFor="is_base" className="cursor-pointer">
-                                            Set as Base Currency
+                                            Default currency
                                         </Label>
                                         <p className="text-muted-foreground text-xs">
-                                            Setting this currency as base will unset the previous base currency.
+                                            Setting this as default will unset the previous default. Historical sales keep their original AFN amounts.
                                         </p>
                                     </div>
                                 </div>
+                                {errors.is_base && <p className="text-destructive mt-2 text-sm">{errors.is_base}</p>}
                             </div>
 
-                            <div className="flex gap-2 border-t pt-4">
+                            <div className="flex flex-wrap gap-2 border-t pt-4">
                                 <Button type="submit" disabled={loading} className="gap-2">
                                     <Save className="h-4 w-4" />
                                     {loading ? 'Saving...' : 'Update Currency'}

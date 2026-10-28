@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>body{background:#666;margin:0;padding:10px} canvas{display:block;margin:0 auto 12px;box-shadow:0 2px 8px #0008;background:#fff}</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+<script>
+const file = new URLSearchParams(location.search).get('f');
+const page = new URLSearchParams(location.search).get('p');
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+pdfjsLib.getDocument(file).promise.then(async (pdf) => {
+  document.title = 'pages:' + pdf.numPages;
+  const pages = page ? [Number(page)] : Array.from({length: pdf.numPages}, (_, i) => i + 1);
+  for (const n of pages) {
+    const p = await pdf.getPage(n);
+    const base = p.getViewport({ scale: 1 });
+    const vp = p.getViewport({ scale: Number(new URLSearchParams(location.search).get('w') || 620) / base.width });
+    const c = document.createElement('canvas');
+    c.width = vp.width; c.height = vp.height;
+    document.body.appendChild(c);
+    await p.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+  }
+  document.body.dataset.done = '1';
+});
+</script>
+</body>
+</html>

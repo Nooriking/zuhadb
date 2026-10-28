@@ -71,7 +71,8 @@ class AppSetting extends Model
             'support_phone' => $supportPhone,
             'manufacturer' => (string) config('business.manufacturer', 'Tezhoshan'),
             'exchange_window_days' => (int) config('business.sale_exchange_window_days', 3),
-            'default_currency' => (string) config('business.default_currency', 'AFN'),
+            'default_currency' => Currency::getDefault()?->code
+                ?? (string) config('business.default_currency', 'AFN'),
             'address' => $setting?->address ?? '',
             'slogan' => $setting?->company_name_local ?? '',
             'logo' => $setting?->logo_url ?: '/images/logo.png',

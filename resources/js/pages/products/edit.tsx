@@ -1183,6 +1183,7 @@ export default function ProductsEdit({
                                         <Input
                                             type="number"
                                             min="0"
+                                            step="0.01"
                                             onKeyDown={preventNegative}
                                             value={v.purchase_price_afn}
                                             onChange={(e) => updateVariant(vIndex, 'purchase_price_afn', e.target.value)}
@@ -1196,6 +1197,7 @@ export default function ProductsEdit({
                                         <Input
                                             type="number"
                                             min="0"
+                                            step="0.01"
                                             onKeyDown={preventNegative}
                                             value={v.sale_price_afn}
                                             onChange={(e) => updateVariant(vIndex, 'sale_price_afn', e.target.value)}
@@ -1211,6 +1213,7 @@ export default function ProductsEdit({
                                         <Input
                                             type="number"
                                             min="0"
+                                            step="0.01"
                                             onKeyDown={preventNegative}
                                             value={v.wholesale_price_afn}
                                             onChange={(e) => updateVariant(vIndex, 'wholesale_price_afn', e.target.value)}

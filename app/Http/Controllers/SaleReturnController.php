@@ -179,6 +179,7 @@ class SaleReturnController extends Controller
             'items.*.condition'          => ['required', 'in:good,damaged,expired,other,used'],
             'items.*.reason'             => ['nullable', 'string', 'max:500'],
             'items.*.expense_amount_afn' => ['nullable', 'numeric', 'min:0'],
+            'items.*.expense_bearer'     => ['required', 'in:shop,customer'],
         ]);
 
         $saleReturn = DB::transaction(function () use ($validated) {
@@ -188,23 +189,21 @@ class SaleReturnController extends Controller
             $previousDueAfn = $customer ? (float) $customer->current_due_afn : 0;
 
             $saleReturn = SaleReturn::create([
-                'sale_id'         => $sale->id,
-                'branch_id'       => $sale->branch_id,
-                'customer_id'     => $sale->customer_id,
-                'return_number'   => SaleReturn::generateReturnNumber(),
-                'subtotal_afn'    => 0,
-                'total_afn'       => 0,
-                'previous_due_afn' => $previousDueAfn,
-                'new_due_afn'     => $previousDueAfn,
+                'sale_id'           => $sale->id,
+                'branch_id'         => $sale->branch_id,
+                'customer_id'       => $sale->customer_id,
+                'return_number'     => SaleReturn::generateReturnNumber(),
+                'subtotal_afn'      => 0,
+                'total_afn'         => 0,
+                'previous_due_afn'  => $previousDueAfn,
+                'new_due_afn'       => $previousDueAfn,
                 'refund_amount_afn' => 0,
-                'refund_method'   => null,
-                'reason'          => $validated['reason'] ?? null,
-                'return_date'     => $validated['return_date'],
-                'status'          => $validated['status'],
-                'created_by'      => Auth::id(),
+                'refund_method'     => null,
+                'reason'            => $validated['reason'] ?? null,
+                'return_date'       => $validated['return_date'],
+                'status'            => SaleReturn::STATUS_DRAFT,
+                'created_by'        => Auth::id(),
             ]);
-
-            $subtotalAfn = 0;
 
             foreach ($validated['items'] as $itemData) {
                 $saleItem = SaleItem::findOrFail($itemData['sale_item_id']);
@@ -214,33 +213,30 @@ class SaleReturnController extends Controller
                 $lineTotal = $qty * $unitPrice;
 
                 SaleReturnItem::create([
-                    'sale_return_id' => $saleReturn->id,
-                    'sale_item_id'   => $saleItem->id,
-                    'batch_id'       => $saleItem->batch_id,
-                    'variant_id'     => $saleItem->variant_id,
-                    'quantity'       => $qty,
-                    'unit_price_afn' => $unitPrice,
-                    'total_afn'      => $lineTotal,
+                    'sale_return_id'     => $saleReturn->id,
+                    'sale_item_id'       => $saleItem->id,
+                    'batch_id'           => $saleItem->batch_id,
+                    'variant_id'         => $saleItem->variant_id,
+                    'quantity'           => $qty,
+                    'unit_price_afn'     => $unitPrice,
+                    'total_afn'          => $lineTotal,
                     'condition'          => $itemData['condition'],
                     'reason'             => $itemData['reason'] ?? null,
                     'expense_amount_afn' => round((float) ($itemData['expense_amount_afn'] ?? 0), 2),
+                    'expense_bearer'     => $itemData['expense_bearer'],
                 ]);
-
-                $subtotalAfn += $lineTotal;
             }
 
             $saleReturn = $saleReturn->fresh('items');
             $this->applyReturnTotals($saleReturn);
 
-            foreach ($saleReturn->items as $item) {
-                $this->syncItemExpense($saleReturn, $item);
+            if ($validated['status'] === SaleReturn::STATUS_COMPLETED) {
+                $this->finalizeReturn($saleReturn->fresh(['items', 'customer']));
+            } elseif ($validated['status'] === SaleReturn::STATUS_CANCELLED) {
+                $saleReturn->update(['status' => SaleReturn::STATUS_CANCELLED]);
             }
 
-            if ($saleReturn->status === SaleReturn::STATUS_COMPLETED) {
-                $this->deductReturnFromSale($saleReturn);
-            }
-
-            return $saleReturn;
+            return $saleReturn->fresh();
         });
 
         return redirect()
@@ -322,19 +318,18 @@ class SaleReturnController extends Controller
             'items.*.condition'          => ['required', 'in:good,damaged,expired,other,used'],
             'items.*.reason'             => ['nullable', 'string', 'max:500'],
             'items.*.expense_amount_afn' => ['nullable', 'numeric', 'min:0'],
+            'items.*.expense_bearer'     => ['required', 'in:shop,customer'],
         ]);
 
         DB::transaction(function () use ($validated, $saleReturn) {
-            $wasCompleted = $saleReturn->status === SaleReturn::STATUS_COMPLETED;
-
             $saleReturn->update([
                 'return_date' => $validated['return_date'],
                 'reason'      => $validated['reason'] ?? null,
-                'status'      => $validated['status'],
+                'status'      => SaleReturn::STATUS_DRAFT,
             ]);
 
             foreach ($validated['items'] as $itemData) {
-                $item = SaleReturnItem::findOrFail($itemData['id']);
+                $item = $saleReturn->items()->findOrFail($itemData['id']);
                 $unitPrice = (float) $item->unit_price_afn;
                 $lineTotal = $itemData['quantity'] * $unitPrice;
 
@@ -344,6 +339,7 @@ class SaleReturnController extends Controller
                     'condition'          => $itemData['condition'],
                     'reason'             => $itemData['reason'] ?? null,
                     'expense_amount_afn' => round((float) ($itemData['expense_amount_afn'] ?? 0), 2),
+                    'expense_bearer'     => $itemData['expense_bearer'],
                 ]);
             }
 
@@ -354,8 +350,10 @@ class SaleReturnController extends Controller
                 $this->syncItemExpense($saleReturn, $item);
             }
 
-            if (! $wasCompleted && $saleReturn->status === SaleReturn::STATUS_COMPLETED) {
-                $this->deductReturnFromSale($saleReturn);
+            if ($validated['status'] === SaleReturn::STATUS_COMPLETED) {
+                $this->finalizeReturn($saleReturn->fresh(['items', 'customer']));
+            } elseif ($validated['status'] === SaleReturn::STATUS_CANCELLED) {
+                $saleReturn->update(['status' => SaleReturn::STATUS_CANCELLED]);
             }
         });
 
@@ -379,69 +377,7 @@ class SaleReturnController extends Controller
         }
 
         DB::transaction(function () use ($saleReturn) {
-            $saleReturn->load('items', 'customer');
-
-            /* ═══ ۱. برگرداندن اقلام سالم به انبار ═══ */
-            foreach ($saleReturn->items as $item) {
-                if ($item->shouldReturnToStock() && $item->batch_id) {
-                    $batch = ProductBatch::find($item->batch_id);
-
-                    if ($batch) {
-                        $batch->restoreStock($item->quantity);
-
-                        Inventory::increase(
-                            branchId:      $saleReturn->branch_id,
-                            variantId:     $item->variant_id,
-                            qty:           $item->quantity,
-                            type:          'return',    // ✅ اصلاح شد (قبلاً 'sale_return' بود)
-                            batchId:       $batch->id,
-                            referenceType: SaleReturn::class,
-                            referenceId:   $saleReturn->id,
-                            notes:         "Returned via {$saleReturn->return_number}"
-                        );
-                    }
-                }
-            }
-
-            /* ═══ ۲. آپدیت مشتری + ledger ═══ */
-            if ($saleReturn->customer_id) {
-                $customer = Customer::find($saleReturn->customer_id);
-
-                if ($customer) {
-                    $ledger = app(CustomerLedgerService::class);
-                    $ledger->recordReturn($saleReturn);
-
-                    $customer->update([
-                        'current_due_afn' => $saleReturn->new_due_afn,
-                    ]);
-                }
-            }
-
-            /* ═══ ۳. آپدیت sale.remaining_due_afn ═══ */
-            if ($saleReturn->sale_id) {
-                $sale = Sale::find($saleReturn->sale_id);
-
-                if ($sale && $saleReturn->customer_id) {
-                    $customer = Customer::find($saleReturn->customer_id);
-                    if ($customer) {
-                        $sale->update([
-                            'remaining_due_afn' => $customer->current_due_afn,
-                            'due_afn'           => $customer->current_due_afn,
-                            'payment_status'    => $customer->current_due_afn <= 0.01 ? 'paid' : 'partial',
-                        ]);
-                    }
-                }
-            }
-
-            $saleReturn = $saleReturn->fresh('items');
-            foreach ($saleReturn->items as $item) {
-                $this->syncItemExpense($saleReturn, $item);
-            }
-
-            $this->deductReturnFromSale($saleReturn);
-
-            /* ═══ ۴. وضعیت نهایی ═══ */
-            $saleReturn->update(['status' => SaleReturn::STATUS_COMPLETED]);
+            $this->finalizeReturn($saleReturn->fresh(['items', 'customer']));
         });
 
         return back()->with('success', "Return \"{$saleReturn->return_number}\" completed successfully.");
@@ -480,33 +416,42 @@ class SaleReturnController extends Controller
                 );
             }
 
+            $creditBefore = (float) $saleReturn->total_afn;
+
             $item->update([
                 'condition' => SaleReturnItem::CONDITION_USED,
                 'expense_amount_afn' => $item->total_afn,
             ]);
-            $this->applyReturnTotals($saleReturn->fresh('items'));
-            $this->syncItemExpense($saleReturn->fresh('items'), $item->fresh());
 
-            if ($saleReturn->customer_id) {
-                $customer = Customer::find($saleReturn->customer_id);
-                $saleReturn->refresh();
+            $saleReturn = $saleReturn->fresh('items');
+            $this->applyReturnTotals($saleReturn);
+            $saleReturn->refresh();
+            $this->syncItemExpense($saleReturn, $item->fresh());
+
+            // Customer-borne expense lowers the credit already given — charge the difference back.
+            $delta = round($creditBefore - (float) $saleReturn->total_afn, 2);
+
+            if ($delta >= 0.01) {
+                $this->adjustSaleTotals($saleReturn, $delta);
+
+                $customer = $saleReturn->customer_id ? Customer::find($saleReturn->customer_id) : null;
                 if ($customer) {
-                    $previousDue = (float) $customer->current_due_afn;
-                    $customer->update(['current_due_afn' => $saleReturn->new_due_afn]);
-                    $delta = round((float) $saleReturn->new_due_afn - $previousDue, 2);
-                    if (abs($delta) >= 0.01) {
-                        app(CustomerLedgerService::class)->recordAdjustment(
-                            $customer->fresh(),
-                            $delta,
-                            (float) $saleReturn->new_due_afn,
-                            "Used item on return {$saleReturn->return_number}"
-                        );
-                    }
+                    $newDue = round((float) $customer->current_due_afn + $delta, 2);
+                    $customer->update(['current_due_afn' => $newDue]);
+
+                    app(CustomerLedgerService::class)->recordAdjustment(
+                        $customer->fresh(),
+                        $delta,
+                        $newDue,
+                        "Used item on return {$saleReturn->return_number}"
+                    );
                 }
             }
         });
 
-        return back()->with('success', 'Used item was recorded as an expense and removed from the return amount.');
+        return back()->with('success', $item->fresh()->isShopExpense()
+            ? 'Used item was recorded as a shop expense.'
+            : 'Used item amount was deducted from the customer.');
     }
 
     /* =========================================================
@@ -557,29 +502,91 @@ class SaleReturnController extends Controller
 
     private function applyReturnTotals(SaleReturn $saleReturn): void
     {
-        $credit = 0.0;
-
-        foreach ($saleReturn->items as $item) {
-            $line = (float) $item->total_afn;
-            $used = $item->condition === SaleReturnItem::CONDITION_USED
-                ? $line
-                : min($line, (float) $item->expense_amount_afn);
-            $credit += max(0, $line - $used);
-        }
-
+        $credit = round((float) $saleReturn->items->sum(fn (SaleReturnItem $item) => $item->customerCreditAmount()), 2);
         $previousDue = (float) $saleReturn->previous_due_afn;
+
         $newDue = max(0, $previousDue - $credit);
         $refund = max(0, $credit - $previousDue);
 
         $saleReturn->update([
-            'subtotal_afn' => round($credit, 2),
-            'total_afn' => round($credit, 2),
-            'new_due_afn' => round($newDue, 2),
+            'subtotal_afn'      => $credit,
+            'total_afn'         => $credit,
+            'new_due_afn'       => round($newDue, 2),
             'refund_amount_afn' => round($refund, 2),
-            'refund_method' => $refund > 0 ? ($saleReturn->refund_method ?: 'cash') : null,
+            'refund_method'     => $refund > 0 ? ($saleReturn->refund_method ?: 'cash') : null,
         ]);
     }
 
+    /**
+     * Complete a return: restock, ledger, deduct from sale totals, record shop expenses, mark completed.
+     */
+    private function finalizeReturn(SaleReturn $saleReturn): void
+    {
+        if ($saleReturn->isCompleted()) {
+            return;
+        }
+
+        $saleReturn->loadMissing(['items', 'customer']);
+
+        if ($saleReturn->customer) {
+            $saleReturn->update(['previous_due_afn' => (float) $saleReturn->customer->current_due_afn]);
+        }
+
+        $this->applyReturnTotals($saleReturn);
+        $saleReturn->refresh();
+
+        foreach ($saleReturn->items as $item) {
+            if ($item->shouldReturnToStock() && $item->batch_id) {
+                $batch = ProductBatch::find($item->batch_id);
+
+                if ($batch) {
+                    $batch->restoreStock($item->quantity);
+
+                    Inventory::increase(
+                        branchId:      $saleReturn->branch_id,
+                        variantId:     $item->variant_id,
+                        qty:           $item->quantity,
+                        type:          'return',
+                        batchId:       $batch->id,
+                        referenceType: SaleReturn::class,
+                        referenceId:   $saleReturn->id,
+                        notes:         "Returned via {$saleReturn->return_number}"
+                    );
+                }
+            }
+        }
+
+        $customer = $saleReturn->customer_id ? Customer::find($saleReturn->customer_id) : null;
+
+        if ($customer) {
+            app(CustomerLedgerService::class)->recordReturn($saleReturn);
+            $customer->update([
+                'current_due_afn' => $saleReturn->new_due_afn,
+            ]);
+
+            $sale = $saleReturn->sale_id ? Sale::find($saleReturn->sale_id) : null;
+            if ($sale) {
+                $sale->update([
+                    'remaining_due_afn' => $customer->current_due_afn,
+                    'due_afn'           => $customer->current_due_afn,
+                    'payment_status'    => $customer->current_due_afn <= 0.01 ? 'paid' : 'partial',
+                ]);
+            }
+        }
+
+        $this->adjustSaleTotals($saleReturn, -1 * (float) $saleReturn->total_afn);
+
+        $saleReturn->update(['status' => SaleReturn::STATUS_COMPLETED]);
+
+        foreach ($saleReturn->items as $item) {
+            $this->syncItemExpense($saleReturn, $item);
+        }
+    }
+
+    /**
+     * Only shop-borne expenses of completed returns go to office expenses;
+     * customer-borne expenses are already deducted from the customer's credit.
+     */
     private function syncItemExpense(SaleReturn $saleReturn, SaleReturnItem $item): void
     {
         if ($item->condition === SaleReturnItem::CONDITION_USED && (float) $item->expense_amount_afn <= 0) {
@@ -587,7 +594,9 @@ class SaleReturnController extends Controller
             $item->refresh();
         }
 
-        $amount = round((float) $item->expense_amount_afn, 2);
+        $amount = $saleReturn->isCompleted() && $item->isShopExpense()
+            ? round($item->effectiveExpenseAmount(), 2)
+            : 0.0;
 
         if ($amount <= 0) {
             if ($item->expense_id) {
@@ -609,9 +618,10 @@ class SaleReturnController extends Controller
         }
     }
 
-    private function deductReturnFromSale(SaleReturn $saleReturn): void
+    private function adjustSaleTotals(SaleReturn $saleReturn, float $delta): void
     {
-        if (! $saleReturn->sale_id) {
+        $delta = round($delta, 2);
+        if (abs($delta) < 0.01 || ! $saleReturn->sale_id) {
             return;
         }
 
@@ -620,12 +630,10 @@ class SaleReturnController extends Controller
             return;
         }
 
-        $amount = round((float) $saleReturn->items->sum('total_afn'), 2);
-
         $sale->update([
-            'subtotal_afn' => max(0, round((float) $sale->subtotal_afn - $amount, 2)),
-            'total_afn' => max(0, round((float) $sale->total_afn - $amount, 2)),
-            'new_sale_amount_afn' => max(0, round((float) $sale->new_sale_amount_afn - $amount, 2)),
+            'subtotal_afn' => max(0, round((float) $sale->subtotal_afn + $delta, 2)),
+            'total_afn' => max(0, round((float) $sale->total_afn + $delta, 2)),
+            'new_sale_amount_afn' => max(0, round((float) $sale->new_sale_amount_afn + $delta, 2)),
         ]);
     }
 
@@ -652,12 +660,12 @@ class SaleReturnController extends Controller
             $expense = Expense::create([
                 'branch_id' => $saleReturn->branch_id,
                 'expense_number' => Expense::generateExpenseNumber(),
-                'title' => "Used return {$saleReturn->return_number}",
+                'title' => "Sale return expense {$saleReturn->return_number}",
                 'category' => 'other',
-                'amount_afn' => $item->expense_amount_afn,
+                'amount_afn' => $item->effectiveExpenseAmount(),
                 'expense_date' => $saleReturn->return_date ?? now()->toDateString(),
                 'payment_method' => 'cash',
-                'description' => "Consumed {$name} on {$saleReturn->return_number}. {$marker}",
+                'description' => "Shop-borne expense for returned {$name} on {$saleReturn->return_number}. {$marker}",
                 'created_by' => Auth::id(),
                 'trash' => false,
             ]);

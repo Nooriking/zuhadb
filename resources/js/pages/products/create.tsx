@@ -1216,6 +1216,7 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                             <Input
                                                 type="number"
                                                 min="0"
+                                                step="0.01"
                                                 onKeyDown={preventNegative}
                                                 value={v.purchase_price_afn}
                                                 onChange={(e) => {
@@ -1237,6 +1238,7 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                             <Input
                                                 type="number"
                                                 min="0"
+                                                step="0.01"
                                                 onKeyDown={preventNegative}
                                                 value={v.sale_price_afn}
                                                 onChange={(e) => {
@@ -1256,6 +1258,7 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                                             <Input
                                                 type="number"
                                                 min="0"
+                                                step="0.01"
                                                 onKeyDown={preventNegative}
                                                 value={v.wholesale_price_afn}
                                                 onChange={(e) => {

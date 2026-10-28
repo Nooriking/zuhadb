@@ -21,6 +21,7 @@ class SaleService
     public function __construct(
         private readonly CustomerLedgerService $ledger,
         private readonly SaleNotifier $notifier,
+        private readonly CurrencyService $currency,
     ) {}
 
     /**
@@ -89,7 +90,7 @@ class SaleService
             $data['new_sale_amount_afn'] = $newSaleAmountAfn;
             $data['grand_total_due_afn'] = $grandTotalDueAfn;
 
-            $sale = Sale::create($data);
+            $sale = Sale::create(array_merge($data, $this->currency->ledgerSnapshot()));
 
             $totalInvestorProfit = 0.0;
 
@@ -165,7 +166,7 @@ class SaleService
                     continue;
                 }
 
-                $salePayment = SalePayment::create([
+                $salePayment = SalePayment::create(array_merge($this->currency->ledgerSnapshot(), [
                     'sale_id' => $sale->id,
                     'customer_id' => $sale->customer_id,
                     'amount_afn' => $amountAfn,
@@ -175,7 +176,7 @@ class SaleService
                     'notes' => $payment['notes'] ?? null,
                     'paid_at' => now(),
                     'received_by' => $actor->id,
-                ]);
+                ]));
 
                 $paymentIds[] = $salePayment->id;
                 $paidAfn = round($paidAfn + $amountAfn, 2);
@@ -274,7 +275,7 @@ class SaleService
             $newSaleRemaining = round(max(0, (float) $sale->remaining_due_afn - $amountAfn), 2);
             $balanceAfter = $customer ? $newCustomerDue : $newSaleRemaining;
 
-            $salePayment = SalePayment::create([
+            $salePayment = SalePayment::create(array_merge($this->currency->ledgerSnapshot(), [
                 'sale_id' => $sale->id,
                 'customer_id' => $sale->customer_id,
                 'amount_afn' => $amountAfn,
@@ -284,7 +285,7 @@ class SaleService
                 'notes' => $data['notes'] ?? null,
                 'paid_at' => now(),
                 'received_by' => $actor->id,
-            ]);
+            ]));
 
             $newPaidAfn = round((float) $sale->paid_afn + $amountAfn, 2);
             $paymentStatus = $newSaleRemaining <= 0.01 ? 'paid' : 'partial';

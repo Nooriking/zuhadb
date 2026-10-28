@@ -18,6 +18,8 @@ class CurrencyFactory extends Factory
             'code' => $code,
             'name' => $code.' currency',
             'symbol' => $code,
+            'decimal_places' => 2,
+            'rate_to_default' => '1.00000000',
             'is_base' => false,
             'status' => 'active',
             'trash' => false,

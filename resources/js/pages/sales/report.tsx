@@ -14,65 +14,49 @@ import {
     ArrowLeft,
     Banknote,
     BarChart3,
-    Calendar,
     DollarSign,
     Download,
     Filter,
     Package,
     Printer,
+    RotateCcw,
     ShoppingBag,
     TrendingDown,
     TrendingUp,
     Users,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
-/* ═══════════════════════════════════════════════════════
- |  Types
- ═══════════════════════════════════════════════════════ */
-
-interface SaleItem {
-    id: number;
-    variant_id: number;
-    quantity: number;
-    unit_price_afn: string;
-    line_subtotal_afn: string;
-    line_cost_afn: string;
-    line_profit_afn: string;
-    variant?: {
-        id: number;
-        name: string;
-        volume_ml: number | null;
-        concentration: string | null;
-        product?: { id: number; name: string };
-    };
-}
-
-interface Sale {
+interface SaleRow {
     id: number;
     invoice_number: string;
-    receipt_no: string | null;
     sale_date: string;
-    total_afn: string;
-    subtotal_afn: string;
-    discount_afn: string;
-    paid_afn: string;
-    remaining_due_afn: string;
-    total_cost_afn: string;
-    total_profit_afn: string;
-    total_investor_profit_afn: string;
-    store_profit_afn: string;
-    payment_status: 'unpaid' | 'partial' | 'paid';
-    status: 'draft' | 'completed' | 'cancelled';
     items_count: number;
-    exchange_rate?: number | null;
+    amount_afn: number;
+    return_amount_afn: number;
+    net_afn: number;
+    return_type: 'shop' | 'customer' | 'mixed' | null;
+    payment_status: string;
+    status: string;
     branch: { id: number; name: string; code: string } | null;
     customer: { id: number; name: string; phone: string | null } | null;
     creator: { id: number; name: string } | null;
-    items?: SaleItem[];
+}
+
+interface PaginatedSales {
+    data: SaleRow[];
+    current_page: number;
+    last_page: number;
+    per_page: number;
+    total: number;
+    links: { url: string | null; label: string; active: boolean }[];
 }
 
 interface Summary {
+    gross_sales: number;
+    total_returns: number;
+    net_sales: number;
     total_sales: number;
     total_paid: number;
     total_due: number;
@@ -81,54 +65,32 @@ interface Summary {
     store_profit: number;
     investor_profit: number;
     count: number;
+    customer_count: number;
     total_items: number;
     avg_sale: number;
 }
 
-interface BranchSummary {
-    branch_id: number | null;
-    branch_name: string;
-    total_sales: number;
-    total_profit: number;
-    total_due: number;
-    count: number;
-}
-
 interface DailySummary {
     date: string;
+    net_sales: number;
+    total_returns: number;
+    gross_sales: number;
     total_sales: number;
-    total_profit: number;
     count: number;
-}
-
-interface CustomerSummary {
-    customer_id: number | null;
-    customer_name: string;
-    total_sales: number;
-    total_due: number;
-    count: number;
-}
-
-interface ProductSummary {
-    variant_id: number;
-    product_name: string;
-    variant_name: string;
-    total_quantity: number;
-    total_sales: number;
-    total_profit: number;
 }
 
 interface Props {
-    sales: Sale[];
+    sales: PaginatedSales;
     summary: Summary;
-    byBranch: BranchSummary[];
+    byBranch: { branch_id: number; branch_name: string; total_sales: number; total_profit: number; total_due: number; count: number }[];
     byDay: DailySummary[];
-    byCustomer: CustomerSummary[];
-    byProduct: ProductSummary[];
+    byCustomer: { customer_id: number | null; customer_name: string; total_sales: number; total_due: number; count: number }[];
+    byProduct: { variant_id: number; product_name: string; variant_name: string; total_quantity: number; total_sales: number; total_profit: number }[];
     filters: {
         search: string | null;
         branch_id: string | null;
         customer_id: string | null;
+        salesperson_id: string | null;
         payment_status: string | null;
         status: string | null;
         only_due: boolean;
@@ -137,12 +99,8 @@ interface Props {
     };
     branches: { id: number; name: string; code: string }[];
     customers: { id: number; name: string; phone: string | null }[];
-    canEditCompleted?: boolean;
+    salespeople: { id: number; name: string }[];
 }
-
-/* ═══════════════════════════════════════════════════════
- |  Constants
- ═══════════════════════════════════════════════════════ */
 
 const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Dashboard', href: '/dashboard' },
@@ -150,51 +108,39 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Report', href: '/sales/report' },
 ];
 
-/* ═══════════════════════════════════════════════════════
- |  Helpers
- ═══════════════════════════════════════════════════════ */
-
 const fmt = (value: string | number, digits: number = 0) => {
     const num = typeof value === 'string' ? parseFloat(value) : value;
     return new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(num || 0);
 };
 
-const getPaymentBadge = (status: string) => {
-    const map: Record<string, { variant: 'destructive' | 'secondary' | 'success'; label: string }> = {
-        unpaid: { variant: 'destructive', label: 'Unpaid' },
-        partial: { variant: 'secondary', label: 'Partial' },
-        paid: { variant: 'success', label: 'Paid' },
-    };
-    const item = map[status] || map.unpaid;
-    return <Badge variant={item.variant}>{item.label}</Badge>;
+const returnTypeLabel = (type: string | null) => {
+    if (type === 'shop') return 'Shop';
+    if (type === 'customer') return 'Customer';
+    if (type === 'mixed') return 'Mixed';
+    return '—';
 };
 
-const getStatusBadge = (status: string) => {
-    const map: Record<string, { variant: 'outline' | 'success' | 'destructive'; label: string }> = {
-        draft: { variant: 'outline', label: 'Draft' },
-        completed: { variant: 'success', label: 'Completed' },
-        cancelled: { variant: 'destructive', label: 'Cancelled' },
-    };
-    const item = map[status] || map.draft;
-    return <Badge variant={item.variant}>{item.label}</Badge>;
-};
-
-/* ═══════════════════════════════════════════════════════
- |  Component
- ═══════════════════════════════════════════════════════ */
-
-export default function SalesReport({ sales, summary, byBranch, byDay, byCustomer, byProduct, filters, branches, customers }: Props) {
+export default function SalesReport({
+    sales,
+    summary,
+    byBranch,
+    byDay,
+    byCustomer,
+    byProduct,
+    filters,
+    branches,
+    customers,
+    salespeople = [],
+}: Props) {
     const [search, setSearch] = useState(filters.search || '');
-    const [branchFilter, setBranchFilter] = useState(filters.branch_id || 'all');
-    const [customerFilter, setCustomerFilter] = useState(filters.customer_id || 'all');
+    const [branchFilter, setBranchFilter] = useState(filters.branch_id ? String(filters.branch_id) : 'all');
+    const [customerFilter, setCustomerFilter] = useState(filters.customer_id ? String(filters.customer_id) : 'all');
+    const [salespersonFilter, setSalespersonFilter] = useState(filters.salesperson_id ? String(filters.salesperson_id) : 'all');
     const [paymentFilter, setPaymentFilter] = useState(filters.payment_status || 'all');
-    const [statusFilter, setStatusFilter] = useState(filters.status || 'all');
+    const [statusFilter, setStatusFilter] = useState(filters.status || 'completed');
     const [onlyDue, setOnlyDue] = useState<boolean>(filters.only_due || false);
     const [dateFrom, setDateFrom] = useState(filters.date_from || '');
     const [dateTo, setDateTo] = useState(filters.date_to || '');
-    const [activeTab, setActiveTab] = useState<'summary' | 'daily' | 'branch' | 'customer' | 'product' | 'sales'>('summary');
-
-    /* ═══════════ Apply Filters ═══════════ */
 
     const applyFilters = () => {
         router.get(
@@ -203,6 +149,7 @@ export default function SalesReport({ sales, summary, byBranch, byDay, byCustome
                 search: search || undefined,
                 branch_id: branchFilter === 'all' ? undefined : branchFilter,
                 customer_id: customerFilter === 'all' ? undefined : customerFilter,
+                salesperson_id: salespersonFilter === 'all' ? undefined : salespersonFilter,
                 payment_status: paymentFilter === 'all' ? undefined : paymentFilter,
                 status: statusFilter === 'all' ? undefined : statusFilter,
                 only_due: onlyDue ? 1 : undefined,
@@ -217,57 +164,30 @@ export default function SalesReport({ sales, summary, byBranch, byDay, byCustome
         setSearch('');
         setBranchFilter('all');
         setCustomerFilter('all');
+        setSalespersonFilter('all');
         setPaymentFilter('all');
-        setStatusFilter('all');
+        setStatusFilter('completed');
         setOnlyDue(false);
         setDateFrom('');
         setDateTo('');
         router.get('/sales/report', {}, { preserveState: false });
     };
 
-    /* ═══════════ Print ═══════════ */
-
-    const handlePrintReport = () => {
-        window.print();
-    };
-
-    /* ═══════════ Export CSV ═══════════ */
-
     const exportCsv = () => {
-        const headers = [
-            'Invoice',
-            'Date',
-            'Customer',
-            'Branch',
-            'Total AFN',
-            'Paid AFN',
-            'Due AFN',
-            'Cost AFN',
-            'Profit AFN',
-            'Store Profit',
-            'Investor Profit',
-            'Payment Status',
-            'Status',
-        ];
-
-        const rows = sales.map((s) => [
+        const headers = ['Date', 'Invoice', 'Customer', 'Branch', 'Items', 'Amount', 'Return Expense By', 'Return Amount', 'Net', 'Salesperson'];
+        const rows = (sales.data || []).map((s) => [
+            new Date(s.sale_date).toLocaleDateString('en-GB'),
             s.invoice_number,
-            new Date(s.sale_date).toLocaleDateString('en-US'),
             s.customer?.name || 'Walk-in',
             s.branch?.name || '—',
-            s.total_afn,
-            s.paid_afn,
-            s.remaining_due_afn,
-            s.total_cost_afn,
-            s.total_profit_afn,
-            s.store_profit_afn,
-            s.total_investor_profit_afn,
-            s.payment_status,
-            s.status,
+            s.items_count,
+            s.amount_afn,
+            returnTypeLabel(s.return_type),
+            s.return_amount_afn,
+            s.net_afn,
+            s.creator?.name || '—',
         ]);
-
         const csvContent = [headers, ...rows].map((row) => row.map((c) => `"${c}"`).join(',')).join('\n');
-
         const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
@@ -277,21 +197,22 @@ export default function SalesReport({ sales, summary, byBranch, byDay, byCustome
         URL.revokeObjectURL(url);
     };
 
-    /* ═══════════ Derived ═══════════ */
-
-    const maxDailySales = useMemo(() => Math.max(...byDay.map((d) => d.total_sales), 1), [byDay]);
-    const maxBranchSales = useMemo(() => Math.max(...byBranch.map((b) => b.total_sales), 1), [byBranch]);
-
-    /* ═══════════════════════════════════════════════════════
-     |  Render
-     ═══════════════════════════════════════════════════════ */
+    const chartData = useMemo(
+        () =>
+            [...byDay].map((d) => ({
+                date: d.date,
+                net: d.net_sales,
+                returns: d.total_returns,
+                gross: d.gross_sales,
+            })),
+        [byDay],
+    );
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="Sales Report" />
 
             <div className="flex flex-col gap-6 p-6 print:p-0">
-                {/* ═══════════ Header ═══════════ */}
                 <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
                     <div className="flex items-center gap-3">
                         <Link href="/sales">
@@ -303,21 +224,20 @@ export default function SalesReport({ sales, summary, byBranch, byDay, byCustome
                         <div>
                             <h1 className="text-2xl font-bold tracking-tight">Sales Report</h1>
                             <p className="text-muted-foreground text-xs">
-                                {summary.count} sales · {summary.total_items} items
+                                {summary.count} invoices · {summary.customer_count} customers · Net = Gross − Returns
                             </p>
                         </div>
                     </div>
                     <div className="flex gap-2">
                         <Button variant="outline" className="gap-2" onClick={exportCsv}>
-                            <Download className="h-4 w-4" /> Export CSV
+                            <Download className="h-4 w-4" /> Export CSV / Excel
                         </Button>
-                        <Button variant="outline" className="gap-2" onClick={handlePrintReport}>
-                            <Printer className="h-4 w-4" /> Print
+                        <Button variant="outline" className="gap-2" onClick={() => window.print()}>
+                            <Printer className="h-4 w-4" /> Print / PDF
                         </Button>
                     </div>
                 </div>
 
-                {/* ═══════════ Filters ═══════════ */}
                 <Card className="print:hidden">
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2 text-base">
@@ -331,23 +251,18 @@ export default function SalesReport({ sales, summary, byBranch, byDay, byCustome
                                 <Input
                                     value={search}
                                     onChange={(e) => setSearch(e.target.value)}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter') applyFilters();
-                                    }}
+                                    onKeyDown={(e) => e.key === 'Enter' && applyFilters()}
                                     placeholder="Invoice, receipt, or phone..."
                                 />
                             </div>
-
                             <div className="space-y-2">
                                 <Label>From Date</Label>
                                 <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
                             </div>
-
                             <div className="space-y-2">
                                 <Label>To Date</Label>
                                 <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
                             </div>
-
                             {branches.length > 1 && (
                                 <div className="space-y-2">
                                     <Label>Branch</Label>
@@ -366,7 +281,6 @@ export default function SalesReport({ sales, summary, byBranch, byDay, byCustome
                                     </Select>
                                 </div>
                             )}
-
                             <div className="space-y-2">
                                 <Label>Customer</Label>
                                 <Select value={customerFilter} onValueChange={setCustomerFilter}>
@@ -383,7 +297,22 @@ export default function SalesReport({ sales, summary, byBranch, byDay, byCustome
                                     </SelectContent>
                                 </Select>
                             </div>
-
+                            <div className="space-y-2">
+                                <Label>Salesperson</Label>
+                                <Select value={salespersonFilter} onValueChange={setSalespersonFilter}>
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All Salespeople</SelectItem>
+                                        {salespeople.map((u) => (
+                                            <SelectItem key={u.id} value={String(u.id)}>
+                                                {u.name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
                             <div className="space-y-2">
                                 <Label>Payment</Label>
                                 <Select value={paymentFilter} onValueChange={setPaymentFilter}>
@@ -398,33 +327,6 @@ export default function SalesReport({ sales, summary, byBranch, byDay, byCustome
                                     </SelectContent>
                                 </Select>
                             </div>
-
-                            <div className="space-y-2">
-                                <Label>Status</Label>
-                                <Select value={statusFilter} onValueChange={setStatusFilter}>
-                                    <SelectTrigger>
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">All Status</SelectItem>
-                                        <SelectItem value="draft">Draft</SelectItem>
-                                        <SelectItem value="completed">Completed</SelectItem>
-                                        <SelectItem value="cancelled">Cancelled</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
-
-                            <div className="flex items-end gap-2">
-                                <Button
-                                    type="button"
-                                    variant={onlyDue ? 'default' : 'outline'}
-                                    onClick={() => setOnlyDue(!onlyDue)}
-                                    className="w-full gap-2"
-                                >
-                                    <Banknote className="h-4 w-4" /> Only with Due
-                                </Button>
-                            </div>
-
                             <div className="flex items-end gap-2 md:col-span-2">
                                 <Button onClick={applyFilters} className="flex-1">
                                     Apply Filters
@@ -437,19 +339,50 @@ export default function SalesReport({ sales, summary, byBranch, byDay, byCustome
                     </CardContent>
                 </Card>
 
-                {/* ═══════════ Summary Cards ═══════════ */}
+                {/* Summary cards */}
                 <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
                     <Card>
                         <CardContent className="pt-6">
                             <div className="flex items-center justify-between">
-                                <p className="text-muted-foreground text-xs">Total Sales</p>
+                                <p className="text-muted-foreground text-xs">Total Gross Sales</p>
                                 <DollarSign className="text-muted-foreground h-4 w-4" />
                             </div>
-                            <p className="mt-1 text-2xl font-bold">{fmt(summary.total_sales)} AFN</p>
+                            <p className="mt-1 text-2xl font-bold">{fmt(summary.gross_sales)} AFN</p>
                             <p className="text-muted-foreground mt-0.5 text-xs">{summary.count} invoices</p>
                         </CardContent>
                     </Card>
-
+                    <Card>
+                        <CardContent className="pt-6">
+                            <div className="flex items-center justify-between">
+                                <p className="text-muted-foreground text-xs">Total Sales Returns</p>
+                                <RotateCcw className="text-muted-foreground h-4 w-4" />
+                            </div>
+                            <p className="mt-1 text-2xl font-bold text-amber-700">{fmt(summary.total_returns)} AFN</p>
+                            <p className="text-muted-foreground mt-0.5 text-xs">completed returns</p>
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardContent className="pt-6">
+                            <div className="flex items-center justify-between">
+                                <p className="text-muted-foreground text-xs">Net Sales</p>
+                                <TrendingUp className="text-muted-foreground h-4 w-4" />
+                            </div>
+                            <p className="mt-1 text-2xl font-bold text-emerald-700">{fmt(summary.net_sales)} AFN</p>
+                            <p className="text-muted-foreground mt-0.5 text-xs">Gross − Returns</p>
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardContent className="pt-6">
+                            <div className="flex items-center justify-between">
+                                <p className="text-muted-foreground text-xs">Customers / Invoices</p>
+                                <Users className="text-muted-foreground h-4 w-4" />
+                            </div>
+                            <p className="mt-1 text-2xl font-bold">
+                                {summary.customer_count} / {summary.count}
+                            </p>
+                            <p className="text-muted-foreground mt-0.5 text-xs">{summary.total_items} items</p>
+                        </CardContent>
+                    </Card>
                     <Card>
                         <CardContent className="pt-6">
                             <div className="flex items-center justify-between">
@@ -457,12 +390,8 @@ export default function SalesReport({ sales, summary, byBranch, byDay, byCustome
                                 <Banknote className="text-muted-foreground h-4 w-4" />
                             </div>
                             <p className="mt-1 text-2xl font-bold text-emerald-700">{fmt(summary.total_paid)} AFN</p>
-                            <p className="text-muted-foreground mt-0.5 text-xs">
-                                {summary.total_sales > 0 ? `${((summary.total_paid / summary.total_sales) * 100).toFixed(1)}% of total` : '—'}
-                            </p>
                         </CardContent>
                     </Card>
-
                     <Card>
                         <CardContent className="pt-6">
                             <div className="flex items-center justify-between">
@@ -470,21 +399,8 @@ export default function SalesReport({ sales, summary, byBranch, byDay, byCustome
                                 <TrendingDown className="text-muted-foreground h-4 w-4" />
                             </div>
                             <p className="mt-1 text-2xl font-bold text-red-700">{fmt(summary.total_due)} AFN</p>
-                            <p className="text-muted-foreground mt-0.5 text-xs">outstanding from customers</p>
                         </CardContent>
                     </Card>
-
-                    <Card>
-                        <CardContent className="pt-6">
-                            <div className="flex items-center justify-between">
-                                <p className="text-muted-foreground text-xs">Total Profit</p>
-                                <TrendingUp className="text-muted-foreground h-4 w-4" />
-                            </div>
-                            <p className="mt-1 text-2xl font-bold text-emerald-700">{fmt(summary.total_profit)} AFN</p>
-                            <p className="text-muted-foreground mt-0.5 text-xs">avg {fmt(summary.avg_sale)} per sale</p>
-                        </CardContent>
-                    </Card>
-
                     <Card>
                         <CardContent className="pt-6">
                             <div className="flex items-center justify-between">
@@ -492,431 +408,215 @@ export default function SalesReport({ sales, summary, byBranch, byDay, byCustome
                                 <ShoppingBag className="text-muted-foreground h-4 w-4" />
                             </div>
                             <p className="mt-1 text-2xl font-bold text-emerald-700">{fmt(summary.store_profit)} AFN</p>
-                            <p className="text-muted-foreground mt-0.5 text-xs">shop share</p>
                         </CardContent>
                     </Card>
-
                     <Card>
                         <CardContent className="pt-6">
                             <div className="flex items-center justify-between">
-                                <p className="text-muted-foreground text-xs">Investor Profit</p>
-                                <Users className="text-muted-foreground h-4 w-4" />
-                            </div>
-                            <p className="mt-1 text-2xl font-bold text-blue-700">{fmt(summary.investor_profit)} AFN</p>
-                            <p className="text-muted-foreground mt-0.5 text-xs">owed to investors</p>
-                        </CardContent>
-                    </Card>
-
-                    <Card>
-                        <CardContent className="pt-6">
-                            <div className="flex items-center justify-between">
-                                <p className="text-muted-foreground text-xs">Total Cost</p>
+                                <p className="text-muted-foreground text-xs">Avg Sale</p>
                                 <Package className="text-muted-foreground h-4 w-4" />
                             </div>
-                            <p className="mt-1 text-2xl font-bold">{fmt(summary.total_cost)} AFN</p>
-                            <p className="text-muted-foreground mt-0.5 text-xs">cost of goods sold</p>
-                        </CardContent>
-                    </Card>
-
-                    <Card>
-                        <CardContent className="pt-6">
-                            <div className="flex items-center justify-between">
-                                <p className="text-muted-foreground text-xs">Total Items</p>
-                                <Package className="text-muted-foreground h-4 w-4" />
-                            </div>
-                            <p className="mt-1 text-2xl font-bold">{summary.total_items}</p>
-                            <p className="text-muted-foreground mt-0.5 text-xs">units sold</p>
+                            <p className="mt-1 text-2xl font-bold">{fmt(summary.avg_sale)} AFN</p>
                         </CardContent>
                     </Card>
                 </div>
 
-                {/* ═══════════ Tabs ═══════════ */}
-                <div className="flex flex-wrap gap-1 border-b print:hidden">
-                    {[
-                        { key: 'summary', label: 'Summary', icon: BarChart3 },
-                        { key: 'daily', label: 'By Day', icon: Calendar },
-                        { key: 'branch', label: 'By Branch', icon: ShoppingBag },
-                        { key: 'customer', label: 'By Customer', icon: Users },
-                        { key: 'product', label: 'By Product', icon: Package },
-                        { key: 'sales', label: 'All Sales', icon: DollarSign },
-                    ].map((tab) => {
-                        const Icon = tab.icon;
-                        return (
-                            <button
-                                key={tab.key}
-                                type="button"
-                                onClick={() => setActiveTab(tab.key as typeof activeTab)}
-                                className={`flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition ${
-                                    activeTab === tab.key
-                                        ? 'border-primary text-primary'
-                                        : 'text-muted-foreground hover:text-foreground border-transparent'
-                                }`}
-                            >
-                                <Icon className="h-4 w-4" />
-                                {tab.label}
-                            </button>
-                        );
-                    })}
-                </div>
+                {/* Net sales chart */}
+                {chartData.length > 0 && (
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="text-base">Daily Net Sales</CardTitle>
+                            <CardDescription>Net sales over the selected date range</CardDescription>
+                        </CardHeader>
+                        <CardContent className="h-72">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                                    <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                                    <YAxis tick={{ fontSize: 11 }} />
+                                    <Tooltip formatter={(v: number) => `${fmt(v)} AFN`} />
+                                    <Legend />
+                                    <Line type="monotone" dataKey="net" name="Net Sales" stroke="#059669" strokeWidth={2} dot={false} />
+                                    <Line type="monotone" dataKey="returns" name="Returns" stroke="#d97706" strokeWidth={2} dot={false} />
+                                </LineChart>
+                            </ResponsiveContainer>
+                        </CardContent>
+                    </Card>
+                )}
 
-                {/* ═══════════ Tab Content ═══════════ */}
+                {byBranch.length > 0 && (
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="text-base">By Branch</CardTitle>
+                        </CardHeader>
+                        <CardContent className="h-64">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={byBranch} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                                    <CartesianGrid strokeDasharray="3 3" />
+                                    <XAxis dataKey="branch_name" tick={{ fontSize: 11 }} />
+                                    <YAxis tick={{ fontSize: 11 }} />
+                                    <Tooltip formatter={(v: number) => `${fmt(v)} AFN`} />
+                                    <Bar dataKey="total_sales" name="Net Sales" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </CardContent>
+                    </Card>
+                )}
 
-                {/* ─── Summary Tab ─── */}
-                {activeTab === 'summary' && (
-                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                        {/* Top Products */}
-                        <Card>
-                            <CardHeader>
-                                <CardTitle className="text-base">Top Products</CardTitle>
-                                <CardDescription>Best selling variants by quantity</CardDescription>
-                            </CardHeader>
-                            <CardContent>
+                {/* Detailed table */}
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="text-base">Sales Detail</CardTitle>
+                        <CardDescription>
+                            Showing {sales.data?.length || 0} of {sales.total || 0} invoices
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="overflow-x-auto rounded-md border">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>Date</TableHead>
+                                        <TableHead>Invoice #</TableHead>
+                                        <TableHead>Customer</TableHead>
+                                        <TableHead>Branch</TableHead>
+                                        <TableHead className="text-center">Items</TableHead>
+                                        <TableHead className="text-right">Amount</TableHead>
+                                        <TableHead>Return Expense By</TableHead>
+                                        <TableHead className="text-right">Return Amount</TableHead>
+                                        <TableHead className="text-right">Net</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {(sales.data || []).length === 0 ? (
+                                        <TableRow>
+                                            <TableCell colSpan={9} className="text-muted-foreground h-24 text-center">
+                                                No sales found for these filters.
+                                            </TableCell>
+                                        </TableRow>
+                                    ) : (
+                                        sales.data.map((sale) => (
+                                            <TableRow
+                                                key={sale.id}
+                                                className="hover:bg-muted/50 cursor-pointer"
+                                                onClick={() => router.visit(`/sales/${sale.id}`)}
+                                            >
+                                                <TableCell className="whitespace-nowrap text-sm">
+                                                    {new Date(sale.sale_date).toLocaleDateString('en-GB')}
+                                                </TableCell>
+                                                <TableCell className="font-mono text-sm">
+                                                    <Link href={`/sales/${sale.id}`} className="hover:text-primary" onClick={(e) => e.stopPropagation()}>
+                                                        {sale.invoice_number}
+                                                    </Link>
+                                                </TableCell>
+                                                <TableCell>{sale.customer?.name || 'Walk-in'}</TableCell>
+                                                <TableCell>{sale.branch?.name || '—'}</TableCell>
+                                                <TableCell className="text-center font-mono">{sale.items_count}</TableCell>
+                                                <TableCell className="text-right font-mono">{fmt(sale.amount_afn)}</TableCell>
+                                                <TableCell>
+                                                    {sale.return_type ? (
+                                                        <Badge variant="outline">{returnTypeLabel(sale.return_type)}</Badge>
+                                                    ) : (
+                                                        <span className="text-muted-foreground">—</span>
+                                                    )}
+                                                </TableCell>
+                                                <TableCell className="text-right font-mono text-amber-700">
+                                                    {sale.return_amount_afn > 0 ? fmt(sale.return_amount_afn) : '—'}
+                                                </TableCell>
+                                                <TableCell className="text-right font-mono font-semibold text-emerald-700">
+                                                    {fmt(sale.net_afn)}
+                                                </TableCell>
+                                            </TableRow>
+                                        ))
+                                    )}
+                                </TableBody>
+                            </Table>
+                        </div>
+
+                        {sales.last_page > 1 && (
+                            <div className="mt-4 flex flex-wrap justify-center gap-1 print:hidden">
+                                {sales.links.map((link, i) => (
+                                    <Button
+                                        key={i}
+                                        size="sm"
+                                        variant={link.active ? 'default' : 'outline'}
+                                        disabled={!link.url}
+                                        dangerouslySetInnerHTML={{ __html: link.label }}
+                                        onClick={() => link.url && router.get(link.url, {}, { preserveState: true, preserveScroll: true })}
+                                    />
+                                ))}
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+
+                {byCustomer.length > 0 && (
+                    <Card className="print:hidden">
+                        <CardHeader>
+                            <CardTitle className="text-base">Top Customers</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="overflow-x-auto rounded-md border">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Customer</TableHead>
+                                            <TableHead className="text-center">Orders</TableHead>
+                                            <TableHead className="text-right">Net Sales</TableHead>
+                                            <TableHead className="text-right">Due</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {byCustomer.slice(0, 15).map((row) => (
+                                            <TableRow key={row.customer_id ?? 'walkin'}>
+                                                <TableCell>{row.customer_name}</TableCell>
+                                                <TableCell className="text-center font-mono">{row.count}</TableCell>
+                                                <TableCell className="text-right font-mono">{fmt(row.total_sales)}</TableCell>
+                                                <TableCell className="text-right font-mono">{fmt(row.total_due)}</TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        </CardContent>
+                    </Card>
+                )}
+
+                {byProduct.length > 0 && (
+                    <Card className="print:hidden">
+                        <CardHeader>
+                            <CardTitle className="text-base">Top Products</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="overflow-x-auto rounded-md border">
                                 <Table>
                                     <TableHeader>
                                         <TableRow>
                                             <TableHead>Product</TableHead>
-                                            <TableHead className="text-right">Qty</TableHead>
+                                            <TableHead className="text-center">Qty</TableHead>
                                             <TableHead className="text-right">Sales</TableHead>
                                             <TableHead className="text-right">Profit</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {byProduct.length === 0 ? (
-                                            <TableRow>
-                                                <TableCell colSpan={4} className="text-muted-foreground h-16 text-center">
-                                                    No product sales
-                                                </TableCell>
-                                            </TableRow>
-                                        ) : (
-                                            byProduct.slice(0, 10).map((p) => (
-                                                <TableRow key={p.variant_id}>
-                                                    <TableCell>
-                                                        <div className="text-sm font-medium">{p.product_name}</div>
-                                                        <div className="text-muted-foreground text-xs">{p.variant_name}</div>
-                                                    </TableCell>
-                                                    <TableCell className="text-right font-mono text-sm">{p.total_quantity}</TableCell>
-                                                    <TableCell className="text-right font-mono text-sm">{fmt(p.total_sales)}</TableCell>
-                                                    <TableCell className="text-right font-mono text-sm font-semibold text-emerald-700">
-                                                        {fmt(p.total_profit)}
-                                                    </TableCell>
-                                                </TableRow>
-                                            ))
-                                        )}
-                                    </TableBody>
-                                </Table>
-                            </CardContent>
-                        </Card>
-
-                        {/* Top Customers */}
-                        <Card>
-                            <CardHeader>
-                                <CardTitle className="text-base">Top Customers</CardTitle>
-                                <CardDescription>Customers with highest purchase amounts</CardDescription>
-                            </CardHeader>
-                            <CardContent>
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Customer</TableHead>
-                                            <TableHead className="text-right">Count</TableHead>
-                                            <TableHead className="text-right">Total</TableHead>
-                                            <TableHead className="text-right">Due</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {byCustomer.length === 0 ? (
-                                            <TableRow>
-                                                <TableCell colSpan={4} className="text-muted-foreground h-16 text-center">
-                                                    No customer data
-                                                </TableCell>
-                                            </TableRow>
-                                        ) : (
-                                            byCustomer.slice(0, 10).map((c) => (
-                                                <TableRow key={c.customer_id ?? 'walk-in'}>
-                                                    <TableCell className="text-sm font-medium">{c.customer_name}</TableCell>
-                                                    <TableCell className="text-right font-mono text-sm">{c.count}</TableCell>
-                                                    <TableCell className="text-right font-mono text-sm">{fmt(c.total_sales)}</TableCell>
-                                                    <TableCell className="text-right font-mono text-sm font-semibold text-red-700">
-                                                        {fmt(c.total_due)}
-                                                    </TableCell>
-                                                </TableRow>
-                                            ))
-                                        )}
-                                    </TableBody>
-                                </Table>
-                            </CardContent>
-                        </Card>
-                    </div>
-                )}
-
-                {/* ─── Daily Tab ─── */}
-                {activeTab === 'daily' && (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="text-base">Sales by Day</CardTitle>
-                            <CardDescription>Daily breakdown of sales and profit</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="mb-4 space-y-2">
-                                {byDay.slice(0, 15).map((d) => (
-                                    <div key={d.date} className="flex items-center gap-3">
-                                        <span className="text-muted-foreground w-24 font-mono text-xs">{d.date}</span>
-                                        <div className="bg-muted h-6 flex-1 overflow-hidden rounded">
-                                            <div
-                                                className="bg-primary h-full transition-all"
-                                                style={{ width: `${(d.total_sales / maxDailySales) * 100}%` }}
-                                            />
-                                        </div>
-                                        <span className="w-24 text-right font-mono text-xs font-semibold">{fmt(d.total_sales)}</span>
-                                        <span className="text-muted-foreground w-16 text-right text-xs">{d.count}×</span>
-                                    </div>
-                                ))}
-                            </div>
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Date</TableHead>
-                                        <TableHead className="text-right">Sales Count</TableHead>
-                                        <TableHead className="text-right">Total Sales</TableHead>
-                                        <TableHead className="text-right">Total Profit</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {byDay.length === 0 ? (
-                                        <TableRow>
-                                            <TableCell colSpan={4} className="text-muted-foreground h-16 text-center">
-                                                No daily data
-                                            </TableCell>
-                                        </TableRow>
-                                    ) : (
-                                        byDay.map((d) => (
-                                            <TableRow key={d.date}>
-                                                <TableCell className="font-mono text-xs">{d.date}</TableCell>
-                                                <TableCell className="text-right font-mono text-sm">{d.count}</TableCell>
-                                                <TableCell className="text-right font-mono text-sm font-semibold">{fmt(d.total_sales)}</TableCell>
-                                                <TableCell className="text-right font-mono text-sm text-emerald-700">{fmt(d.total_profit)}</TableCell>
-                                            </TableRow>
-                                        ))
-                                    )}
-                                </TableBody>
-                            </Table>
-                        </CardContent>
-                    </Card>
-                )}
-
-                {/* ─── Branch Tab ─── */}
-                {activeTab === 'branch' && (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="text-base">Sales by Branch</CardTitle>
-                            <CardDescription>Performance comparison across branches</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="mb-4 space-y-2">
-                                {byBranch.map((b) => (
-                                    <div key={b.branch_id ?? 'none'} className="flex items-center gap-3">
-                                        <span className="w-32 truncate text-sm font-medium">{b.branch_name}</span>
-                                        <div className="bg-muted h-6 flex-1 overflow-hidden rounded">
-                                            <div
-                                                className="h-full bg-emerald-500 transition-all"
-                                                style={{ width: `${(b.total_sales / maxBranchSales) * 100}%` }}
-                                            />
-                                        </div>
-                                        <span className="w-24 text-right font-mono text-xs font-semibold">{fmt(b.total_sales)}</span>
-                                    </div>
-                                ))}
-                            </div>
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Branch</TableHead>
-                                        <TableHead className="text-right">Sales Count</TableHead>
-                                        <TableHead className="text-right">Total Sales</TableHead>
-                                        <TableHead className="text-right">Total Profit</TableHead>
-                                        <TableHead className="text-right">Total Due</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {byBranch.length === 0 ? (
-                                        <TableRow>
-                                            <TableCell colSpan={5} className="text-muted-foreground h-16 text-center">
-                                                No branch data
-                                            </TableCell>
-                                        </TableRow>
-                                    ) : (
-                                        byBranch.map((b) => (
-                                            <TableRow key={b.branch_id ?? 'none'}>
-                                                <TableCell className="font-medium">{b.branch_name}</TableCell>
-                                                <TableCell className="text-right font-mono text-sm">{b.count}</TableCell>
-                                                <TableCell className="text-right font-mono text-sm font-semibold">{fmt(b.total_sales)}</TableCell>
-                                                <TableCell className="text-right font-mono text-sm text-emerald-700">{fmt(b.total_profit)}</TableCell>
-                                                <TableCell className="text-right font-mono text-sm text-red-700">{fmt(b.total_due)}</TableCell>
-                                            </TableRow>
-                                        ))
-                                    )}
-                                </TableBody>
-                            </Table>
-                        </CardContent>
-                    </Card>
-                )}
-
-                {/* ─── Customer Tab ─── */}
-                {activeTab === 'customer' && (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="text-base">Sales by Customer</CardTitle>
-                            <CardDescription>Customer purchase history</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Customer</TableHead>
-                                        <TableHead className="text-right">Sales Count</TableHead>
-                                        <TableHead className="text-right">Total Sales</TableHead>
-                                        <TableHead className="text-right">Total Due</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {byCustomer.length === 0 ? (
-                                        <TableRow>
-                                            <TableCell colSpan={4} className="text-muted-foreground h-16 text-center">
-                                                No customer data
-                                            </TableCell>
-                                        </TableRow>
-                                    ) : (
-                                        byCustomer.map((c) => (
-                                            <TableRow key={c.customer_id ?? 'walk-in'}>
-                                                <TableCell className="font-medium">{c.customer_name}</TableCell>
-                                                <TableCell className="text-right font-mono text-sm">{c.count}</TableCell>
-                                                <TableCell className="text-right font-mono text-sm font-semibold">{fmt(c.total_sales)}</TableCell>
-                                                <TableCell className="text-right font-mono text-sm text-red-700">{fmt(c.total_due)}</TableCell>
-                                            </TableRow>
-                                        ))
-                                    )}
-                                </TableBody>
-                            </Table>
-                        </CardContent>
-                    </Card>
-                )}
-
-                {/* ─── Product Tab ─── */}
-                {activeTab === 'product' && (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="text-base">Sales by Product</CardTitle>
-                            <CardDescription>Product variant performance</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Product</TableHead>
-                                        <TableHead>Variant</TableHead>
-                                        <TableHead className="text-right">Qty Sold</TableHead>
-                                        <TableHead className="text-right">Total Sales</TableHead>
-                                        <TableHead className="text-right">Total Profit</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {byProduct.length === 0 ? (
-                                        <TableRow>
-                                            <TableCell colSpan={5} className="text-muted-foreground h-16 text-center">
-                                                No product data
-                                            </TableCell>
-                                        </TableRow>
-                                    ) : (
-                                        byProduct.map((p) => (
-                                            <TableRow key={p.variant_id}>
-                                                <TableCell className="font-medium">{p.product_name}</TableCell>
-                                                <TableCell className="text-sm">{p.variant_name}</TableCell>
-                                                <TableCell className="text-right font-mono text-sm">{p.total_quantity}</TableCell>
-                                                <TableCell className="text-right font-mono text-sm font-semibold">{fmt(p.total_sales)}</TableCell>
-                                                <TableCell className="text-right font-mono text-sm text-emerald-700">{fmt(p.total_profit)}</TableCell>
-                                            </TableRow>
-                                        ))
-                                    )}
-                                </TableBody>
-                            </Table>
-                        </CardContent>
-                    </Card>
-                )}
-
-                {/* ─── All Sales Tab ─── */}
-                {activeTab === 'sales' && (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="text-base">All Sales</CardTitle>
-                            <CardDescription>Detailed list of all filtered sales</CardDescription>
-                        </CardHeader>
-                        <CardContent className="overflow-x-auto p-0">
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Invoice</TableHead>
-                                        <TableHead>Date</TableHead>
-                                        <TableHead>Customer</TableHead>
-                                        <TableHead>Branch</TableHead>
-                                        <TableHead className="text-right">Total</TableHead>
-                                        <TableHead className="text-right">Paid</TableHead>
-                                        <TableHead className="text-right">Due</TableHead>
-                                        <TableHead className="text-right">Profit</TableHead>
-                                        <TableHead>Payment</TableHead>
-                                        <TableHead>Status</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {sales.length === 0 ? (
-                                        <TableRow>
-                                            <TableCell colSpan={10} className="text-muted-foreground h-24 text-center">
-                                                No sales match the filters
-                                            </TableCell>
-                                        </TableRow>
-                                    ) : (
-                                        sales.map((s) => (
-                                            <TableRow key={s.id}>
+                                        {byProduct.slice(0, 15).map((row) => (
+                                            <TableRow key={row.variant_id}>
                                                 <TableCell>
-                                                    <Link
-                                                        href={`/sales/${s.id}`}
-                                                        className="text-primary font-mono text-xs font-semibold hover:underline"
-                                                    >
-                                                        {s.invoice_number}
-                                                    </Link>
+                                                    {row.product_name}
+                                                    {row.variant_name ? ` — ${row.variant_name}` : ''}
                                                 </TableCell>
-                                                <TableCell className="text-xs">{new Date(s.sale_date).toLocaleDateString('en-US')}</TableCell>
-                                                <TableCell className="text-sm">
-                                                    {s.customer?.name || <span className="text-muted-foreground">Walk-in</span>}
-                                                </TableCell>
-                                                <TableCell className="text-sm">{s.branch?.name || '—'}</TableCell>
-                                                <TableCell className="text-right font-mono text-sm font-semibold">{fmt(s.total_afn)}</TableCell>
-                                                <TableCell className="text-right font-mono text-xs text-emerald-700">{fmt(s.paid_afn)}</TableCell>
-                                                <TableCell className="text-right font-mono text-xs text-red-700">
-                                                    {fmt(s.remaining_due_afn)}
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono text-xs text-emerald-700">
-                                                    {fmt(s.total_profit_afn)}
-                                                </TableCell>
-                                                <TableCell>{getPaymentBadge(s.payment_status)}</TableCell>
-                                                <TableCell>{getStatusBadge(s.status)}</TableCell>
+                                                <TableCell className="text-center font-mono">{row.total_quantity}</TableCell>
+                                                <TableCell className="text-right font-mono">{fmt(row.total_sales)}</TableCell>
+                                                <TableCell className="text-right font-mono">{fmt(row.total_profit)}</TableCell>
                                             </TableRow>
-                                        ))
-                                    )}
-                                </TableBody>
-                            </Table>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </div>
                         </CardContent>
                     </Card>
                 )}
             </div>
-
-            {/* Print Styles */}
-            <style>{`
-                @media print {
-                    body { background: white !important; }
-                    .print\\:hidden { display: none !important; }
-                    .print\\:p-0 { padding: 0 !important; }
-                    table { font-size: 10px; }
-                }
-            `}</style>
         </AppLayout>
     );
 }

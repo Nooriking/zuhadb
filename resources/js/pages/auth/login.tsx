@@ -110,7 +110,7 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                 </div>
             )}
 
-            <form className="flex flex-col gap-5" onSubmit={submit}>
+            <form className="flex flex-col gap-5" onSubmit={submit} autoComplete="off">
                 <div className="grid gap-2">
                     <Label htmlFor="email" className="text-neutral-300">
                         Email or username
@@ -127,6 +127,8 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                             name="zuha-login-email"
                             value={data.email}
                             onChange={(e) => setData('email', e.target.value)}
+                            onFocus={(e) => e.currentTarget.removeAttribute('readOnly')}
+                            readOnly
                             placeholder="email@example.com or username"
                             className={fieldClass}
                             disabled={isLocked || processing}
@@ -156,6 +158,8 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                             name="zuha-login-password"
                             value={data.password}
                             onChange={(e) => setData('password', e.target.value)}
+                            onFocus={(e) => e.currentTarget.removeAttribute('readOnly')}
+                            readOnly
                             placeholder="••••••••"
                             className={`${fieldClass} pr-10`}
                             disabled={isLocked || processing}

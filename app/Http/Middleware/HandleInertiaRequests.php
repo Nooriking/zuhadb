@@ -4,6 +4,7 @@ namespace App\Http\Middleware;
 
 use App\Models\ActivityNotification;
 use App\Models\AppSetting;
+use App\Models\Currency;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Middleware;
@@ -76,6 +77,8 @@ class HandleInertiaRequests extends Middleware
 
             // Cached across Inertia navigations until full reload.
             'shop' => Inertia::once(fn () => AppSetting::bill()),
+
+            'currency' => fn () => Currency::sharedPayload(),
 
             'flash' => [
                 'success'      => fn () => $request->session()->get('success'),

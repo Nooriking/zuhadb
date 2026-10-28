@@ -28,6 +28,9 @@ class Sale extends Model
         'subtotal_afn',
         'discount_afn',
         'total_afn',
+        'ledger_currency_code',
+        'ledger_currency_symbol',
+        'ledger_decimal_places',
 
         // Due Flow
         'previous_due_afn',
@@ -67,6 +70,7 @@ class Sale extends Model
         'subtotal_afn'               => 'decimal:2',
         'discount_afn'               => 'decimal:2',
         'total_afn'                  => 'decimal:2',
+        'ledger_decimal_places'      => 'integer',
 
         'previous_due_afn'           => 'decimal:2',
         'new_sale_amount_afn'        => 'decimal:2',
@@ -124,6 +128,11 @@ class Sale extends Model
     public function profitEntries(): HasMany
     {
         return $this->hasMany(InvestorProfitEntry::class, 'sale_id');
+    }
+
+    public function returns(): HasMany
+    {
+        return $this->hasMany(SaleReturn::class, 'sale_id');
     }
 
     public function creator(): BelongsTo

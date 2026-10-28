@@ -115,27 +115,45 @@ class Branch extends Model
 
     public function assignManager(?User $user): void
     {
-        // ⛔ اعتبارسنجی: اگر user داده شده ولی branch_manager نیست → رد کن
         if ($user && ! $user->isBranchManager()) {
             throw new \InvalidArgumentException(
                 "User [{$user->id}] must have role 'branch_manager' to be assigned as a manager."
             );
         }
 
+        // One user may manage only one branch.
+        if ($user) {
+            $alreadyManages = static::query()
+                ->where('manager_user_id', $user->id)
+                ->where('id', '!=', $this->id)
+                ->exists();
+
+            if ($alreadyManages) {
+                throw new \InvalidArgumentException(
+                    'This user is already the manager of another branch. Each branch manager can manage only one branch.'
+                );
+            }
+        }
+
         $oldManagerId = $this->manager_user_id;
 
-        // اگر manager قبلی داشت و در حال تغییر است، آزادش کن
         if ($oldManagerId && $oldManagerId !== $user?->id) {
             User::where('id', $oldManagerId)
-                ->where('branch_id', $this->id)  // ⛔ فقط اگر به همین شعبه وصل بود
+                ->where('branch_id', $this->id)
                 ->update(['branch_id' => null]);
         }
 
-        // manager جدید را ست کن
+        // Clear this user from any other branch manager slots (belt-and-suspenders).
+        if ($user) {
+            static::query()
+                ->where('manager_user_id', $user->id)
+                ->where('id', '!=', $this->id)
+                ->update(['manager_user_id' => null]);
+        }
+
         $this->manager_user_id = $user?->id;
         $this->save();
 
-        // اگر user جدید داده شد، به این شعبه وصلش کن
         if ($user) {
             $user->update(['branch_id' => $this->id]);
         }
