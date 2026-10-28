@@ -10,12 +10,16 @@ use App\Models\Product;
 use App\Models\ProductBatch;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductVariant;
+use App\Models\Currency;
 use App\Models\User;
+use App\Support\PurchaseValuation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class PurchaseService
 {
+    public function __construct(private readonly PurchaseValuation $valuation) {}
+
     /**
      * Receive stock for an existing variant (batch + inventory + price history).
      *
@@ -24,14 +28,31 @@ class PurchaseService
     public function receiveStock(array $data, User $actor, int $branchId): Product
     {
         return DB::transaction(function () use ($data, $actor, $branchId) {
-            $variant = ProductVariant::with('product')->findOrFail($data['variant_id']);
+            $variant = ProductVariant::with(['product', 'purchaseCurrency'])->findOrFail($data['variant_id']);
             $product = $variant->product;
             $qty = $product?->quantityToBaseUnits((int) $data['quantity'], (string) ($data['quantity_unit'] ?? 'base'))
                 ?? (int) $data['quantity'];
-            $purchasePrice = (float) $data['purchase_price_afn'];
             $salePrice = (float) $data['sale_price_afn'];
             $exchangeRate = (float) ($data['exchange_rate'] ?? 0);
             $profitAfn = (float) ($data['profit_per_unit'] ?? 0);
+            $enteredAfn = (string) $data['purchase_price_afn'];
+            $purchaseCurrency = $variant->purchaseCurrency
+                ?? ($variant->purchase_currency_id ? Currency::query()->find($variant->purchase_currency_id) : Currency::ledger());
+            $originalUnit = $enteredAfn;
+            if ($purchaseCurrency && Currency::ledger() && $purchaseCurrency->id !== Currency::ledger()->id && $exchangeRate > 0) {
+                $originalUnit = number_format(((float) $enteredAfn) / $exchangeRate, 2, '.', '');
+            } elseif ($variant->purchase_amount !== null && $variant->purchase_currency_id) {
+                $originalUnit = (string) $variant->purchase_amount;
+                $purchaseCurrency = $variant->purchaseCurrency ?? $purchaseCurrency;
+            }
+
+            $money = $this->valuation->snapshot(
+                $originalUnit,
+                $qty,
+                $purchaseCurrency,
+                $exchangeRate > 0 ? (string) $exchangeRate : null,
+            );
+            $purchasePrice = (float) $money['unit_cost_afn'];
 
             $fundingSource = $data['funding_source'] ?? null;
             $investorId = $data['investor_id'] ?? null;
@@ -108,7 +129,7 @@ class PurchaseService
                 'user_id' => $actor->id,
             ]);
 
-            $purchaseRow = Product::create([
+            $purchaseRow = Product::create(array_merge([
                 'name' => $product->name,
                 'brand_id' => $product->brand_id,
                 'gender' => $product->gender,
@@ -121,7 +142,6 @@ class PurchaseService
                 'supplier_id' => $data['supplier_id'] ?? null,
                 'invoice_number' => $data['invoice_number'] ?? null,
                 'purchase_date' => $data['purchase_date'],
-                'exchange_rate' => $exchangeRate > 0 ? $exchangeRate : null,
                 'quantity' => $qty,
                 'remaining_quantity' => $qty,
                 'purchase_price_afn' => $totalCostAfn,
@@ -130,7 +150,17 @@ class PurchaseService
                 'line_profit' => $profitAfn * $qty,
                 'notes' => $data['notes'] ?? null,
                 'payment_status' => ! empty($data['supplier_id']) ? 'unpaid' : 'paid',
-            ]);
+            ], [
+                'exchange_rate' => $money['exchange_rate'],
+                'purchase_currency_id' => $money['purchase_currency_id'],
+                'purchase_currency_code' => $money['purchase_currency_code'],
+                'purchase_currency_symbol' => $money['purchase_currency_symbol'],
+                'purchase_unit_amount' => $money['purchase_unit_amount'],
+                'purchase_line_amount' => $money['purchase_line_amount'],
+                'rate_to_ledger' => $money['rate_to_ledger'],
+                'rate_kind' => $money['rate_kind'],
+                'purchase_price_usd' => $money['purchase_price_usd'],
+            ]));
 
             $this->applyPaidNow($purchaseRow, (float) ($data['paid_now'] ?? 0), $actor->id);
 

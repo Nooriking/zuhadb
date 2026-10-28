@@ -18,7 +18,9 @@ use App\Models\ProductVariant;
 use App\Models\User;
 use App\Models\Currency;
 use App\Services\CurrencyService;
+use App\Services\ProductExchangeRateService;
 use App\Services\PurchaseService;
+use App\Support\PurchaseValuation;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -34,6 +36,8 @@ class ProductController extends Controller
     public function __construct(
         private readonly PurchaseService $purchases,
         private readonly CurrencyService $currencies,
+        private readonly ProductExchangeRateService $productRates,
+        private readonly PurchaseValuation $purchaseValuation,
     ) {}
 
     /**
@@ -123,26 +127,44 @@ class ProductController extends Controller
 
         $variantIds = $products->getCollection()->flatMap(fn ($product) => $product->variants->pluck('id'))->unique()->values();
 
-        $avgRatesByVariant = Product::query()
+        $purchaseRows = Product::query()
             ->whereIn('variant_id', $variantIds)
-            ->whereNotNull('exchange_rate')
-            ->where('exchange_rate', '>', 0)
             ->where('trash', false)
-            ->selectRaw('variant_id, ROUND(AVG(exchange_rate), 2) as avg_exchange_rate')
-            ->groupBy('variant_id')
-            ->pluck('avg_exchange_rate', 'variant_id');
+            ->where(function ($query) {
+                $query->whereNotNull('rate_to_ledger')->orWhereNotNull('exchange_rate');
+            })
+            ->get(['variant_id', 'rate_to_ledger', 'exchange_rate', 'purchase_line_amount', 'purchase_price_afn', 'purchase_currency_code']);
 
-        $products->getCollection()->each(function ($product) use ($avgRatesByVariant) {
+        $weightedByVariant = $purchaseRows->groupBy('variant_id')->map(function ($rows) {
+            $usdRows = $rows->filter(fn ($row) => strtoupper((string) $row->purchase_currency_code) === 'USD'
+                || $row->purchase_currency_code === null);
+
+            $source = $usdRows->isNotEmpty() ? $usdRows : $rows;
+
+            return $this->currencies->weightedAverageRate($source->map(fn ($row) => [
+                'rate' => $row->rate_to_ledger ?: $row->exchange_rate,
+                'amount' => $row->purchase_line_amount ?: $row->purchase_price_afn,
+            ]));
+        });
+
+        $products->getCollection()->each(function ($product) use ($weightedByVariant) {
             $rates = $product->variants
-                ->map(fn ($variant) => $avgRatesByVariant->get($variant->id))
+                ->map(fn ($variant) => $weightedByVariant->get($variant->id))
                 ->filter(fn ($rate) => $rate !== null && (float) $rate > 0)
-                ->map(fn ($rate) => (float) $rate)
                 ->values();
+
+            $combined = $this->currencies->weightedAverageRate(
+                $product->variants->map(fn ($variant) => [
+                    'rate' => $weightedByVariant->get($variant->id),
+                    'amount' => '1',
+                ])
+            );
 
             $product->setAttribute(
                 'exchange_rate',
-                $rates->isNotEmpty() ? round($rates->avg(), 2) : null
+                $combined !== null ? round((float) $combined, 4) : ($rates->isNotEmpty() ? round((float) $rates->first(), 4) : null)
             );
+            $product->setAttribute('exchange_rate_kind', $combined !== null ? 'weighted_average' : null);
         });
 
         $monthlyRates = ExchangeRateHistory::query()
@@ -193,13 +215,16 @@ class ProductController extends Controller
                 ->orderBy('name')
                 ->get(),
             'currencies' => Currency::formOptions(),
+            'exchangeRateContext' => $this->productRates->formContext(),
+            'usd_to_afn_rate' => null,
+            'usd_to_aed_rate' => null,
         ]);
     }
 
     public function receive(): Response
     {
         $variants = ProductVariant::query()
-            ->with(['product:id,name,brand_id,base_unit_name,pack_unit_name,units_per_pack', 'product.brand:id,name', 'barcodes:id,variant_id,barcode'])
+            ->with(['product:id,name,brand_id,base_unit_name,pack_unit_name,units_per_pack', 'product.brand:id,name', 'product.exchangeRates', 'barcodes:id,variant_id,barcode'])
             ->where('trash', false)
             ->orderByDesc('id')
             ->limit(300)
@@ -291,11 +316,20 @@ class ProductController extends Controller
 
             $variantsData  = $data['variants']  ?? [];
             $purchasesData = $data['purchases'] ?? [];
+            $usdToAfnRate  = $data['usd_to_afn_rate'] ?? null;
+            $usdToAedRate  = $data['usd_to_aed_rate'] ?? null;
 
-            unset($data['variants'], $data['purchases'], $data['image']);
+            unset(
+                $data['variants'],
+                $data['purchases'],
+                $data['image'],
+                $data['usd_to_afn_rate'],
+                $data['usd_to_aed_rate'],
+            );
 
             /* ═══ 1) Create main product ═══ */
             $product = Product::create($data);
+            $this->productRates->sync($product, $usdToAfnRate, $usdToAedRate);
 
             /* ═══ 2) Create variants + barcodes ═══ */
             $variantIds     = [];
@@ -314,12 +348,7 @@ class ProductController extends Controller
                 $variantIds[$index] = $variant->id;
 
                 // ✅ اضافه شد: sale_price_afn در map
-                $variantDataMap[$index] = [
-                    'purchase_price_afn'  => (float) $variant->purchase_price_afn,
-                    'wholesale_price_afn' => (float) $variant->wholesale_price_afn,
-                    'wholesale_min_qty'   => (int) $variant->wholesale_min_qty,
-                    'sale_price_afn'      => (float) $variant->sale_price_afn,
-                ];
+                $variantDataMap[$index] = $this->variantMoneyMap($variant);
 
                 $this->syncBarcodes($variant, $barcodes);
             }
@@ -362,80 +391,65 @@ class ProductController extends Controller
                     $supplierId = null;
                 }
 
-                $variantInfo = $variantDataMap[$variantIndex] ?? [
-                    'purchase_price_afn'  => 0,
-                    'wholesale_price_afn' => 0,
-                    'wholesale_min_qty'   => 0,
-                    'sale_price_afn'      => 0,
-                ];
+                $variantInfo = $variantDataMap[$variantIndex] ?? $this->emptyVariantMoneyMap();
+                $money = $this->purchaseMoneyFromVariant($variantInfo, (int) $qty, $exchangeRate > 0 ? (string) $exchangeRate : null);
+                $purchasePricePerUnit = (float) $money['unit_cost_afn'];
+                $salePricePerUnit = (float) ($variantInfo['sale_price_afn'] ?? 0);
+                $purchasePriceAfn = (float) $money['line_cost_afn'];
 
-                $purchasePricePerUnit = (float) $variantInfo['purchase_price_afn'];
-                $salePricePerUnit     = (float) ($variantInfo['sale_price_afn'] ?? 0);
-                $purchasePriceAfn     = $purchasePricePerUnit * $qty;
-
-                /* ✅ محاسبه سودها */
-                $lineProfit      = $profitUnit * $qty;  // سود investor
+                $lineProfit = $profitUnit * $qty;
                 $storeProfitUnit = max(0, $salePricePerUnit - $purchasePricePerUnit - $profitUnit);
                 $lineStoreProfit = $storeProfitUnit * $qty;
 
-                /* ═══ Purchase Row در products ═══ */
-                $purchaseRow = Product::create([
-                    'name'        => $product->name,
-                    'brand_id'    => $product->brand_id,
-                    'gender'      => $product->gender,
-                    'status'      => $product->status,
+                $purchaseRow = Product::create(array_merge([
+                    'name' => $product->name,
+                    'brand_id' => $product->brand_id,
+                    'gender' => $product->gender,
+                    'status' => $product->status,
                     'description' => $product->description,
-                    'user_id'     => Auth::id(),
-                    'trash'       => false,
-
-                    'variant_id'         => $variantId,
-                    'investor_id'        => $investorId,
-                    'supplier_id'        => $supplierId,
-                    'invoice_number'     => $purchaseData['invoice_number'] ?? null,
-                    'purchase_date'      => $purchaseData['purchase_date'] ?? now()->toDateString(),
-                    'exchange_rate'      => $exchangeRate > 0 ? $exchangeRate : null,
-                    'quantity'           => (int) $qty,
+                    'user_id' => Auth::id(),
+                    'trash' => false,
+                    'variant_id' => $variantId,
+                    'investor_id' => $investorId,
+                    'supplier_id' => $supplierId,
+                    'invoice_number' => $purchaseData['invoice_number'] ?? null,
+                    'purchase_date' => $purchaseData['purchase_date'] ?? now()->toDateString(),
+                    'quantity' => (int) $qty,
                     'remaining_quantity' => (int) $qty,
-
                     'purchase_price_afn' => $purchasePriceAfn,
-
                     'wholesale_price_afn' => $variantInfo['wholesale_price_afn'],
-                    'wholesale_min_qty'   => $variantInfo['wholesale_min_qty'],
-
-                    // ✅ Investor profit
+                    'wholesale_min_qty' => $variantInfo['wholesale_min_qty'],
                     'profit_per_unit' => $profitUnit,
-                    'line_total'      => $purchasePriceAfn,
-                    'line_profit'     => $lineProfit,
-
-                    // ✅ Store profit (جدید)
+                    'line_total' => $purchasePriceAfn,
+                    'line_profit' => $lineProfit,
                     'store_profit_per_unit' => $storeProfitUnit,
-                    'line_store_profit'     => $lineStoreProfit,
-
-                    'bill_image'     => $billImage,
-                    'notes'          => $purchaseData['notes'] ?? null,
+                    'line_store_profit' => $lineStoreProfit,
+                    'bill_image' => $billImage,
+                    'notes' => $purchaseData['notes'] ?? null,
                     'payment_status' => $purchaseData['payment_status'] ?? 'unpaid',
-                ]);
+                ], $this->purchaseSnapshotColumns($money)));
                 $this->applyPaidNow($purchaseRow, (float) ($purchaseData['paid_now'] ?? 0));
 
-                /* ═══ ساخت ProductBatch با فیلدهای جدید ═══ */
                 $this->createProductBatch(
-                    branchId:           $branchId,
-                    variantId:          $variantId,
-                    purchaseRowId:      $purchaseRow->id,
-                    investorId:         $investorId,
-                    qty:                (int) $qty,
-                    unitCostAfn:        $purchasePricePerUnit,
-                    salePriceAfn:       $salePricePerUnit,        // ✅ جدید
-                    exchangeRate:       $exchangeRate > 0 ? $exchangeRate : 1,
-                    profitPerUnit:      $profitUnit,              // سود investor per unit
-                    storeProfitPerUnit: $storeProfitUnit,         // ✅ جدید
-                    receivedDate:       $purchaseData['purchase_date'] ?? now()->toDateString(),
+                    branchId: $branchId,
+                    variantId: $variantId,
+                    purchaseRowId: $purchaseRow->id,
+                    investorId: $investorId,
+                    qty: (int) $qty,
+                    unitCostAfn: $purchasePricePerUnit,
+                    salePriceAfn: $salePricePerUnit,
+                    exchangeRate: (float) $money['rate_to_ledger'],
+                    profitPerUnit: $profitUnit,
+                    storeProfitPerUnit: $storeProfitUnit,
+                    receivedDate: $purchaseData['purchase_date'] ?? now()->toDateString(),
                 );
 
-                $this->rememberDailyRate(
-                    $purchaseData['purchase_date'] ?? now()->toDateString(),
-                    $exchangeRate
-                );
+                if (strtoupper((string) ($money['purchase_currency_code'] ?? '')) === 'USD') {
+                    $this->rememberDailyRate(
+                        $purchaseData['purchase_date'] ?? now()->toDateString(),
+                        (float) $money['rate_to_ledger']
+                    );
+                }
 
                 Inventory::increase(
                     branchId: $branchId,
@@ -509,6 +523,8 @@ class ProductController extends Controller
         return Inertia::render('products/show', [
             'product'   => $product,
             'purchases' => $purchases,
+            'exchangeRateContext' => $this->productRates->formContext(),
+            ...$this->productRates->payloadFor($product),
         ]);
     }
 
@@ -556,6 +572,8 @@ class ProductController extends Controller
                     $variant->wholesale_currency_id,
                 ])->all()
             ),
+            'exchangeRateContext' => $this->productRates->formContext(),
+            ...$this->productRates->payloadFor($product),
         ]);
     }
 
@@ -577,10 +595,19 @@ class ProductController extends Controller
 
             $variantsData  = $data['variants']  ?? [];
             $purchasesData = $data['purchases'] ?? [];
+            $usdToAfnRate  = $data['usd_to_afn_rate'] ?? null;
+            $usdToAedRate  = $data['usd_to_aed_rate'] ?? null;
 
-            unset($data['variants'], $data['purchases'], $data['image']);
+            unset(
+                $data['variants'],
+                $data['purchases'],
+                $data['image'],
+                $data['usd_to_afn_rate'],
+                $data['usd_to_aed_rate'],
+            );
 
             $product->update($data);
+            $this->productRates->sync($product, $usdToAfnRate, $usdToAedRate);
 
             $variantIndexToId = [];
             $variantDataMap   = [];
@@ -625,13 +652,7 @@ class ProductController extends Controller
                             reason: 'Product update'
                         );
 
-                        // ✅ sale_price_afn اضافه شد
-                        $variantDataMap[$index] = [
-                            'purchase_price_afn'  => (float) $variant->purchase_price_afn,
-                            'wholesale_price_afn' => (float) $variant->wholesale_price_afn,
-                            'wholesale_min_qty'   => (int) $variant->wholesale_min_qty,
-                            'sale_price_afn'      => (float) $variant->sale_price_afn,
-                        ];
+                        $variantDataMap[$index] = $this->variantMoneyMap($variant);
                     }
                 } else {
                     $variantData['product_id'] = $product->id;
@@ -642,12 +663,7 @@ class ProductController extends Controller
 
                     $this->syncBarcodes($variant, $barcodes);
 
-                    $variantDataMap[$index] = [
-                        'purchase_price_afn'  => (float) $variant->purchase_price_afn,
-                        'wholesale_price_afn' => (float) $variant->wholesale_price_afn,
-                        'wholesale_min_qty'   => (int) $variant->wholesale_min_qty,
-                        'sale_price_afn'      => (float) $variant->sale_price_afn,
-                    ];
+                    $variantDataMap[$index] = $this->variantMoneyMap($variant);
                 }
             }
 
@@ -875,6 +891,8 @@ class ProductController extends Controller
             'pack_unit_name' => $product?->pack_unit_name,
             'units_per_pack' => $product?->units_per_pack,
             'conversion_label' => $product?->conversionLabel(),
+            'usd_to_afn_rate' => $product ? $this->productRates->rate($product, ProductExchangeRateService::USD, ProductExchangeRateService::AFN) : null,
+            'usd_to_aed_rate' => $product ? $this->productRates->rate($product, ProductExchangeRateService::USD, ProductExchangeRateService::AED) : null,
         ];
     }
 
@@ -1088,6 +1106,71 @@ class ProductController extends Controller
     }
 
     /**
+     * @return array<string, mixed>
+     */
+    private function variantMoneyMap(ProductVariant $variant): array
+    {
+        return [
+            'purchase_price_afn' => (float) $variant->purchase_price_afn,
+            'purchase_amount' => $variant->purchase_amount ?? $variant->purchase_price_afn,
+            'purchase_currency_id' => $variant->purchase_currency_id,
+            'wholesale_price_afn' => (float) $variant->wholesale_price_afn,
+            'wholesale_min_qty' => (int) $variant->wholesale_min_qty,
+            'sale_price_afn' => (float) $variant->sale_price_afn,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function emptyVariantMoneyMap(): array
+    {
+        return [
+            'purchase_price_afn' => 0,
+            'purchase_amount' => 0,
+            'purchase_currency_id' => null,
+            'wholesale_price_afn' => 0,
+            'wholesale_min_qty' => 0,
+            'sale_price_afn' => 0,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $variantInfo
+     * @return array<string, mixed>
+     */
+    private function purchaseMoneyFromVariant(array $variantInfo, int $qty, ?string $transactionRate): array
+    {
+        $currency = null;
+        if (! empty($variantInfo['purchase_currency_id'])) {
+            $currency = Currency::query()->notTrashed()->find((int) $variantInfo['purchase_currency_id']);
+        }
+
+        $original = (string) ($variantInfo['purchase_amount'] ?? $variantInfo['purchase_price_afn'] ?? 0);
+
+        return $this->purchaseValuation->snapshot($original, $qty, $currency, $transactionRate);
+    }
+
+    /**
+     * @param  array<string, mixed>  $money
+     * @return array<string, mixed>
+     */
+    private function purchaseSnapshotColumns(array $money): array
+    {
+        return [
+            'exchange_rate' => $money['exchange_rate'],
+            'purchase_currency_id' => $money['purchase_currency_id'],
+            'purchase_currency_code' => $money['purchase_currency_code'],
+            'purchase_currency_symbol' => $money['purchase_currency_symbol'],
+            'purchase_unit_amount' => $money['purchase_unit_amount'],
+            'purchase_line_amount' => $money['purchase_line_amount'],
+            'rate_to_ledger' => $money['rate_to_ledger'],
+            'rate_kind' => $money['rate_kind'],
+            'purchase_price_usd' => $money['purchase_price_usd'],
+        ];
+    }
+
+    /**
      * Store entered amounts in their currencies and write AFN ledger snapshots.
      *
      * @param  array<string, mixed>  $variantData
@@ -1260,55 +1343,41 @@ class ProductController extends Controller
                 $supplierId = null;
             }
 
-            $variantInfo = $variantDataMap[$variantIndex] ?? [
-                'purchase_price_afn'  => 0,
-                'wholesale_price_afn' => 0,
-                'wholesale_min_qty'   => 0,
-                'sale_price_afn'      => 0,
-            ];
+            $variantInfo = $variantDataMap[$variantIndex] ?? $this->emptyVariantMoneyMap();
 
             if (($variantInfo['purchase_price_afn'] ?? 0) <= 0) {
                 $variant = ProductVariant::find($variantId);
                 if ($variant) {
-                    $variantInfo = [
-                        'purchase_price_afn'  => (float) $variant->purchase_price_afn,
-                        'wholesale_price_afn' => (float) $variant->wholesale_price_afn,
-                        'wholesale_min_qty'   => (int) $variant->wholesale_min_qty,
-                        'sale_price_afn'      => (float) $variant->sale_price_afn,
-                    ];
+                    $variantInfo = $this->variantMoneyMap($variant);
                 }
             }
 
-            $purchasePricePerUnit = (float) $variantInfo['purchase_price_afn'];
-            $salePricePerUnit     = (float) ($variantInfo['sale_price_afn'] ?? 0);
-            $purchasePriceAfn     = $purchasePricePerUnit * $qty;
+            $money = $this->purchaseMoneyFromVariant($variantInfo, (int) $qty, $exchangeRate > 0 ? (string) $exchangeRate : null);
+            $purchasePricePerUnit = (float) $money['unit_cost_afn'];
+            $salePricePerUnit = (float) ($variantInfo['sale_price_afn'] ?? 0);
+            $purchasePriceAfn = (float) $money['line_cost_afn'];
 
-            // ✅ محاسبه سودها
-            $lineProfit      = $profitUnit * $qty;
+            $lineProfit = $profitUnit * $qty;
             $storeProfitUnit = max(0, $salePricePerUnit - $purchasePricePerUnit - $profitUnit);
             $lineStoreProfit = $storeProfitUnit * $qty;
 
-            $rowData = [
-                'name'        => $product->name,
-                'brand_id'    => $product->brand_id,
-                'gender'      => $product->gender,
-                'status'      => $product->status,
+            $rowData = array_merge([
+                'name' => $product->name,
+                'brand_id' => $product->brand_id,
+                'gender' => $product->gender,
+                'status' => $product->status,
                 'description' => $product->description,
-                'user_id'     => Auth::id(),
-
-                'variant_id'         => $variantId,
-                'investor_id'        => $investorId,
-                'supplier_id'        => $supplierId,
-                'invoice_number'     => $purchaseData['invoice_number'] ?? null,
-                'purchase_date'      => $purchaseData['purchase_date'] ?? now()->toDateString(),
-                'exchange_rate'      => $exchangeRate > 0 ? $exchangeRate : null,
-                'quantity'           => (int) $qty,
+                'user_id' => Auth::id(),
+                'variant_id' => $variantId,
+                'investor_id' => $investorId,
+                'supplier_id' => $supplierId,
+                'invoice_number' => $purchaseData['invoice_number'] ?? null,
+                'purchase_date' => $purchaseData['purchase_date'] ?? now()->toDateString(),
+                'quantity' => (int) $qty,
                 'remaining_quantity' => (int) $qty,
-
                 'purchase_price_afn' => $purchasePriceAfn,
-
                 'wholesale_price_afn' => $variantInfo['wholesale_price_afn'],
-                'wholesale_min_qty'   => $variantInfo['wholesale_min_qty'],
+                'wholesale_min_qty' => $variantInfo['wholesale_min_qty'],
 
                 // ✅ Investor profit
                 'profit_per_unit' => $profitUnit,
@@ -1319,9 +1388,9 @@ class ProductController extends Controller
                 'store_profit_per_unit' => $storeProfitUnit,
                 'line_store_profit'     => $lineStoreProfit,
 
-                'notes'          => $purchaseData['notes'] ?? null,
+                'notes' => $purchaseData['notes'] ?? null,
                 'payment_status' => $purchaseData['payment_status'] ?? 'unpaid',
-            ];
+            ], $this->purchaseSnapshotColumns($money));
 
             if ($billImage) {
                 $rowData['bill_image'] = $billImage;
@@ -1343,10 +1412,12 @@ class ProductController extends Controller
                     }
 
                     $existing->update($rowData);
-                    $this->rememberDailyRate(
-                        $purchaseData['purchase_date'] ?? now()->toDateString(),
-                        $exchangeRate
-                    );
+                    if (strtoupper((string) ($money['purchase_currency_code'] ?? '')) === 'USD') {
+                        $this->rememberDailyRate(
+                            $purchaseData['purchase_date'] ?? now()->toDateString(),
+                            (float) $money['rate_to_ledger']
+                        );
+                    }
                     $existingIds[] = $existing->id;
 
                     /* ⭐ آپدیت ProductBatch با فیلدهای جدید */
@@ -1358,12 +1429,12 @@ class ProductController extends Controller
                         oldQty:             $oldQty,
                         unitCostAfn:        $purchasePricePerUnit,
                         salePriceAfn:       $salePricePerUnit,        // ✅ جدید
-                        exchangeRate:       $exchangeRate > 0 ? $exchangeRate : 1,
-                        profitPerUnit:      $profitUnit,
-                        storeProfitPerUnit: $storeProfitUnit,         // ✅ جدید
-                        investorId:         $investorId,
-                        receivedDate:       $purchaseData['purchase_date'] ?? now()->toDateString(),
-                    );
+                    exchangeRate: (float) $money['rate_to_ledger'],
+                    profitPerUnit: $profitUnit,
+                    storeProfitPerUnit: $storeProfitUnit,
+                    investorId: $investorId,
+                    receivedDate: $purchaseData['purchase_date'] ?? now()->toDateString(),
+                );
 
                     /* ⭐ آپدیت inventory */
                     if ($diff !== 0) {
@@ -1424,16 +1495,18 @@ class ProductController extends Controller
                     qty:                (int) $qty,
                     unitCostAfn:        $purchasePricePerUnit,
                     salePriceAfn:       $salePricePerUnit,        // ✅ جدید
-                    exchangeRate:       $exchangeRate > 0 ? $exchangeRate : 1,
-                    profitPerUnit:      $profitUnit,
-                    storeProfitPerUnit: $storeProfitUnit,         // ✅ جدید
-                    receivedDate:       $purchaseData['purchase_date'] ?? now()->toDateString(),
+                    exchangeRate: (float) $money['rate_to_ledger'],
+                    profitPerUnit: $profitUnit,
+                    storeProfitPerUnit: $storeProfitUnit,
+                    receivedDate: $purchaseData['purchase_date'] ?? now()->toDateString(),
                 );
 
-                $this->rememberDailyRate(
-                    $purchaseData['purchase_date'] ?? now()->toDateString(),
-                    $exchangeRate
-                );
+                if (strtoupper((string) ($money['purchase_currency_code'] ?? '')) === 'USD') {
+                    $this->rememberDailyRate(
+                        $purchaseData['purchase_date'] ?? now()->toDateString(),
+                        (float) $money['rate_to_ledger']
+                    );
+                }
 
                 Inventory::increase(
                     branchId: $branchId,

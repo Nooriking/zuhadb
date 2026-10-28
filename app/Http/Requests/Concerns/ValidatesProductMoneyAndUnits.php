@@ -23,6 +23,34 @@ trait ValidatesProductMoneyAndUnits
     }
 
     /**
+     * Product-level pair rates: how many units of the target equal 1 USD.
+     * Nullable so older products without rates remain valid.
+     *
+     * @return array<string, mixed>
+     */
+    protected function productExchangeRateRules(): array
+    {
+        return [
+            'usd_to_afn_rate' => $this->positivePairRateRules(),
+            'usd_to_aed_rate' => $this->positivePairRateRules(),
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function positivePairRateRules(): array
+    {
+        return [
+            'nullable',
+            'numeric',
+            'gt:0',
+            'max:999999.99999999',
+            'regex:/^\d+(\.\d{1,8})?$/',
+        ];
+    }
+
+    /**
      * @return array<string, mixed>
      */
     protected function variantMoneyRules(): array

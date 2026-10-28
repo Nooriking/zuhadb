@@ -104,6 +104,15 @@ interface Purchase {
 interface Props {
     product: Product;
     purchases?: Purchase[];
+    usd_to_afn_rate?: string | null;
+    usd_to_aed_rate?: string | null;
+    exchangeRateContext?: {
+        usd?: { code: string } | null;
+        afn?: { code: string } | null;
+        aed?: { code: string } | null;
+        catalog_usd_to_afn?: string | null;
+        catalog_usd_to_aed?: string | null;
+    };
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -158,7 +167,7 @@ const formatPrice = (value: string | number | null | undefined) => {
 };
 
 const formatRate = (value: string | number | null | undefined) => {
-    return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(toNum(value));
+    return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 }).format(toNum(value));
 };
 
 const formatDate = (dateStr: string | null | undefined) => {
@@ -183,7 +192,13 @@ const isInvestorPurchase = (investorId: number | null | undefined): boolean => {
  |  Component
  ═══════════════════════════════════════════════════════ */
 
-export default function ProductShow({ product, purchases = [] }: Props) {
+export default function ProductShow({
+    product,
+    purchases = [],
+    usd_to_afn_rate = null,
+    usd_to_aed_rate = null,
+    exchangeRateContext,
+}: Props) {
     const breadcrumbs: BreadcrumbItem[] = [
         { title: 'Dashboard', href: '/dashboard' },
         { title: 'Products', href: '/products' },
@@ -295,13 +310,49 @@ export default function ProductShow({ product, purchases = [] }: Props) {
                     </Card>
                 </div>
 
-                {/* ═══════════ ✅ EXCHANGE RATE HIGHLIGHT ═══════════ */}
+                {(usd_to_afn_rate || usd_to_aed_rate) && (
+                    <Card>
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-base">Product exchange rates</CardTitle>
+                            <CardDescription>
+                                Catalog rates for this product. Direction: units of the target currency per 1 USD. These are not applied to
+                                historical purchase or sale amounts on this page.
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                            <div>
+                                <p className="text-muted-foreground text-xs">USD to AFN (AFN per 1 USD)</p>
+                                <p className="font-mono text-2xl font-semibold">
+                                    {usd_to_afn_rate ? formatRate(usd_to_afn_rate) : '—'}
+                                </p>
+                                {exchangeRateContext?.catalog_usd_to_afn ? (
+                                    <p className="text-muted-foreground text-xs">
+                                        System catalog currently implies {exchangeRateContext.catalog_usd_to_afn} AFN per 1 USD
+                                    </p>
+                                ) : null}
+                            </div>
+                            <div>
+                                <p className="text-muted-foreground text-xs">USD to AED (AED per 1 USD)</p>
+                                <p className="font-mono text-2xl font-semibold">
+                                    {usd_to_aed_rate ? formatRate(usd_to_aed_rate) : '—'}
+                                </p>
+                                {exchangeRateContext?.catalog_usd_to_aed ? (
+                                    <p className="text-muted-foreground text-xs">
+                                        System catalog currently implies {exchangeRateContext.catalog_usd_to_aed} AED per 1 USD
+                                    </p>
+                                ) : null}
+                            </div>
+                        </CardContent>
+                    </Card>
+                )}
+
+                {/* ═══════════ Purchase snapshot rates (historical, not rewritten) ═══════════ */}
                 {ratesWithValue.length > 0 && (
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                         <Card className="border-l-4 border-l-blue-600 bg-gradient-to-br from-blue-50 to-blue-100/50">
                             <CardHeader className="pb-2">
                                 <CardDescription className="flex items-center gap-1 text-blue-800">
-                                    <CircleDollarSign className="h-4 w-4" /> Latest Exchange Rate
+                                    <CircleDollarSign className="h-4 w-4" /> Latest purchase snapshot
                                 </CardDescription>
                                 <CardTitle className="flex items-baseline gap-2 font-mono text-3xl text-blue-900">
                                     {formatRate(latestExchangeRate)}

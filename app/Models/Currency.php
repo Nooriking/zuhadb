@@ -124,7 +124,7 @@ class Currency extends Model
                 'rate_to_default' => '1',
                 'is_default' => true,
             ],
-            'rate_definition' => 'One unit of this currency equals rate_to_default units of the default currency.',
+            'rate_definition' => 'Catalog rate: 1 unit of this currency equals rate_to_default units of the default (is_base) currency. Ledger amounts (stock, sales, COGS) are stored in AFN. A purchase or sale snapshot rate is 1 unit of that transaction currency = rate_to_ledger AFN and is never replaced by later catalog or average rates.',
         ];
     }
 

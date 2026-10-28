@@ -40,6 +40,12 @@ class StoreProductRequest extends FormRequest
             $payload['brand_id'] = null;
         }
 
+        foreach (['usd_to_afn_rate', 'usd_to_aed_rate'] as $rateField) {
+            if (isset($payload[$rateField]) && $payload[$rateField] === '') {
+                $payload[$rateField] = null;
+            }
+        }
+
         /* ─────────────── Variants ─────────────── */
 
         if (isset($payload['variants']) && is_array($payload['variants'])) {
@@ -228,6 +234,7 @@ class StoreProductRequest extends FormRequest
             'description' => ['nullable', 'string', 'max:5000'],
             'image'       => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
             ...$this->productUnitRules(),
+            ...$this->productExchangeRateRules(),
 
             /* ─────────────── Variants ─────────────── */
             'variants'                       => ['required', 'array', 'min:1'],
@@ -332,6 +339,12 @@ class StoreProductRequest extends FormRequest
             'purchases.*.investor_id.exists'     => 'The selected investor does not exist.',
             'purchases.*.supplier_id.exists'     => 'The selected supplier does not exist.',
             'purchases.*.payment_status.in'      => 'Payment status must be paid, unpaid, partial, or credit.',
+            'usd_to_afn_rate.numeric'            => 'USD to AFN must be a number of afghanis per 1 US dollar.',
+            'usd_to_afn_rate.gt'                 => 'USD to AFN must be greater than zero. Example: 1 USD = 70 AFN is entered as 70.',
+            'usd_to_afn_rate.regex'              => 'USD to AFN allows at most 8 decimal places.',
+            'usd_to_aed_rate.numeric'            => 'USD to AED must be a number of dirhams per 1 US dollar.',
+            'usd_to_aed_rate.gt'                 => 'USD to AED must be greater than zero. Example: 1 USD = 3.67 AED is entered as 3.67.',
+            'usd_to_aed_rate.regex'              => 'USD to AED allows at most 8 decimal places.',
         ];
     }
 
@@ -360,6 +373,8 @@ class StoreProductRequest extends FormRequest
             'purchases.*.purchase_date'           => 'purchase date',
             'purchases.*.payment_status'          => 'payment status',
             'purchases.*.exchange_rate'           => 'exchange rate',
+            'usd_to_afn_rate'                     => 'USD to AFN rate (AFN per 1 USD)',
+            'usd_to_aed_rate'                     => 'USD to AED rate (AED per 1 USD)',
         ];
     }
 }

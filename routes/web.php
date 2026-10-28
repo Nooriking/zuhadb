@@ -554,7 +554,9 @@ Route::get('/report', [SaleController::class, 'report'])->name('sales.report');
         Route::delete('/{id}/force-delete', [InvestorController::class, 'forceDelete'])->whereNumber('id')->name('forceDelete');
         Route::post('/{investor}/settle', [InvestorWithdrawalController::class, 'settle'])->name('settle');
         Route::post('/{investor}/toggle-status', [InvestorController::class, 'toggleStatus'])->name('toggleStatus');
-        Route::get('/{investor}', [InvestorController::class, 'show'])->name('show');
+        Route::get('/{investor}', [InvestorController::class, 'show'])
+            ->middleware('permission:investors.view')
+            ->name('show');
         Route::get('/{investor}/edit', [InvestorController::class, 'edit'])->name('edit');
         Route::put('/{investor}', [InvestorController::class, 'update'])->name('update');
         Route::delete('/{investor}', [InvestorController::class, 'destroy'])->name('destroy');

@@ -55,6 +55,78 @@ class CurrencyService
     }
 
     /**
+     * Units of the ledger (AFN) equal to 1 unit of $from.
+     * Example: if 1 USD = 70 AFN this returns "70.00000000".
+     */
+    public function rateToLedger(Currency $from): string
+    {
+        $ledger = Currency::ledger() ?? $from;
+
+        if ($from->id === $ledger->id) {
+            return '1.00000000';
+        }
+
+        return $this->convert('1', $from, $ledger, 8);
+    }
+
+    /**
+     * Catalog snapshot used only as a labeled conversion of an AFN ledger amount into USD.
+     * Returns nulls when USD or a positive rate is missing — never invents a rate.
+     *
+     * @return array{usd_to_ledger_rate: string|null, usd_equivalent_amount: string|null, fx_rate_kind: string|null}
+     */
+    public function saleUsdSnapshot(string $ledgerAmount): array
+    {
+        $usd = Currency::query()->notTrashed()->where('code', 'USD')->first();
+        $ledger = Currency::ledger();
+
+        if (! $usd || ! $ledger || ! $this->canConvert($usd, $ledger)) {
+            return [
+                'usd_to_ledger_rate' => null,
+                'usd_equivalent_amount' => null,
+                'fx_rate_kind' => null,
+            ];
+        }
+
+        $rate = $this->rateToLedger($usd);
+
+        return [
+            'usd_to_ledger_rate' => $rate,
+            'usd_equivalent_amount' => Money::round(Money::div($ledgerAmount, $rate, 12), 2),
+            'fx_rate_kind' => 'catalog',
+        ];
+    }
+
+    /**
+     * Weighted average of applied rates: sum(rate × original_amount) / sum(original_amount).
+     * Rows without a positive rate or amount are skipped. Returns null when nothing is usable.
+     *
+     * @param  iterable<int, array{rate: string|float|null, amount: string|float|null}>  $rows
+     */
+    public function weightedAverageRate(iterable $rows): ?string
+    {
+        $weight = '0';
+        $sum = '0';
+
+        foreach ($rows as $row) {
+            $rate = (string) ($row['rate'] ?? '0');
+            $amount = (string) ($row['amount'] ?? '0');
+            if ((float) $rate <= 0 || (float) $amount <= 0) {
+                continue;
+            }
+            $weight = function_exists('bcadd') ? bcadd($weight, $amount, 8) : (string) ((float) $weight + (float) $amount);
+            $piece = Money::mul($rate, $amount, 12);
+            $sum = function_exists('bcadd') ? bcadd($sum, $piece, 12) : (string) ((float) $sum + (float) $piece);
+        }
+
+        if ((float) $weight <= 0) {
+            return null;
+        }
+
+        return Money::round(Money::div($sum, $weight, 12), 8);
+    }
+
+    /**
      * Investor and POS amounts are stored in the ledger currency (AFN).
      * Report them in the configured default when a valid rate exists.
      *

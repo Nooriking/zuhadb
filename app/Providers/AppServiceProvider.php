@@ -4,9 +4,11 @@ namespace App\Providers;
 
 use App\Listeners\LogAuthenticationEvents;
 use App\Models\Customer;
+use App\Models\Investor;
 use App\Models\Product;
 use App\Models\Sale;
 use App\Policies\CustomerPolicy;
+use App\Policies\InvestorPolicy;
 use App\Policies\ProductPolicy;
 use App\Policies\SalePolicy;
 use Illuminate\Auth\Events\Failed;
@@ -50,6 +52,7 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Sale::class, SalePolicy::class);
         Gate::policy(Product::class, ProductPolicy::class);
         Gate::policy(Customer::class, CustomerPolicy::class);
+        Gate::policy(Investor::class, InvestorPolicy::class);
 
         RateLimiter::for('login', function (Request $request) {
             $perMinute = max(5, (int) config('business.login_max_attempts', 5) * 2);

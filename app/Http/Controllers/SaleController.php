@@ -6,6 +6,7 @@ use App\Http\Requests\AddSalePaymentRequest;
 use App\Http\Requests\StoreSaleRequest;
 use App\Http\Requests\UpdateSaleRequest;
 use App\Models\Branch;
+use App\Models\Currency;
 use App\Models\Customer;
 use App\Models\ExchangeRateHistory;
 use App\Models\ProductBatch;
@@ -131,8 +132,17 @@ class SaleController extends Controller
         }
 
         $sales->getCollection()->each(function (Sale $sale) use ($ratesByDate) {
+            if ($sale->usd_to_ledger_rate !== null && (float) $sale->usd_to_ledger_rate > 0) {
+                $sale->setAttribute('exchange_rate', round((float) $sale->usd_to_ledger_rate, 4));
+                $sale->setAttribute('exchange_rate_kind', $sale->fx_rate_kind ?: 'catalog');
+
+                return;
+            }
+
             $date = optional($sale->sale_date)->toDateString();
-            $sale->setAttribute('exchange_rate', $date ? $ratesByDate->get($date) : null);
+            $reference = $date ? $ratesByDate->get($date) : null;
+            $sale->setAttribute('exchange_rate', $reference);
+            $sale->setAttribute('exchange_rate_kind', $reference ? 'daily_reference' : null);
         });
 
         $monthlyRates = ExchangeRateHistory::query()
@@ -189,6 +199,7 @@ class SaleController extends Controller
                 ->get(),
             'nextNumber' => Sale::generateInvoiceNumber(),
             'supplierCredits' => \App\Models\Product::supplierCredits(),
+            'currencies' => Currency::formOptions(),
         ]);
     }
 

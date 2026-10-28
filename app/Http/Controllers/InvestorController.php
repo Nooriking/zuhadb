@@ -4,7 +4,10 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\StoreInvestorRequest;
 use App\Http\Requests\UpdateInvestorRequest;
+use App\Models\Investment;
+use App\Models\InvestmentPurchaseAllocation;
 use App\Models\Investor;
+use App\Models\Product;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -22,6 +25,8 @@ class InvestorController extends Controller
 
     public function index(Request $request): Response
     {
+        $this->authorize('viewAny', Investor::class);
+
         $search = $request->query('search');
         $status = $request->query('status');
 
@@ -31,7 +36,11 @@ class InvestorController extends Controller
                 'user:id,name',
                 'creator:id,name',
             ])
-            ->withCount(['investments', 'withdrawals', 'batches'])
+            ->withCount(['investments', 'withdrawals', 'batches', 'purchaseRows'])
+            ->withSum([
+                'investments as unallocated_capital_afn' => fn ($q) => $q
+                    ->whereIn('status', ['active', 'partially_used']),
+            ], 'available_amount_afn')
             ->notTrashed()
             ->when($search, function ($query, $search) {
                 $query->where(function ($q) use ($search) {
@@ -51,6 +60,10 @@ class InvestorController extends Controller
             'total_capital'     => (float) DB::table('investor_wallets')->sum('capital_balance_afn'),
             'total_profit_paid' => (float) DB::table('investor_wallets')->sum('total_profit_earned_afn'),
             'total_withdrawn'   => (float) DB::table('investor_wallets')->sum('total_withdrawn_afn'),
+            'total_unallocated' => (float) Investment::query()
+                ->where('trash', false)
+                ->whereIn('status', ['active', 'partially_used'])
+                ->sum('available_amount_afn'),
         ];
 
         return Inertia::render('investors/index', [
@@ -88,10 +101,6 @@ class InvestorController extends Controller
     }
 
     /* =========================================================
-     |  STORE — ✅ پشتیبانی از سرمایه‌گذار نقدی و جنسی + جلوگیری از تکرار user_id
-     ========================================================= */
-
-       /* =========================================================
      |  STORE — ✅ پشتیبانی از سرمایه‌گذار نقدی و جنسی + جلوگیری از تکرار user_id
      ========================================================= */
 
@@ -226,6 +235,8 @@ class InvestorController extends Controller
 
     public function show(Investor $investor): Response
     {
+        $this->authorize('view', $investor);
+
         if ($investor->trash) {
             abort(404);
         }
@@ -235,27 +246,48 @@ class InvestorController extends Controller
         }
 
         $investor->load([
-            'wallet.currency:id,code,name,symbol',
+            'wallet.currency:id,code,name,symbol,decimal_places',
             'user:id,name,email',
             'creator:id,name,email',
-            'investments' => fn ($q) => $q->with('currency:id,code,name,symbol')->latest()->limit(10),
-            'transactions' => fn ($q) => $q->with('currency:id,code,name,symbol')->latest()->limit(20),
-            'withdrawals' => fn ($q) => $q->with('currency:id,code,name,symbol')->latest()->limit(20),
-            'batches' => fn ($q) => $q->with(['variant.product:id,name', 'variant:id,product_id,name'])
-                                       ->where('remaining_quantity', '>', 0)
-                                       ->latest()
-                                       ->limit(20),
+            'investments' => fn ($q) => $q
+                ->with([
+                    'currency:id,code,name,symbol,decimal_places',
+                    'purchaseAllocations.purchase:id,name,invoice_number,purchase_date,quantity,remaining_quantity,purchase_price_afn,line_total,purchase_currency_code,purchase_currency_symbol,purchase_line_amount,exchange_rate,supplier_id,investor_id,variant_id',
+                    'purchaseAllocations.purchase.supplier:id,name',
+                    'purchaseAllocations.purchase.variant:id,name,product_id,volume_ml',
+                    'purchaseAllocations.purchase.variant.product:id,name',
+                ])
+                ->latest(),
+            'transactions' => fn ($q) => $q->with('currency:id,code,name,symbol,decimal_places')->latest(),
+            'withdrawals' => fn ($q) => $q->with('currency:id,code,name,symbol,decimal_places')->latest(),
+            'profitEntries' => fn ($q) => $q
+                ->with([
+                    'currency:id,code,name,symbol,decimal_places',
+                    'sale:id,invoice_number,sale_date',
+                    'saleItem:id,sale_id,quantity,unit_cost_afn,investor_profit_afn',
+                ])
+                ->latest(),
+            'batches' => fn ($q) => $q->with(['variant.product:id,name', 'variant:id,product_id,name,volume_ml'])
+                                       ->latest(),
         ]);
 
-        $stats = [
-            'total_investments'  => $investor->investments()->count(),
-            'active_investments' => $investor->investments()->whereIn('status', ['active', 'partially_used'])->count(),
-            'total_transactions' => $investor->transactions()->count(),
-            'total_withdrawals'  => $investor->withdrawals()->count(),
-            'total_batches'      => $investor->batches()->count(),
-            'active_batches'     => $investor->batches()->where('remaining_quantity', '>', 0)->count(),
+        $funding = $this->buildFundingSummary($investor);
+        $fundedPurchases = $this->buildFundedPurchases($investor);
 
-            // ✅ آمار جدید: نقدی vs جنسی
+        $realizedProfitAfn = (float) $investor->profitEntries
+            ->where('status', '!=', 'cancelled')
+            ->sum('profit_amount_afn');
+
+        $stats = [
+            'total_investments'  => $investor->investments->count(),
+            'active_investments' => $investor->investments->whereIn('status', ['active', 'partially_used'])->count(),
+            'total_transactions' => $investor->transactions->count(),
+            'total_withdrawals'  => $investor->withdrawals->count(),
+            'total_batches'      => $investor->batches->count(),
+            'active_batches'     => $investor->batches->where('remaining_quantity', '>', 0)->count(),
+            'funded_purchases'   => count($fundedPurchases),
+            'realized_profit_afn'=> $realizedProfitAfn,
+
             'has_cash_capital'       => $investor->hasCashCapital(),
             'is_goods_investor'      => $investor->isGoodsInvestor(),
             'active_goods_value_afn' => $investor->active_goods_value_afn,
@@ -264,9 +296,167 @@ class InvestorController extends Controller
         ];
 
         return Inertia::render('investors/show', [
-            'investor' => $investor,
-            'stats'    => $stats,
+            'investor'         => $investor,
+            'stats'            => $stats,
+            'funding'          => $funding,
+            'funded_purchases' => $fundedPurchases,
         ]);
+    }
+
+    /**
+     * Capital contributed and unallocated cash, grouped by original currency.
+     * Different currencies are never summed together.
+     */
+    protected function buildFundingSummary(Investor $investor): array
+    {
+        $contributed = [];
+        $unallocated = [];
+
+        foreach ($investor->investments as $investment) {
+            $code = $investment->currency_code ?: ($investment->currency?->code ?: 'AFN');
+            $symbol = $investment->currency_symbol ?: ($investment->currency?->symbol ?: '؋');
+            $decimals = (int) ($investment->currency?->decimal_places ?? 2);
+
+            if (! isset($contributed[$code])) {
+                $contributed[$code] = [
+                    'currency_code'   => $code,
+                    'currency_symbol' => $symbol,
+                    'decimal_places'  => $decimals,
+                    'original_total'  => 0.0,
+                    'ledger_afn'      => 0.0,
+                ];
+            }
+
+            $original = $investment->capital_amount_currency !== null
+                ? (float) $investment->capital_amount_currency
+                : (float) $investment->capital_amount_afn;
+
+            $contributed[$code]['original_total'] += $original;
+            $contributed[$code]['ledger_afn'] += (float) $investment->capital_amount_afn;
+
+            if (in_array($investment->status, ['active', 'partially_used'], true)) {
+                if (! isset($unallocated[$code])) {
+                    $unallocated[$code] = [
+                        'currency_code'   => $code,
+                        'currency_symbol' => $symbol,
+                        'decimal_places'  => $decimals,
+                        'original_total'  => 0.0,
+                        'ledger_afn'      => 0.0,
+                    ];
+                }
+
+                $availableOriginal = $investment->available_amount_currency !== null
+                    ? (float) $investment->available_amount_currency
+                    : (float) $investment->available_amount_afn;
+
+                $unallocated[$code]['original_total'] += $availableOriginal;
+                $unallocated[$code]['ledger_afn'] += (float) $investment->available_amount_afn;
+            }
+        }
+
+        return [
+            'contributed_by_currency' => array_values($contributed),
+            'unallocated_by_currency' => array_values($unallocated),
+            'current_balance_afn'     => (float) ($investor->wallet?->capital_balance_afn ?? 0)
+                + (float) ($investor->wallet?->profit_balance_afn ?? 0),
+            'reporting_currency'      => 'AFN',
+            'reporting_note'          => 'Ledger totals use recorded AFN amounts. Original currency totals are kept separate and are never mixed.',
+        ];
+    }
+
+    /**
+     * Purchases linked by investor_id or investment purchase allocations only.
+     */
+    protected function buildFundedPurchases(Investor $investor): array
+    {
+        $rows = [];
+        $seenPurchaseIds = [];
+
+        $direct = Product::query()
+            ->whereNotNull('variant_id')
+            ->where('investor_id', $investor->id)
+            ->with([
+                'supplier:id,name',
+                'variant:id,name,product_id,volume_ml',
+                'variant.product:id,name',
+            ])
+            ->orderByDesc('purchase_date')
+            ->get();
+
+        foreach ($direct as $purchase) {
+            $seenPurchaseIds[$purchase->id] = true;
+            $rows[] = $this->mapFundedPurchase($purchase, 'investor_id', null, null);
+        }
+
+        $allocations = InvestmentPurchaseAllocation::query()
+            ->whereHas('investment', fn ($q) => $q->where('investor_id', $investor->id))
+            ->with([
+                'investment:id,investment_number,investor_id,currency_code,currency_symbol,exchange_rate',
+                'purchase:id,name,invoice_number,purchase_date,quantity,remaining_quantity,purchase_price_afn,line_total,purchase_currency_code,purchase_currency_symbol,purchase_line_amount,exchange_rate,supplier_id,investor_id,variant_id',
+                'purchase.supplier:id,name',
+                'purchase.variant:id,name,product_id,volume_ml',
+                'purchase.variant.product:id,name',
+            ])
+            ->orderByDesc('created_at')
+            ->get();
+
+        foreach ($allocations as $allocation) {
+            $purchase = $allocation->purchase;
+            if (! $purchase) {
+                continue;
+            }
+
+            if (isset($seenPurchaseIds[$purchase->id])) {
+                continue;
+            }
+
+            $seenPurchaseIds[$purchase->id] = true;
+            $rows[] = $this->mapFundedPurchase(
+                $purchase,
+                'allocation',
+                $allocation->investment?->investment_number,
+                (float) $allocation->allocated_amount_afn,
+            );
+        }
+
+        return $rows;
+    }
+
+    protected function mapFundedPurchase(
+        Product $purchase,
+        string $linkType,
+        ?string $investmentNumber,
+        ?float $allocatedAfn,
+    ): array {
+        $productName = $purchase->variant?->product?->name
+            ?? $purchase->variant?->name
+            ?? $purchase->name
+            ?? '—';
+
+        $hasReliableLink = $linkType === 'investor_id' || $linkType === 'allocation';
+
+        return [
+            'id'                    => $purchase->id,
+            'purchase_date'         => optional($purchase->purchase_date)?->toDateString(),
+            'invoice_number'        => $purchase->invoice_number,
+            'product_name'          => $productName,
+            'variant_name'          => $purchase->variant?->name,
+            'quantity'              => (int) $purchase->quantity,
+            'remaining_quantity'    => (int) $purchase->remaining_quantity,
+            'unit_cost_afn'         => (float) $purchase->purchase_price_afn,
+            'line_total_afn'        => (float) ($purchase->line_total ?? $purchase->purchase_price_afn * $purchase->quantity),
+            'original_currency'     => $purchase->purchase_currency_code,
+            'original_currency_symbol' => $purchase->purchase_currency_symbol,
+            'original_line_amount'  => $purchase->purchase_line_amount !== null
+                ? (float) $purchase->purchase_line_amount
+                : null,
+            'exchange_rate'         => $purchase->exchange_rate !== null ? (float) $purchase->exchange_rate : null,
+            'supplier_name'         => $purchase->supplier?->name,
+            'link_type'             => $linkType,
+            'investment_number'     => $investmentNumber,
+            'allocated_amount_afn'  => $allocatedAfn,
+            'allocation_status'     => $hasReliableLink ? 'allocated' : 'unallocated',
+        ];
     }
 
     /* =========================================================

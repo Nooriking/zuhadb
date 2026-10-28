@@ -24,6 +24,8 @@ interface VariantOption {
     pack_unit_name?: string | null;
     units_per_pack?: string | number | null;
     conversion_label?: string | null;
+    usd_to_afn_rate?: string | null;
+    usd_to_aed_rate?: string | null;
 }
 
 interface InvestorOption {
@@ -72,7 +74,7 @@ export default function ProductReceive({ variants, investors, investments = [], 
         funding_source: 'office' as 'office' | 'investor',
         investor_id: '',
         investment_id: '',
-        exchange_rate: '',
+        exchange_rate: variants[0]?.usd_to_afn_rate ? String(variants[0].usd_to_afn_rate) : '',
         profit_per_unit: '',
         purchase_date: new Date().toISOString().slice(0, 10),
         invoice_number: '',
@@ -167,6 +169,7 @@ export default function ProductReceive({ variants, investors, investments = [], 
             variant_id: id,
             purchase_price_afn: variant ? String(variant.purchase_price_afn || '') : prev.purchase_price_afn,
             sale_price_afn: variant ? String(variant.sale_price_afn || '') : prev.sale_price_afn,
+            exchange_rate: variant?.usd_to_afn_rate ? String(variant.usd_to_afn_rate) : prev.exchange_rate,
         }));
     };
 
@@ -177,6 +180,7 @@ export default function ProductReceive({ variants, investors, investments = [], 
             variant_id: String(variant.id),
             purchase_price_afn: String(variant.purchase_price_afn || ''),
             sale_price_afn: String(variant.sale_price_afn || ''),
+            exchange_rate: variant.usd_to_afn_rate ? String(variant.usd_to_afn_rate) : prev.exchange_rate,
         }));
         setScanMessage(`${variant.name} loaded from the database.`);
         setScan('');
@@ -691,15 +695,21 @@ export default function ProductReceive({ variants, investors, investments = [], 
                         </div>
                         {!isInvestor && (
                             <div className="space-y-2">
-                                <Label>Exchange rate (optional)</Label>
+                                <Label>USD to AFN snapshot (optional)</Label>
                                 <Input
                                     type="number"
                                     min="0"
                                     step="0.01"
                                     value={form.exchange_rate}
                                     onChange={(e) => setForm((prev) => ({ ...prev, exchange_rate: e.target.value }))}
-                                    placeholder="Optional historical note"
+                                    placeholder="AFN per 1 USD, e.g. 70"
                                 />
+                                <p className="text-muted-foreground text-xs">
+                                    Stored on this receipt only if you submit it. It does not rewrite older sales or payments.
+                                    {selected?.usd_to_afn_rate
+                                        ? ` This product’s catalog USD→AFN rate is ${selected.usd_to_afn_rate}.`
+                                        : ''}
+                                </p>
                             </div>
                         )}
                     </div>

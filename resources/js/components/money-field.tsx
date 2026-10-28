@@ -1,7 +1,7 @@
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { currencyLabel, type CatalogCurrency } from '@/lib/currencies';
+import { convertToDefault, currencyLabel, findCurrency, formatAmount, type CatalogCurrency } from '@/lib/currencies';
 
 type Props = {
     label: string;
@@ -56,6 +56,42 @@ export function MoneyField({
                 </Select>
             </div>
             {error ? <p className="text-destructive text-xs">{error}</p> : null}
+            <ConversionHint amount={amount} currencyId={currencyId} currencies={currencies} />
         </div>
     );
+}
+
+function ConversionHint({
+    amount,
+    currencyId,
+    currencies,
+}: {
+    amount: string;
+    currencyId: string;
+    currencies: CatalogCurrency[];
+}) {
+    const value = Number(amount);
+    if (!Number.isFinite(value) || value <= 0) {
+        return null;
+    }
+
+    const from = findCurrency(currencies, currencyId);
+    const afn = currencies.find((row) => row.code === 'AFN');
+    const usd = currencies.find((row) => row.code === 'USD');
+    const bits: string[] = [];
+
+    if (from && afn && from.id !== afn.id) {
+        const converted = convertToDefault(value, from, afn);
+        bits.push(converted === null ? 'AFN conversion unavailable' : `≈ ${formatAmount(converted, afn)} (catalog)`);
+    }
+    if (from && usd && from.id !== usd.id) {
+        const converted = convertToDefault(value, from, usd);
+        bits.push(converted === null ? 'USD conversion unavailable' : `≈ ${formatAmount(converted, usd)} (catalog)`);
+    }
+
+    if (bits.length === 0) {
+        return from ? <p className="text-muted-foreground text-xs">Entered in {from.code}</p> : null;
+    }
+
+    return <p className="text-muted-foreground text-xs">{bits.join(' · ')}. Catalog conversions are not extra revenue.</p>;
 }

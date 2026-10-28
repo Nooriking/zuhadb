@@ -31,8 +31,10 @@ interface Investor {
     status: 'active' | 'inactive';
     investments_count: number;
     withdrawals_count: number;
-    purchase_items_count: number;
+    purchase_rows_count?: number;
+    purchase_items_count?: number;
     batches_count: number;
+    unallocated_capital_afn?: string | number | null;
     wallet: Wallet | null;
     user: { id: number; name: string } | null;
     creator: { id: number; name: string } | null;
@@ -58,6 +60,7 @@ interface Props {
         total_capital: string;
         total_profit_paid: string;
         total_withdrawn: string;
+        total_unallocated?: string | number;
     };
 }
 
@@ -147,8 +150,8 @@ export default function InvestorsIndex({ investors, filters, stats }: Props) {
                     </div>
                 </div>
 
-                {/* Stats Cards */}
-                <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+                {/* Stats Cards — ledger AFN totals from investor_wallets / investments */}
+                <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
                         <div className="flex items-center justify-between">
                             <p className="text-muted-foreground text-xs">Total Investors</p>
@@ -165,10 +168,17 @@ export default function InvestorsIndex({ investors, filters, stats }: Props) {
                     </div>
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
                         <div className="flex items-center justify-between">
-                            <p className="text-muted-foreground text-xs">Total Capital</p>
+                            <p className="text-muted-foreground text-xs">Capital (AFN ledger)</p>
                             <Wallet className="h-4 w-4 text-blue-500" />
                         </div>
                         <p className="mt-1 text-2xl font-bold text-blue-600">{money(stats.total_capital)}</p>
+                    </div>
+                    <div className="rounded-lg border bg-white p-4 shadow-sm">
+                        <div className="flex items-center justify-between">
+                            <p className="text-muted-foreground text-xs">Unallocated (AFN)</p>
+                            <Wallet className="h-4 w-4 text-sky-500" />
+                        </div>
+                        <p className="mt-1 text-2xl font-bold text-sky-600">{money(stats.total_unallocated ?? 0)}</p>
                     </div>
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
                         <div className="flex items-center justify-between">
@@ -216,7 +226,9 @@ export default function InvestorsIndex({ investors, filters, stats }: Props) {
                                 <TableHead>Investor</TableHead>
                                 <TableHead>Phone</TableHead>
                                 <TableHead className="text-right">Capital</TableHead>
+                                <TableHead className="text-right">Unallocated</TableHead>
                                 <TableHead className="text-center">Investments</TableHead>
+                                <TableHead className="text-center">Purchases</TableHead>
                                 <TableHead>Status</TableHead>
                                 <TableHead className="text-center">Actions</TableHead>
                             </TableRow>
@@ -224,7 +236,7 @@ export default function InvestorsIndex({ investors, filters, stats }: Props) {
                         <TableBody>
                             {investors.data.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={7} className="text-muted-foreground h-24 text-center">
+                                    <TableCell colSpan={9} className="text-muted-foreground h-24 text-center">
                                         No investors found.
                                     </TableCell>
                                 </TableRow>
@@ -242,10 +254,18 @@ export default function InvestorsIndex({ investors, filters, stats }: Props) {
                                         <TableCell className="text-right font-mono font-semibold">
                                             {money(investor.wallet?.capital_balance_afn || 0)}
                                         </TableCell>
+                                        <TableCell className="text-right font-mono text-sm text-sky-700">
+                                            {money(investor.unallocated_capital_afn || 0)}
+                                        </TableCell>
                                         <TableCell className="text-center">
                                             <Link href={`/investments?investor_id=${investor.id}`} className="hover:underline">
                                                 <Badge variant="secondary">{investor.investments_count}</Badge>
                                             </Link>
+                                        </TableCell>
+                                        <TableCell className="text-center">
+                                            <Badge variant="outline">
+                                                {investor.purchase_rows_count ?? investor.purchase_items_count ?? 0}
+                                            </Badge>
                                         </TableCell>
                                         <TableCell>
                                             {investor.status === 'active' ? (

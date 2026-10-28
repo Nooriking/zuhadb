@@ -147,6 +147,12 @@ class Investor extends Model
         return $this->hasMany(PurchaseItem::class, 'investor_id');
     }
 
+    /** Purchase rows (products with variant_id) financed via investor_id. */
+    public function purchaseRows(): HasMany
+    {
+        return $this->hasMany(Product::class, 'investor_id')->whereNotNull('variant_id');
+    }
+
     public function batches(): HasMany
     {
         return $this->hasMany(ProductBatch::class, 'investor_id');

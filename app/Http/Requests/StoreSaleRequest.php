@@ -36,7 +36,9 @@ class StoreSaleRequest extends FormRequest
             'items.*.discount_afn' => SafeData::money(false, 0),
 
             'payments' => ['nullable', 'array', 'max:20'],
-            'payments.*.amount_afn' => SafeData::money(true, 0.01),
+            'payments.*.amount_afn' => SafeData::money(false, 0.01),
+            'payments.*.amount' => SafeData::money(false, 0.01),
+            'payments.*.currency_id' => ['nullable', 'integer', Rule::exists('currencies', 'id')->where(fn ($q) => $q->where('trash', false)->where('status', 'active'))],
             'payments.*.payment_method' => ['required_with:payments', Rule::in(['cash', 'card', 'bank', 'mobile', 'credit', 'other'])],
             'payments.*.reference_number' => SafeData::plainText(100),
             'payments.*.notes' => SafeData::plainText(500),

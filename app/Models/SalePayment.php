@@ -16,6 +16,11 @@ class SalePayment extends Model
         'sale_id',
         'customer_id',
         'amount_afn',
+        'currency_id',
+        'currency_code',
+        'amount_currency',
+        'rate_to_ledger',
+        'rate_kind',
         'ledger_currency_code',
         'ledger_currency_symbol',
         'ledger_decimal_places',
@@ -29,6 +34,8 @@ class SalePayment extends Model
 
     protected $casts = [
         'amount_afn'         => 'decimal:2',
+        'amount_currency'    => 'decimal:2',
+        'rate_to_ledger'     => 'decimal:8',
         'ledger_decimal_places' => 'integer',
         'remaining_due_afn'  => 'decimal:2',
         'paid_at'            => 'datetime',
@@ -61,6 +68,11 @@ class SalePayment extends Model
     public function receiver(): BelongsTo
     {
         return $this->belongsTo(User::class, 'received_by');
+    }
+
+    public function currency(): BelongsTo
+    {
+        return $this->belongsTo(Currency::class, 'currency_id');
     }
 
     /* =========================================================

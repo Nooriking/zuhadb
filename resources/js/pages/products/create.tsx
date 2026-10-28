@@ -1,5 +1,6 @@
 import { BackButton } from '@/components/form-page';
 import { MoneyField } from '@/components/money-field';
+import { ProductExchangeRateFields, type ExchangeRateContext } from '@/components/product-exchange-rate-fields';
 import { UnitConversionFields } from '@/components/unit-conversion-fields';
 import { convertToDefault, defaultCurrencyId, findCurrency, type CatalogCurrency } from '@/lib/currencies';
 // resources/js/pages/products/create.tsx
@@ -107,6 +108,9 @@ interface Props {
     investors?: Investor[];
     suppliers?: Supplier[];
     currencies?: CatalogCurrency[];
+    exchangeRateContext?: ExchangeRateContext;
+    usd_to_afn_rate?: string | null;
+    usd_to_aed_rate?: string | null;
     errors?: Record<string, string>;
 }
 
@@ -249,7 +253,16 @@ const calcProfits = (purchasePricePerUnit: number, salePricePerUnit: number, inv
  |  Component
  ═══════════════════════════════════════════════════════ */
 
-export default function ProductsCreate({ brands, investors = [], suppliers = [], currencies = [], errors: initialErrors }: Props) {
+export default function ProductsCreate({
+    brands,
+    investors = [],
+    suppliers = [],
+    currencies = [],
+    exchangeRateContext,
+    usd_to_afn_rate = null,
+    usd_to_aed_rate = null,
+    errors: initialErrors,
+}: Props) {
     const { toast } = useToast();
 
     const ledgerCurrencyId = defaultCurrencyId(currencies);
@@ -263,6 +276,8 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
         base_unit_name: '',
         pack_unit_name: '',
         units_per_pack: '',
+        usd_to_afn_rate: usd_to_afn_rate ? String(usd_to_afn_rate) : '',
+        usd_to_aed_rate: usd_to_aed_rate ? String(usd_to_aed_rate) : '',
     });
 
     const withDefaultCurrency = (variant: Variant): Variant => ({
@@ -635,6 +650,21 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
             clientErrors.name = 'Product name is required';
         }
 
+        const rateFields: Array<['usd_to_afn_rate' | 'usd_to_aed_rate', string]> = [
+            ['usd_to_afn_rate', 'USD to AFN (AFN per 1 USD)'],
+            ['usd_to_aed_rate', 'USD to AED (AED per 1 USD)'],
+        ];
+        rateFields.forEach(([field, label]) => {
+            const raw = form[field].trim();
+            if (raw === '') {
+                return;
+            }
+            const n = toNum(raw);
+            if (n <= 0) {
+                clientErrors[field] = `${label} must be greater than zero.`;
+            }
+        });
+
         variants.forEach((v, i) => {
             if (!v.sale_price_afn || toNum(v.sale_price_afn) < 0 || toNum(v.purchase_price_afn) < 0) {
                 clientErrors[`variants.${i}.sale_price_afn`] = 'Prices cannot be negative.';
@@ -652,8 +682,11 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                 clientErrors[`purchases.${i}.investor_id`] = 'Please select an owner (Shop or an investor)';
             }
 
-            if (toNum(p.exchange_rate) <= 0) {
-                clientErrors[`purchases.${i}.exchange_rate`] = 'USD to AFN rate is required';
+            const purchaseCurrency = findCurrency(currencies, variants[p.variant_index]?.purchase_currency_id || ledgerCurrencyId);
+            const needsAppliedRate = Boolean(purchaseCurrency && purchaseCurrency.code !== 'AFN');
+            if (needsAppliedRate && toNum(p.exchange_rate) <= 0) {
+                clientErrors[`purchases.${i}.exchange_rate`] =
+                    `Enter the actual rate applied: 1 ${purchaseCurrency?.code} = X AFN. Catalog rate is only a default.`;
             }
 
             if (isInvestorPurchase(p.investor_id)) {
@@ -698,6 +731,8 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
         if (form.base_unit_name.trim()) formData.append('base_unit_name', form.base_unit_name.trim());
         if (form.pack_unit_name.trim()) formData.append('pack_unit_name', form.pack_unit_name.trim());
         if (form.units_per_pack.trim()) formData.append('units_per_pack', form.units_per_pack.trim());
+        if (form.usd_to_afn_rate.trim()) formData.append('usd_to_afn_rate', form.usd_to_afn_rate.trim());
+        if (form.usd_to_aed_rate.trim()) formData.append('usd_to_aed_rate', form.usd_to_aed_rate.trim());
 
         variants.forEach((v, i) => {
             if (v.volume_ml) formData.append(`variants[${i}][volume_ml]`, v.volume_ml);
@@ -936,6 +971,14 @@ export default function ProductsCreate({ brands, investors = [], suppliers = [],
                             unitsPerPack={form.units_per_pack}
                             onChange={(field, value) => setForm({ ...form, [field]: value })}
                             errors={errors}
+                        />
+
+                        <ProductExchangeRateFields
+                            usdToAfn={form.usd_to_afn_rate}
+                            usdToAed={form.usd_to_aed_rate}
+                            onChange={(field, value) => setForm({ ...form, [field]: value })}
+                            errors={errors}
+                            context={exchangeRateContext}
                         />
                     </CardContent>
                 </Card>

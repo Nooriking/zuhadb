@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Currency;
 use App\Models\Customer;
 use App\Models\Inventory;
 use App\Models\InvestmentProductAllocation;
@@ -90,7 +91,11 @@ class SaleService
             $data['new_sale_amount_afn'] = $newSaleAmountAfn;
             $data['grand_total_due_afn'] = $grandTotalDueAfn;
 
-            $sale = Sale::create(array_merge($data, $this->currency->ledgerSnapshot()));
+            $sale = Sale::create(array_merge(
+                $data,
+                $this->currency->ledgerSnapshot(),
+                $this->currency->saleUsdSnapshot((string) $data['total_afn']),
+            ));
 
             $totalInvestorProfit = 0.0;
 
@@ -161,15 +166,15 @@ class SaleService
             $paymentIds = [];
 
             foreach ($payments as $payment) {
-                $amountAfn = round((float) $payment['amount_afn'], 2);
+                $resolved = $this->resolvePaymentMoney($payment);
+                $amountAfn = $resolved['amount_afn'];
                 if ($amountAfn <= 0) {
                     continue;
                 }
 
-                $salePayment = SalePayment::create(array_merge($this->currency->ledgerSnapshot(), [
+                $salePayment = SalePayment::create(array_merge($this->currency->ledgerSnapshot(), $resolved, [
                     'sale_id' => $sale->id,
                     'customer_id' => $sale->customer_id,
-                    'amount_afn' => $amountAfn,
                     'remaining_due_afn' => 0,
                     'payment_method' => $payment['payment_method'],
                     'reference_number' => $payment['reference_number'] ?? null,
@@ -255,7 +260,8 @@ class SaleService
     public function addPayment(Sale $sale, array $data, User $actor): Receipt
     {
         $receipt = DB::transaction(function () use ($data, $sale, $actor) {
-            $amountAfn = round((float) $data['amount_afn'], 2);
+            $resolved = $this->resolvePaymentMoney($data);
+            $amountAfn = $resolved['amount_afn'];
 
             $customer = $sale->customer_id
                 ? Customer::whereKey($sale->customer_id)->lockForUpdate()->first()
@@ -275,10 +281,9 @@ class SaleService
             $newSaleRemaining = round(max(0, (float) $sale->remaining_due_afn - $amountAfn), 2);
             $balanceAfter = $customer ? $newCustomerDue : $newSaleRemaining;
 
-            $salePayment = SalePayment::create(array_merge($this->currency->ledgerSnapshot(), [
+            $salePayment = SalePayment::create(array_merge($this->currency->ledgerSnapshot(), $resolved, [
                 'sale_id' => $sale->id,
                 'customer_id' => $sale->customer_id,
-                'amount_afn' => $amountAfn,
                 'remaining_due_afn' => $balanceAfter,
                 'payment_method' => $data['payment_method'],
                 'reference_number' => $data['reference_number'] ?? null,
@@ -495,6 +500,50 @@ class SaleService
                 'investor_profit_afn' => 0,
                 'cost_breakdown' => $breakdown,
             ],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $payment
+     * @return array{
+     *     amount_afn: float,
+     *     amount_currency: float,
+     *     currency_id: int|null,
+     *     currency_code: string|null,
+     *     rate_to_ledger: string,
+     *     rate_kind: string
+     * }
+     */
+    private function resolvePaymentMoney(array $payment): array
+    {
+        $ledger = Currency::ledger();
+        $currencyId = $payment['currency_id'] ?? null;
+        $entered = $payment['amount'] ?? $payment['amount_afn'] ?? 0;
+
+        if (empty($currencyId) || ($ledger && (int) $currencyId === (int) $ledger->id)) {
+            $amount = round((float) $entered, 2);
+
+            return [
+                'amount_afn' => $amount,
+                'amount_currency' => $amount,
+                'currency_id' => $ledger?->id,
+                'currency_code' => $ledger?->code ?? (string) config('business.default_currency', 'AFN'),
+                'rate_to_ledger' => '1.00000000',
+                'rate_kind' => 'ledger',
+            ];
+        }
+
+        $currency = $this->currency->requireActive((int) $currencyId, 'currency_id');
+        $rate = $this->currency->rateToLedger($currency);
+        $afn = (float) $this->currency->toLedger((string) $entered, $currency);
+
+        return [
+            'amount_afn' => round($afn, 2),
+            'amount_currency' => round((float) $entered, 2),
+            'currency_id' => $currency->id,
+            'currency_code' => $currency->code,
+            'rate_to_ledger' => $rate,
+            'rate_kind' => 'catalog',
         ];
     }
 }

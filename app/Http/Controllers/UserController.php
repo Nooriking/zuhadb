@@ -5,6 +5,9 @@ namespace App\Http\Controllers;
 use App\Http\Requests\StoreUserRequest;
 use App\Http\Requests\UpdateUserRequest;
 use App\Models\Branch;
+use App\Models\Expense;
+use App\Models\Product;
+use App\Models\Sale;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -181,13 +184,16 @@ class UserController extends Controller
         $user->load(['branch:id,name,code', 'creator:id,name,email']);
 
         $stats = [
-            'total_sales'     => 0,
-            'total_purchases' => 0,
-            'total_expenses'  => 0,
+            'total_sales'     => (int) Sale::query()->where('created_by', $user->id)->count(),
+            'total_purchases' => (int) Product::query()
+                ->where('user_id', $user->id)
+                ->whereNotNull('variant_id')
+                ->count(),
+            'total_expenses'  => (int) Expense::query()->where('created_by', $user->id)->count(),
         ];
 
         return Inertia::render('users/show', [
-            'user'        => $user,
+            'user'        => $user->makeHidden(['two_factor_secret', 'two_factor_recovery_codes', 'password', 'remember_token']),
             'stats'       => $stats,
             'roles'       => User::ROLE_LABELS,
             'permissions' => $this->buildPermissions($authUser, $user),
@@ -396,11 +402,120 @@ class UserController extends Controller
     }
 
     /* =========================================================
+     |  DESTROY / TRASH / RESTORE / FORCE DELETE
+     ========================================================= */
+
+    public function destroy(User $user): RedirectResponse
+    {
+        /** @var User $authUser */
+        $authUser = Auth::user();
+
+        if (! $authUser->isSuperAdmin()) {
+            abort(403, 'Only Super Admin can delete users.');
+        }
+
+        if ($user->trash) {
+            abort(404);
+        }
+
+        if ($user->id === $authUser->id) {
+            return back()->with('error', 'You cannot delete your own account.');
+        }
+
+        if ($user->isSuperAdmin()) {
+            return back()->with('error', 'Super Admin users cannot be deleted.');
+        }
+
+        $name = $user->name;
+
+        $user->update([
+            'trash'   => true,
+            'user_id' => $authUser->id,
+        ]);
+
+        return redirect()
+            ->route('users.index')
+            ->with('success', "User \"{$name}\" was moved to trash.");
+    }
+
+    public function trash(): Response
+    {
+        /** @var User $authUser */
+        $authUser = Auth::user();
+
+        if (! $authUser->isSuperAdmin()) {
+            abort(403, 'Only Super Admin can view trashed users.');
+        }
+
+        $users = User::onlyTrashed()
+            ->with(['branch:id,name,code'])
+            ->orderByDesc('updated_at')
+            ->paginate(15);
+
+        return Inertia::render('users/trash', [
+            'users' => $users,
+            'roles' => User::ROLE_LABELS,
+        ]);
+    }
+
+    public function restore(int $id): RedirectResponse
+    {
+        /** @var User $authUser */
+        $authUser = Auth::user();
+
+        if (! $authUser->isSuperAdmin()) {
+            abort(403, 'Only Super Admin can restore users.');
+        }
+
+        $user = User::onlyTrashed()->findOrFail($id);
+
+        $user->update([
+            'trash'   => false,
+            'user_id' => $authUser->id,
+        ]);
+
+        return redirect()
+            ->route('users.index')
+            ->with('success', "User \"{$user->name}\" was restored.");
+    }
+
+    public function forceDelete(int $id): RedirectResponse
+    {
+        /** @var User $authUser */
+        $authUser = Auth::user();
+
+        if (! $authUser->isSuperAdmin()) {
+            abort(403, 'Only Super Admin can permanently delete users.');
+        }
+
+        $user = User::onlyTrashed()->findOrFail($id);
+
+        if ($user->id === $authUser->id) {
+            return back()->with('error', 'You cannot delete your own account.');
+        }
+
+        if ($user->isSuperAdmin()) {
+            return back()->with('error', 'Super Admin users cannot be permanently deleted.');
+        }
+
+        $name = $user->name;
+        $user->forceDelete();
+
+        return redirect()
+            ->route('users.index')
+            ->with('success', "User \"{$name}\" was permanently deleted.");
+    }
+
+    /* =========================================================
      |  ⭐ PERMISSIONS BUILDER
      ========================================================= */
 
     protected function buildPermissions(User $authUser, ?User $targetUser = null): array
     {
+        $canManageTarget = $targetUser
+            ? ($authUser->isSuperAdmin() || $authUser->canManageUser($targetUser) || $authUser->id === $targetUser->id)
+            : null;
+
         return [
             // Users
             'users_view'         => $authUser->canAccessUsers(),
@@ -424,10 +539,17 @@ class UserController extends Controller
             'can_create_users'    => $authUser->canCreateUsers(),
             'can_manage_branches' => $authUser->canManageBranches(),
 
-            // Target-specific
-            'can_manage_target'  => $targetUser ? $authUser->canManageUser($targetUser) : null,
+            // Target-specific (and show-page aliases)
+            'can_manage_target'  => $canManageTarget,
             'can_block_target'   => $targetUser ? $authUser->canBlockTarget($targetUser) : null,
             'can_unblock_target' => $targetUser ? $authUser->canUnblockTarget($targetUser) : null,
+            'can_edit'           => $targetUser
+                ? ($authUser->canUpdateUsers() && ($authUser->isSuperAdmin() || $authUser->canManageUser($targetUser)))
+                : $authUser->canUpdateUsers(),
+            'can_delete'         => $authUser->isSuperAdmin()
+                && $targetUser
+                && $targetUser->id !== $authUser->id
+                && ! $targetUser->isSuperAdmin(),
         ];
     }
 }

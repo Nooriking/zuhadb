@@ -481,6 +481,8 @@ class ProfitReportController extends Controller
             'sales' => $this->buildSalesSection($f),
             'products' => $this->buildProductsSection($f),
             'investors' => $this->buildInvestorsSection($f),
+            'reporting' => $this->reportingMeta(),
+            'purchases_by_currency' => $this->purchasesByCurrency($f),
         ];
     }
 
@@ -515,7 +517,53 @@ class ProfitReportController extends Controller
             'total_quantity' => $quantity,
             'total_orders' => $m['orders'],
             'customers' => (int) ($row->customers ?? 0),
+            'currency_code' => (string) config('business.default_currency', 'AFN'),
+            'currency_note' => 'Totals are ledger AFN. USD equivalents are conversions, not extra revenue. Original purchase currencies are listed separately and are never added together.',
         ];
+    }
+
+    /**
+     * @return array{ledger_code: string, default_code: string|null, rate_direction: string}
+     */
+    private function reportingMeta(): array
+    {
+        $ledger = \App\Models\Currency::ledger();
+        $default = \App\Models\Currency::getDefault();
+
+        return [
+            'ledger_code' => $ledger?->code ?? (string) config('business.default_currency', 'AFN'),
+            'default_code' => $default?->code,
+            'rate_direction' => 'Catalog: 1 unit of a currency = rate_to_default units of the default currency. Purchase snapshots: 1 unit of the purchase currency = rate_to_ledger AFN. Completed sales store a catalog USD snapshot and do not change when later rates change.',
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $f
+     * @return list<array{code: string, total: string, kind: string}>
+     */
+    private function purchasesByCurrency(array $f): array
+    {
+        if (! \Illuminate\Support\Facades\Schema::hasColumn('products', 'purchase_line_amount')) {
+            return [];
+        }
+
+        return \App\Models\Product::query()
+            ->whereNotNull('variant_id')
+            ->where('trash', false)
+            ->whereBetween('purchase_date', [$f['from'], $f['to']])
+            ->when($f['branch_id'], function ($query) {
+                // Purchase rows are not branch-scoped; skip mixing branch filters into original-currency totals.
+            })
+            ->selectRaw("COALESCE(purchase_currency_code, 'AFN') as code, SUM(COALESCE(purchase_line_amount, purchase_price_afn)) as total")
+            ->groupBy('code')
+            ->get()
+            ->map(fn ($row) => [
+                'code' => (string) $row->code,
+                'total' => number_format((float) $row->total, 2, '.', ''),
+                'kind' => 'original',
+            ])
+            ->values()
+            ->all();
     }
 
     private function buildBreakdown(array $f): array

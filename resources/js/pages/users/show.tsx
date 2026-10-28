@@ -20,8 +20,10 @@ interface User {
     phone: string | null;
     role: string;
     status: 'active' | 'inactive' | 'blocked';
-    employee_code: string | null;
-    avatar: string | null;
+    employee_code?: string | null;
+    avatar?: string | null;
+    two_factor_enabled?: boolean;
+    email_verified_at?: string | null;
     last_login_at: string | null;
     created_at: string;
     updated_at: string;
@@ -42,9 +44,13 @@ interface Props {
     stats: Stats;
     roles: RoleLabels;
     permissions: {
-        can_edit: boolean;
-        can_block?: boolean;
+        can_edit?: boolean;
         can_delete?: boolean;
+        can_block_target?: boolean | null;
+        can_unblock_target?: boolean | null;
+        users_update?: boolean;
+        users_block?: boolean;
+        users_unblock?: boolean;
         is_super_admin?: boolean;
         is_branch_manager?: boolean;
     };
@@ -59,6 +65,11 @@ export default function UsersShow({ user, stats, roles, permissions }: Props) {
 
     const [showBlockModal, setShowBlockModal] = useState(false);
     const [showUnblockModal, setShowUnblockModal] = useState(false);
+
+    const canEdit = Boolean(permissions.can_edit ?? permissions.users_update);
+    const canBlock = Boolean(permissions.can_block_target ?? permissions.users_block) && user.status !== 'blocked';
+    const canUnblock = Boolean(permissions.can_unblock_target ?? permissions.users_unblock) && user.status === 'blocked';
+    const canDelete = Boolean(permissions.can_delete);
 
     /* =========================================================
      |  Breadcrumbs
@@ -201,8 +212,7 @@ export default function UsersShow({ user, stats, roles, permissions }: Props) {
 
                     {/* ───────── Action Buttons ───────── */}
                     <div className="flex flex-wrap gap-2">
-                        {/* ⭐ Block Button */}
-                        {permissions.can_edit && user.status !== 'blocked' && (
+                        {canBlock && (
                             <Button
                                 variant="outline"
                                 className="gap-2 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20"
@@ -213,8 +223,7 @@ export default function UsersShow({ user, stats, roles, permissions }: Props) {
                             </Button>
                         )}
 
-                        {/* ⭐ Unblock Button */}
-                        {permissions.can_edit && user.status === 'blocked' && (
+                        {canUnblock && (
                             <Button
                                 variant="outline"
                                 className="gap-2 border-emerald-200 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 dark:border-emerald-800 dark:text-emerald-400 dark:hover:bg-emerald-900/20"
@@ -225,13 +234,25 @@ export default function UsersShow({ user, stats, roles, permissions }: Props) {
                             </Button>
                         )}
 
-                        {/* ⭐ Edit Button */}
-                        {permissions.can_edit && (
+                        {canEdit && (
                             <Link href={`/users/${user.id}/edit`}>
                                 <Button variant="outline" className="gap-2">
                                     <Edit className="h-4 w-4" /> Edit
                                 </Button>
                             </Link>
+                        )}
+
+                        {canDelete && (
+                            <Button
+                                variant="outline"
+                                className="gap-2 border-red-200 text-red-600 hover:bg-red-50"
+                                onClick={() => {
+                                    if (!window.confirm(`Move "${user.name}" to trash?`)) return;
+                                    router.delete(`/users/${user.id}`, { preserveScroll: true });
+                                }}
+                            >
+                                <Lock className="h-4 w-4" /> Trash
+                            </Button>
                         )}
 
                         <Link href="/users">
@@ -340,6 +361,17 @@ export default function UsersShow({ user, stats, roles, permissions }: Props) {
                                 <div>
                                     <p className="text-sm text-gray-500 dark:text-gray-400">Last Updated</p>
                                     <p className="text-sm">{formatDate(user.updated_at)}</p>
+                                </div>
+                                <div>
+                                    <p className="text-sm text-gray-500 dark:text-gray-400">Email verified</p>
+                                    <p className="text-sm">{formatDate(user.email_verified_at ?? null)}</p>
+                                </div>
+                                <div>
+                                    <p className="text-sm text-gray-500 dark:text-gray-400">Two-factor authentication</p>
+                                    <p className="text-sm font-medium">
+                                        {user.two_factor_enabled ? 'Enabled' : 'Disabled'}
+                                        <span className="ml-2 text-xs text-gray-500">(read-only; managed in Settings)</span>
+                                    </p>
                                 </div>
                             </div>
                         </div>

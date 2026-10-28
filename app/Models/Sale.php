@@ -31,6 +31,9 @@ class Sale extends Model
         'ledger_currency_code',
         'ledger_currency_symbol',
         'ledger_decimal_places',
+        'usd_to_ledger_rate',
+        'usd_equivalent_amount',
+        'fx_rate_kind',
 
         // Due Flow
         'previous_due_afn',
@@ -71,6 +74,8 @@ class Sale extends Model
         'discount_afn'               => 'decimal:2',
         'total_afn'                  => 'decimal:2',
         'ledger_decimal_places'      => 'integer',
+        'usd_to_ledger_rate'         => 'decimal:8',
+        'usd_equivalent_amount'      => 'decimal:2',
 
         'previous_due_afn'           => 'decimal:2',
         'new_sale_amount_afn'        => 'decimal:2',

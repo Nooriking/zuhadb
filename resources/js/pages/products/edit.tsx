@@ -1,6 +1,7 @@
 // resources/js/pages/products/edit.tsx
 
 import { MoneyField } from '@/components/money-field';
+import { ProductExchangeRateFields, type ExchangeRateContext } from '@/components/product-exchange-rate-fields';
 import { UnitConversionFields } from '@/components/unit-conversion-fields';
 import { defaultCurrencyId, type CatalogCurrency } from '@/lib/currencies';
 import { Badge } from '@/components/ui/badge';
@@ -164,6 +165,9 @@ interface Props {
     investors?: Investor[];
     suppliers?: Supplier[];
     currencies?: CatalogCurrency[];
+    exchangeRateContext?: ExchangeRateContext;
+    usd_to_afn_rate?: string | null;
+    usd_to_aed_rate?: string | null;
     errors?: Record<string, string>;
 }
 
@@ -329,6 +333,9 @@ export default function ProductsEdit({
     investors = [],
     suppliers = [],
     currencies = [],
+    exchangeRateContext,
+    usd_to_afn_rate = null,
+    usd_to_aed_rate = null,
     errors: initialErrors,
 }: Props) {
     const { toast } = useToast();
@@ -350,6 +357,8 @@ export default function ProductsEdit({
         base_unit_name: product.base_unit_name || '',
         pack_unit_name: product.pack_unit_name || '',
         units_per_pack: product.units_per_pack != null ? String(product.units_per_pack) : '',
+        usd_to_afn_rate: usd_to_afn_rate ? String(usd_to_afn_rate) : '',
+        usd_to_aed_rate: usd_to_aed_rate ? String(usd_to_aed_rate) : '',
     });
 
     const ledgerCurrencyId = defaultCurrencyId(currencies);
@@ -748,6 +757,21 @@ export default function ProductsEdit({
             clientErrors.name = 'Product name is required';
         }
 
+        const rateFields: Array<['usd_to_afn_rate' | 'usd_to_aed_rate', string]> = [
+            ['usd_to_afn_rate', 'USD to AFN (AFN per 1 USD)'],
+            ['usd_to_aed_rate', 'USD to AED (AED per 1 USD)'],
+        ];
+        rateFields.forEach(([field, label]) => {
+            const raw = form[field].trim();
+            if (raw === '') {
+                return;
+            }
+            const n = toNum(raw);
+            if (n <= 0) {
+                clientErrors[field] = `${label} must be greater than zero.`;
+            }
+        });
+
         variants.forEach((v, i) => {
             if (!v.sale_price_afn || toNum(v.sale_price_afn) < 0 || toNum(v.purchase_price_afn) < 0) {
                 clientErrors[`variants.${i}.sale_price_afn`] = 'Prices cannot be negative.';
@@ -794,6 +818,8 @@ export default function ProductsEdit({
         if (form.base_unit_name.trim()) formData.append('base_unit_name', form.base_unit_name.trim());
         if (form.pack_unit_name.trim()) formData.append('pack_unit_name', form.pack_unit_name.trim());
         if (form.units_per_pack.trim()) formData.append('units_per_pack', form.units_per_pack.trim());
+        if (form.usd_to_afn_rate.trim()) formData.append('usd_to_afn_rate', form.usd_to_afn_rate.trim());
+        if (form.usd_to_aed_rate.trim()) formData.append('usd_to_aed_rate', form.usd_to_aed_rate.trim());
 
         // Variants
         variants.forEach((v, i) => {
@@ -1025,6 +1051,14 @@ export default function ProductsEdit({
                             unitsPerPack={form.units_per_pack}
                             onChange={(field, value) => setForm({ ...form, [field]: value })}
                             errors={errors}
+                        />
+
+                        <ProductExchangeRateFields
+                            usdToAfn={form.usd_to_afn_rate}
+                            usdToAed={form.usd_to_aed_rate}
+                            onChange={(field, value) => setForm({ ...form, [field]: value })}
+                            errors={errors}
+                            context={exchangeRateContext}
                         />
                     </CardContent>
                 </Card>

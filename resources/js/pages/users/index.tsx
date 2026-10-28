@@ -9,7 +9,8 @@ import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
-import { Building2, Edit, Eye, Lock, Plus, Shield, ToggleLeft, ToggleRight, Users, X } from 'lucide-react';
+import { softDeleteItem } from '@/lib/trash-actions';
+import { Building2, Edit, Eye, Lock, Plus, Shield, ToggleLeft, ToggleRight, Trash2, Users, X } from 'lucide-react';
 import { useState } from 'react';
 
 /* =========================================================
@@ -282,7 +283,13 @@ export default function UsersIndex({ users, branches, roles, filters, permission
                         </Badge>
                     </div>
                     <div className="flex gap-2">
-                        {/* ❌ دکمه Trash حذف شد */}
+                        {permissions.is_super_admin && (
+                            <Link href="/users/trash">
+                                <Button variant="outline" className="gap-2">
+                                    <Trash2 className="h-4 w-4" /> Trash
+                                </Button>
+                            </Link>
+                        )}
 
                         {permissions.users_create && (
                             <Link href="/users/create">
@@ -441,6 +448,18 @@ export default function UsersIndex({ users, branches, roles, filters, permission
                                                 {canUnblockUser(user) && (
                                                     <Button variant="ghost" size="icon" title="Unblock User" onClick={() => setUserToUnblock(user)}>
                                                         <ToggleRight className="h-4 w-4 text-green-600" />
+                                                    </Button>
+                                                )}
+
+                                                {permissions.is_super_admin && user.role !== 'super_admin' && (
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        title="Move to Trash"
+                                                        className="text-destructive hover:text-destructive"
+                                                        onClick={() => void softDeleteItem(user.name, `/users/${user.id}`)}
+                                                    >
+                                                        <Trash2 className="h-4 w-4" />
                                                     </Button>
                                                 )}
                                             </div>

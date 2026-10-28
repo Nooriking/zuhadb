@@ -42,6 +42,13 @@ class Product extends Model
         'invoice_number',
         'purchase_date',
         'exchange_rate',
+        'purchase_currency_id',
+        'purchase_currency_code',
+        'purchase_currency_symbol',
+        'purchase_unit_amount',
+        'purchase_line_amount',
+        'rate_to_ledger',
+        'rate_kind',
         'quantity',
         'remaining_quantity',
         'purchase_price_afn',
@@ -72,7 +79,10 @@ class Product extends Model
     protected $casts = [
         'trash'                  => 'boolean',
         'purchase_date'          => 'date',
-        'exchange_rate'          => 'decimal:4',
+        'exchange_rate'          => 'decimal:8',
+        'purchase_unit_amount'   => 'decimal:2',
+        'purchase_line_amount'   => 'decimal:2',
+        'rate_to_ledger'         => 'decimal:8',
         'quantity'               => 'integer',
         'remaining_quantity'     => 'integer',
         'purchase_price_afn'     => 'decimal:2',
@@ -130,9 +140,23 @@ class Product extends Model
         return $this->belongsTo(Supplier::class, 'supplier_id');
     }
 
+    public function purchaseCurrency(): BelongsTo
+    {
+        return $this->belongsTo(Currency::class, 'purchase_currency_id');
+    }
+
     public function variants(): HasMany
     {
         return $this->hasMany(ProductVariant::class, 'product_id');
+    }
+
+    /**
+     * Per-product USD pair rates (catalog product only). Independent of
+     * purchase-row exchange_rate snapshots and of currencies.rate_to_default.
+     */
+    public function exchangeRates(): HasMany
+    {
+        return $this->hasMany(ProductExchangeRate::class, 'product_id');
     }
 
     public function activeVariants(): HasMany
