@@ -10,17 +10,25 @@ interface DataPoint {
 
 interface Props {
     data: DataPoint[];
+    currencyCode?: string;
 }
 
 const COLORS = ['#d4af37', '#0284c7', '#8a6a2f', '#0f766e', '#c4a35a'];
 
-export default function PaymentPie({ data }: Props) {
+export default function PaymentPie({ data, currencyCode }: Props) {
+    const safeData = data ?? [];
+    const suffix = currencyCode ? ` ${currencyCode}` : '';
+
+    if (safeData.length === 0) {
+        return <div className="text-muted-foreground flex h-72 items-center justify-center text-sm">No payment data in this period.</div>;
+    }
+
     return (
         <LazyChart height="h-72">
             <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                     <Pie
-                        data={data}
+                        data={safeData}
                         dataKey="value"
                         nameKey="name"
                         cx="50%"
@@ -29,7 +37,7 @@ export default function PaymentPie({ data }: Props) {
                         label={(entry) => entry.name}
                         labelLine={false}
                     >
-                        {data.map((_, i) => (
+                        {safeData.map((_, i) => (
                             <Cell key={i} fill={COLORS[i % COLORS.length]} />
                         ))}
                     </Pie>
@@ -41,7 +49,7 @@ export default function PaymentPie({ data }: Props) {
                             fontSize: '12px',
                             color: 'var(--popover-foreground)',
                         }}
-                        formatter={(value: number) => [new Intl.NumberFormat('en-US').format(value) + ' AFN', 'Amount']}
+                        formatter={(value: number) => [new Intl.NumberFormat('en-US').format(value) + suffix, 'Amount']}
                     />
                     <Legend wrapperStyle={{ fontSize: '12px', color: 'var(--foreground)' }} iconType="circle" />
                 </PieChart>

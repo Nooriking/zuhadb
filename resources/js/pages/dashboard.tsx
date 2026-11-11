@@ -6,10 +6,12 @@ import { Head, Link, router } from '@inertiajs/react';
 import { AlertTriangle, Boxes, DollarSign, Package, ShoppingBag, ShoppingCart, Store, TrendingUp, UserCircle, Users, Wallet } from 'lucide-react';
 import { lazy, Suspense, useState } from 'react';
 
+import CurrencyNote, { type DashboardReporting } from '@/components/dashboard/currency-note';
 import KpiCard from '@/components/dashboard/kpi-card';
 import LowStock from '@/components/dashboard/low-stock';
 import RecentSales from '@/components/dashboard/recent-sales';
 import { LazyInView } from '@/components/lazy-in-view';
+import { formatMoney } from '@/lib/money';
 
 const SalesChart = lazy(() => import('@/components/dashboard/sales-chart'));
 const BrandPie = lazy(() => import('@/components/dashboard/brand-pie'));
@@ -64,6 +66,8 @@ interface TopProduct {
     total_qty: number;
     total_sales: number;
     total_profit: number;
+    total_sales_ledger?: number;
+    total_profit_ledger?: number;
 }
 
 interface BranchStat {
@@ -80,6 +84,12 @@ interface PaymentMethod {
     value: number;
 }
 
+interface PaymentCurrencyTotal {
+    code: string;
+    symbol?: string | null;
+    total: number;
+}
+
 interface ActivityItem {
     id: number;
     section: string;
@@ -93,6 +103,8 @@ interface RecentSale {
     id: number;
     invoice_number: string;
     total_afn: number;
+    total_ledger?: number;
+    ledger_currency_code?: string | null;
     payment_status: string;
     status: string;
     sale_date: string | null;
@@ -110,7 +122,6 @@ interface LowStockItem {
     min_stock: number;
 }
 
-/* ✅ Store Assets types */
 interface StoreAssetsSummary {
     total_items: number;
     total_qty: number;
@@ -154,12 +165,21 @@ interface Props {
     topProducts: TopProduct[];
     branchStats: BranchStat[];
     paymentMethods: PaymentMethod[];
+    paymentCurrencyTotals?: PaymentCurrencyTotal[];
     counters: Counters;
     recentSales: RecentSale[];
     recentActivity?: ActivityItem[];
     lowStockItems: LowStockItem[];
-    dueCustomers: { id: number; name: string; phone: string | null; current_due_afn: number; due_date: string | null }[];
+    dueCustomers: {
+        id: number;
+        name: string;
+        phone: string | null;
+        current_due_afn: number;
+        current_due_ledger?: number;
+        due_date: string | null;
+    }[];
     storeAssets?: StoreAssets;
+    reporting: DashboardReporting;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -168,7 +188,12 @@ interface Props {
 
 const breadcrumbs: BreadcrumbItem[] = [{ title: 'Dashboard', href: '/dashboard' }];
 
-const formatPrice = (v: number) => new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(v);
+const FALLBACK_REPORTING: DashboardReporting = {
+    currency: { code: 'AFN', name: 'Afghan Afghani', symbol: '؋', decimal_places: 2 },
+    ledger: { code: 'AFN', name: 'Afghan Afghani', symbol: '؋', decimal_places: 2 },
+    conversion_available: true,
+    converts_from_ledger: false,
+};
 
 /* ═══════════════════════════════════════════════════════
  |  Component
@@ -182,14 +207,20 @@ export default function Dashboard({
     topProducts,
     branchStats,
     paymentMethods,
+    paymentCurrencyTotals = [],
     counters,
     recentSales,
     recentActivity = [],
     lowStockItems,
     dueCustomers = [],
     storeAssets,
+    reporting = FALLBACK_REPORTING,
 }: Props) {
     const [range, setRange] = useState(days);
+    const currency = reporting.currency;
+    const currencyCode = currency.code;
+    const money = (value: number) => formatMoney(value, currency);
+    const showPaymentBuckets = paymentCurrencyTotals.length > 1 || (!reporting.conversion_available && paymentCurrencyTotals.length > 0);
 
     const changeRange = (newDays: number) => {
         setRange(newDays);
@@ -206,6 +237,9 @@ export default function Dashboard({
                     <div>
                         <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
                         <p className="text-muted-foreground text-sm">Overview of your perfume business</p>
+                        <div className="mt-2">
+                            <CurrencyNote reporting={reporting} originalCurrencyTotals={paymentCurrencyTotals} />
+                        </div>
                     </div>
 
                     <div className="bg-card flex gap-1 rounded-md border p-1">
@@ -229,28 +263,28 @@ export default function Dashboard({
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <KpiCard
                         title="Today Sales"
-                        value={`${formatPrice(kpis.today_sales)} AFN`}
+                        value={money(kpis.today_sales)}
                         subtitle={`${kpis.today_orders} completed orders`}
                         icon={ShoppingBag}
                         color="blue"
                     />
                     <KpiCard
                         title="Collected Today"
-                        value={`${formatPrice(kpis.today_collected)} AFN`}
+                        value={money(kpis.today_collected)}
                         subtitle="Payments received today"
                         icon={Wallet}
                         color="green"
                     />
                     <KpiCard
                         title="Today Profit"
-                        value={`${formatPrice(kpis.today_profit)} AFN`}
+                        value={money(kpis.today_profit)}
                         subtitle="Store profit after investor share"
                         icon={TrendingUp}
                         color="green"
                     />
                     <KpiCard
                         title="Customer Due"
-                        value={`${formatPrice(kpis.outstanding_due)} AFN`}
+                        value={money(kpis.outstanding_due)}
                         subtitle="Money customers still owe"
                         icon={AlertTriangle}
                         color={kpis.outstanding_due > 0 ? 'red' : 'green'}
@@ -260,7 +294,7 @@ export default function Dashboard({
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <KpiCard
                         title="Month Sales"
-                        value={`${formatPrice(kpis.month_sales)} AFN`}
+                        value={money(kpis.month_sales)}
                         subtitle="Completed sales this month"
                         icon={DollarSign}
                         color="purple"
@@ -275,26 +309,45 @@ export default function Dashboard({
                     />
                     <KpiCard
                         title="Month Profit"
-                        value={`${formatPrice(kpis.month_profit)} AFN`}
+                        value={money(kpis.month_profit)}
                         subtitle="Store profit this month"
                         icon={TrendingUp}
                         color="green"
                     />
                     <KpiCard
                         title="Month Expenses"
-                        value={`${formatPrice(kpis.month_expenses)} AFN`}
+                        value={money(kpis.month_expenses)}
                         subtitle="Recorded expenses"
                         icon={ShoppingCart}
                         color="orange"
                     />
                     <KpiCard
                         title="Month Net"
-                        value={`${formatPrice(kpis.month_net)} AFN`}
+                        value={money(kpis.month_net)}
                         subtitle="Store profit − expenses"
                         icon={Wallet}
                         color={kpis.month_net >= 0 ? 'green' : 'red'}
                     />
                 </div>
+
+                {showPaymentBuckets && (
+                    <div className="bg-card rounded-lg border p-4 shadow-sm">
+                        <h3 className="text-sm font-semibold">Collected by original payment currency</h3>
+                        <p className="text-muted-foreground mb-3 text-xs">
+                            Tender amounts from payment snapshots for the selected {days}-day period (not recalculated with today&apos;s rate)
+                        </p>
+                        <div className="flex flex-wrap gap-3">
+                            {paymentCurrencyTotals.map((row) => (
+                                <div key={row.code} className="rounded-md border px-3 py-2 text-sm">
+                                    <span className="font-mono font-semibold">
+                                        {row.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </span>{' '}
+                                    <span className="text-muted-foreground">{row.symbol || row.code}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 {/* ═══════════ KPI Cards Row 2 — Counters ═══════════ */}
                 <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
@@ -312,7 +365,7 @@ export default function Dashboard({
                         <div className="flex items-center justify-between">
                             <div>
                                 <p className="text-muted-foreground text-xs font-medium uppercase">Total Stock</p>
-                                <p className="mt-2 text-2xl font-bold">{formatPrice(counters.total_stock)}</p>
+                                <p className="mt-2 text-2xl font-bold">{counters.total_stock.toLocaleString()}</p>
                                 <p className="text-muted-foreground mt-1 text-xs">Units in inventory</p>
                             </div>
                             <div className="flex h-11 w-11 items-center justify-center rounded-full bg-blue-100 ring-2 ring-blue-200 dark:bg-blue-950 dark:ring-blue-900">
@@ -348,7 +401,7 @@ export default function Dashboard({
                     </div>
                 </div>
 
-                {/* ═══════════ ✅ Store Assets (دارایی‌های دوکان) ═══════════ */}
+                {/* ═══════════ Store Assets ═══════════ */}
                 {storeAssets && (
                     <div className="bg-card rounded-lg border shadow-sm">
                         <div className="border-b px-6 py-4">
@@ -369,9 +422,7 @@ export default function Dashboard({
                         </div>
 
                         <div className="p-6">
-                            {/* Summary KPI cards */}
                             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-                                {/* Total Items */}
                                 <div className="rounded-lg border bg-gradient-to-br from-blue-50 to-blue-100/50 p-4 dark:from-blue-950/40 dark:to-blue-900/20">
                                     <div className="flex items-center gap-2 text-xs font-medium text-blue-800 uppercase dark:text-blue-400">
                                         <Package className="h-3.5 w-3.5" /> Items
@@ -382,52 +433,47 @@ export default function Dashboard({
                                     </p>
                                 </div>
 
-                                {/* Stock Value */}
                                 <div className="rounded-lg border bg-gradient-to-br from-slate-50 to-slate-100/50 p-4 dark:from-slate-950/40 dark:to-slate-900/20">
                                     <div className="flex items-center gap-2 text-xs font-medium text-slate-700 uppercase dark:text-slate-400">
                                         <DollarSign className="h-3.5 w-3.5" /> Stock Value
                                     </div>
                                     <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-300">
-                                        {formatPrice(storeAssets.summary.remaining_cost_afn)}
+                                        {money(storeAssets.summary.remaining_cost_afn)}
                                     </p>
-                                    <p className="text-xs text-slate-600 dark:text-slate-500">AFN at cost</p>
+                                    <p className="text-xs text-slate-600 dark:text-slate-500">At cost</p>
                                 </div>
 
-                                {/* Expected Profit */}
                                 <div className="rounded-lg border bg-gradient-to-br from-emerald-50 to-emerald-100/50 p-4 dark:from-emerald-950/40 dark:to-emerald-900/20">
                                     <div className="flex items-center gap-2 text-xs font-medium text-emerald-800 uppercase dark:text-emerald-400">
                                         <TrendingUp className="h-3.5 w-3.5" /> Expected
                                     </div>
                                     <p className="mt-2 text-2xl font-bold text-emerald-900 dark:text-emerald-300">
-                                        {formatPrice(storeAssets.summary.expected_profit_afn)}
+                                        {money(storeAssets.summary.expected_profit_afn)}
                                     </p>
                                     <p className="text-xs text-emerald-700 dark:text-emerald-500">If all stock sells</p>
                                 </div>
 
-                                {/* Realized Profit */}
                                 <div className="rounded-lg border bg-gradient-to-br from-amber-50 to-amber-100/50 p-4 dark:from-amber-950/40 dark:to-amber-900/20">
                                     <div className="flex items-center gap-2 text-xs font-medium text-amber-800 uppercase dark:text-amber-400">
                                         <ShoppingCart className="h-3.5 w-3.5" /> Realized
                                     </div>
                                     <p className="mt-2 text-2xl font-bold text-amber-900 dark:text-amber-300">
-                                        {formatPrice(storeAssets.summary.realized_profit_afn)}
+                                        {money(storeAssets.summary.realized_profit_afn)}
                                     </p>
                                     <p className="text-xs text-amber-700 dark:text-amber-500">{storeAssets.summary.realized_qty} pcs sold</p>
                                 </div>
 
-                                {/* Total Profit */}
                                 <div className="rounded-lg border bg-gradient-to-br from-violet-50 to-violet-100/50 p-4 dark:from-violet-950/40 dark:to-violet-900/20">
                                     <div className="flex items-center gap-2 text-xs font-medium text-violet-800 uppercase dark:text-violet-400">
                                         <Wallet className="h-3.5 w-3.5" /> Total Profit
                                     </div>
                                     <p className="mt-2 text-2xl font-bold text-violet-900 dark:text-violet-300">
-                                        {formatPrice(storeAssets.summary.total_profit_afn)}
+                                        {money(storeAssets.summary.total_profit_afn)}
                                     </p>
                                     <p className="text-xs text-violet-700 dark:text-violet-500">Realized + expected</p>
                                 </div>
                             </div>
 
-                            {/* Items table */}
                             {storeAssets.items.length === 0 ? (
                                 <div className="text-muted-foreground mt-6 py-8 text-center text-sm">
                                     <Package className="mx-auto mb-2 h-8 w-8 opacity-40" />
@@ -464,19 +510,19 @@ export default function Dashboard({
                                                         <div className="font-medium">{item.name}</div>
                                                         <div className="text-muted-foreground font-mono text-xs">{item.batch_code}</div>
                                                     </td>
-                                                    <td className="px-4 py-3 text-right font-mono text-xs">{formatPrice(item.unit_cost_afn)}</td>
+                                                    <td className="px-4 py-3 text-right font-mono text-xs">{money(item.unit_cost_afn)}</td>
                                                     <td className="px-4 py-3 text-right font-mono text-xs text-green-700">
-                                                        {formatPrice(item.sale_price_afn)}
+                                                        {money(item.sale_price_afn)}
                                                     </td>
                                                     <td className="px-4 py-3 text-right font-mono">
                                                         <span className="font-semibold">{item.remaining}</span>
                                                         <span className="text-muted-foreground text-xs"> / {item.quantity}</span>
                                                     </td>
                                                     <td className="px-4 py-3 text-right font-mono font-semibold">
-                                                        {formatPrice(item.remaining_cost_afn)}
+                                                        {money(item.remaining_cost_afn)}
                                                     </td>
                                                     <td className="px-4 py-3 text-right font-mono font-semibold text-emerald-700">
-                                                        {formatPrice(item.expected_profit_afn)}
+                                                        {money(item.expected_profit_afn)}
                                                     </td>
                                                     <td className="text-muted-foreground px-4 py-3 text-xs">{item.received_date || '—'}</td>
                                                 </tr>
@@ -522,7 +568,16 @@ export default function Dashboard({
                                                 </Link>
                                                 {customer.phone && <div className="text-muted-foreground text-xs">{customer.phone}</div>}
                                             </td>
-                                            <td className="py-2 text-right font-mono">{formatPrice(customer.current_due_afn)} AFN</td>
+                                            <td className="py-2 text-right font-mono">
+                                                <div>{money(customer.current_due_afn)}</div>
+                                                {customer.current_due_ledger !== undefined &&
+                                                    reporting.converts_from_ledger &&
+                                                    reporting.conversion_available && (
+                                                        <div className="text-muted-foreground text-xs">
+                                                            {formatMoney(customer.current_due_ledger, reporting.ledger)}
+                                                        </div>
+                                                    )}
+                                            </td>
                                             <td className="py-2">{customer.due_date || '—'}</td>
                                         </tr>
                                     ))}
@@ -537,12 +592,14 @@ export default function Dashboard({
                     <div className="mb-4 flex items-center justify-between">
                         <div>
                             <h3 className="text-lg font-semibold">Sales & Profit Trend</h3>
-                            <p className="text-muted-foreground text-sm">Completed sales and store profit for the last {days} days</p>
+                            <p className="text-muted-foreground text-sm">
+                                Completed sales and store profit for the last {days} days ({currencyCode})
+                            </p>
                         </div>
                     </div>
                     <LazyInView minHeight={280}>
                         <Suspense fallback={<div className="bg-muted/40 h-[280px] animate-pulse rounded-xl" />}>
-                            <SalesChart data={salesTrend} />
+                            <SalesChart data={salesTrend} currencyCode={currencyCode} />
                         </Suspense>
                     </LazyInView>
                 </div>
@@ -550,19 +607,22 @@ export default function Dashboard({
                 {/* ═══════════ Charts Row: Brand + Payment ═══════════ */}
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                     <div className="bg-card rounded-lg border p-6 shadow-sm">
-                        <h3 className="mb-4 text-lg font-semibold">Sales by Brand</h3>
+                        <h3 className="mb-1 text-lg font-semibold">Sales by Brand</h3>
+                        <p className="text-muted-foreground mb-4 text-sm">Reporting currency: {currencyCode}</p>
                         <LazyInView minHeight={280}>
                             <Suspense fallback={<div className="bg-muted/40 h-[280px] animate-pulse rounded-xl" />}>
-                                <BrandPie data={brandSales} />
+                                <BrandPie data={brandSales} currencyCode={currencyCode} />
                             </Suspense>
                         </LazyInView>
                     </div>
                     <div className="bg-card rounded-lg border p-6 shadow-sm">
                         <h3 className="text-lg font-semibold">Payments & Due</h3>
-                        <p className="text-muted-foreground mb-4 text-sm">Collected by method, plus remaining due</p>
+                        <p className="text-muted-foreground mb-4 text-sm">
+                            Collected by method, plus remaining due ({currencyCode})
+                        </p>
                         <LazyInView minHeight={280}>
                             <Suspense fallback={<div className="bg-muted/40 h-[280px] animate-pulse rounded-xl" />}>
-                                <PaymentPie data={paymentMethods} />
+                                <PaymentPie data={paymentMethods} currencyCode={currencyCode} />
                             </Suspense>
                         </LazyInView>
                     </div>
@@ -570,10 +630,11 @@ export default function Dashboard({
 
                 {/* ═══════════ Branch Bar Chart ═══════════ */}
                 <div className="bg-card rounded-lg border p-6 shadow-sm">
-                    <h3 className="mb-4 text-lg font-semibold">Branch Performance</h3>
+                    <h3 className="mb-1 text-lg font-semibold">Branch Performance</h3>
+                    <p className="text-muted-foreground mb-4 text-sm">Reporting currency: {currencyCode}</p>
                     <LazyInView minHeight={280}>
                         <Suspense fallback={<div className="bg-muted/40 h-[280px] animate-pulse rounded-xl" />}>
-                            <BranchBar data={branchStats} />
+                            <BranchBar data={branchStats} currencyCode={currencyCode} />
                         </Suspense>
                     </LazyInView>
                 </div>
@@ -584,7 +645,7 @@ export default function Dashboard({
                 <div className="bg-card overflow-hidden rounded-lg border shadow-sm">
                     <div className="border-b px-6 py-4">
                         <h3 className="text-lg font-semibold">Top Selling Products</h3>
-                        <p className="text-muted-foreground text-sm">Top 10 in last {days} days</p>
+                        <p className="text-muted-foreground text-sm">Top 10 in last {days} days ({currencyCode})</p>
                     </div>
                     <div className="overflow-x-auto">
                         <table className="w-full text-sm">
@@ -613,8 +674,8 @@ export default function Dashboard({
                                                 {p.brand && <div className="text-muted-foreground text-xs">{p.brand}</div>}
                                             </td>
                                             <td className="px-6 py-3 text-right font-mono">{p.total_qty}</td>
-                                            <td className="px-6 py-3 text-right font-mono font-semibold">{formatPrice(p.total_sales)} AFN</td>
-                                            <td className="px-6 py-3 text-right font-mono">{formatPrice(p.total_profit)} AFN</td>
+                                            <td className="px-6 py-3 text-right font-mono font-semibold">{money(p.total_sales)}</td>
+                                            <td className="px-6 py-3 text-right font-mono">{money(p.total_profit)}</td>
                                         </tr>
                                     ))
                                 )}
@@ -637,7 +698,7 @@ export default function Dashboard({
                                     View all
                                 </Link>
                             </div>
-                            <RecentSales sales={recentSales} embedded />
+                            <RecentSales sales={recentSales} embedded currency={currency} />
                         </div>
                         <div>
                             <div className="flex items-center justify-between px-6 pt-4">

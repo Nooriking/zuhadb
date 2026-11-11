@@ -1,11 +1,14 @@
 // resources/js/components/dashboard/recent-sales.tsx
 
+import { formatMoney, type SharedCurrency } from '@/lib/money';
 import { Link } from '@inertiajs/react';
 
 interface Sale {
     id: number;
     invoice_number: string;
     total_afn: number;
+    total_ledger?: number;
+    ledger_currency_code?: string | null;
     payment_status: string;
     status: string;
     sale_date: string;
@@ -16,10 +19,8 @@ interface Sale {
 interface Props {
     sales: Sale[];
     embedded?: boolean;
+    currency?: SharedCurrency | null;
 }
-
-const formatPrice = (v: number) =>
-    new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(v);
 
 const getStatusBadge = (status: string) => {
     const map: Record<string, string> = {
@@ -33,36 +34,47 @@ const getStatusBadge = (status: string) => {
     return <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${map[status] || map.draft}`}>{status}</span>;
 };
 
-export default function RecentSales({ sales, embedded = false }: Props) {
+export default function RecentSales({ sales, embedded = false, currency }: Props) {
     const list = (
-            <div className="divide-border divide-y">
-                {sales.length === 0 ? (
-                    <div className="text-muted-foreground p-6 text-center text-sm">No recent sales.</div>
-                ) : (
-                    sales.map((sale) => (
-                        <Link
-                            key={sale.id}
-                            href={`/sales/${sale.id}`}
-                            className="hover:bg-muted/50 flex items-center justify-between px-6 py-3 transition-colors"
-                        >
-                            <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-2">
-                                    <span className="font-mono text-xs font-semibold">{sale.invoice_number}</span>
-                                    {getStatusBadge(sale.payment_status)}
-                                </div>
-                                <div className="text-muted-foreground mt-1 text-xs">
-                                    {sale.customer} · {sale.branch}
-                                    {sale.sale_date ? ` · ${sale.sale_date}` : ''}
-                                </div>
+        <div className="divide-border divide-y">
+            {sales.length === 0 ? (
+                <div className="text-muted-foreground p-6 text-center text-sm">No recent sales.</div>
+            ) : (
+                sales.map((sale) => (
+                    <Link
+                        key={sale.id}
+                        href={`/sales/${sale.id}`}
+                        className="hover:bg-muted/50 flex items-center justify-between px-6 py-3 transition-colors"
+                    >
+                        <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                                <span className="font-mono text-xs font-semibold">{sale.invoice_number}</span>
+                                {getStatusBadge(sale.payment_status)}
                             </div>
-                            <div className="text-right">
-                                <div className="font-mono text-sm font-semibold">{formatPrice(sale.total_afn)}</div>
-                                <div className="text-muted-foreground text-xs">AFN</div>
+                            <div className="text-muted-foreground mt-1 text-xs">
+                                {sale.customer} · {sale.branch}
+                                {sale.sale_date ? ` · ${sale.sale_date}` : ''}
                             </div>
-                        </Link>
-                    ))
-                )}
-            </div>
+                        </div>
+                        <div className="text-right">
+                            <div className="font-mono text-sm font-semibold">{formatMoney(sale.total_afn, currency)}</div>
+                            {sale.total_ledger !== undefined &&
+                                currency &&
+                                sale.ledger_currency_code &&
+                                currency.code !== sale.ledger_currency_code && (
+                                    <div className="text-muted-foreground text-xs">
+                                        {formatMoney(sale.total_ledger, {
+                                            code: sale.ledger_currency_code,
+                                            symbol: null,
+                                            decimal_places: 2,
+                                        })}
+                                    </div>
+                                )}
+                        </div>
+                    </Link>
+                ))
+            )}
+        </div>
     );
 
     if (embedded) return list;

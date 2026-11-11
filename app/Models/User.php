@@ -569,7 +569,7 @@ class User extends Authenticatable
         }
 
         if ($this->isBranchManager()) {
-            return $target->branch_id === $this->branch_id
+            return (int) $target->branch_id === (int) $this->branch_id
                 && in_array($target->role, $this->getCreatableRoles(), true);
         }
 
@@ -590,6 +590,10 @@ class User extends Authenticatable
             return false;
         }
 
+        if (! $this->isSuperAdmin() && ! $this->canManageUser($target)) {
+            return false;
+        }
+
         if ($target->status === 'blocked') {
             return false;
         }
@@ -599,7 +603,7 @@ class User extends Authenticatable
         }
 
         if ($this->isBranchManager()) {
-            return $target->branch_id === $this->branch_id;
+            return (int) $target->branch_id === (int) $this->branch_id;
         }
 
         return true;
@@ -615,6 +619,10 @@ class User extends Authenticatable
             return false;
         }
 
+        if (! $this->isSuperAdmin() && ! $this->canManageUser($target)) {
+            return false;
+        }
+
         if ($target->status !== 'blocked') {
             return false;
         }
@@ -624,7 +632,7 @@ class User extends Authenticatable
         }
 
         if ($this->isBranchManager()) {
-            return $target->branch_id === $this->branch_id;
+            return (int) $target->branch_id === (int) $this->branch_id;
         }
 
         return true;

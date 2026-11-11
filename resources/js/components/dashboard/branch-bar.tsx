@@ -14,14 +14,17 @@ interface BranchStat {
 
 interface Props {
     data: BranchStat[];
+    currencyCode?: string;
 }
 
 const formatPrice = (v: number) => new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(v);
 
-export default function BranchBar({ data }: Props) {
+export default function BranchBar({ data, currencyCode }: Props) {
     if (!data?.length) {
         return <div className="text-muted-foreground flex h-80 items-center justify-center text-sm">No branch sales in this period.</div>;
     }
+
+    const suffix = currencyCode ? ` ${currencyCode}` : '';
 
     return (
         <LazyChart height="h-80">
@@ -41,7 +44,8 @@ export default function BranchBar({ data }: Props) {
                         formatter={(value, name) => {
                             const amount = Array.isArray(value) ? Number(value[0]) : Number(value);
                             return [
-                                new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(Number.isFinite(amount) ? amount : 0) + ' AFN',
+                                new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(Number.isFinite(amount) ? amount : 0) +
+                                    suffix,
                                 name === 'sales' ? 'Sales' : 'Store profit',
                             ];
                         }}

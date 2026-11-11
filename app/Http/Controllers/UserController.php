@@ -12,6 +12,7 @@ use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -31,10 +32,16 @@ class UserController extends Controller
             abort(403, 'You do not have permission to access users.');
         }
 
-        $search   = $request->query('search');
-        $status   = $request->query('status');
-        $branchId = $request->query('branch_id');
-        $role     = $request->query('role');
+        $filters = $request->validate([
+            'search' => ['nullable', 'string', 'max:100'],
+            'status' => ['nullable', 'in:active,inactive,blocked'],
+            'branch_id' => ['nullable', 'integer'],
+            'role' => ['nullable', 'in:'.implode(',', array_keys(User::ROLE_LABELS))],
+        ]);
+        $search = trim((string) ($filters['search'] ?? ''));
+        $status = $filters['status'] ?? null;
+        $branchId = $filters['branch_id'] ?? null;
+        $role = $filters['role'] ?? null;
 
         $users = User::query()
             ->with(['branch:id,name,code'])
@@ -137,21 +144,16 @@ class UserController extends Controller
         $data['user_id']  = $authUser->id;
         $data['password'] = Hash::make($data['password']);
 
-        $user = User::create($data);
-
-        if ($user->role === User::ROLE_BRANCH_MANAGER && $user->branch_id) {
-            $branch = Branch::find($user->branch_id);
-            if ($branch) {
-                try {
-                    $branch->assignManager($user);
-                } catch (\InvalidArgumentException $e) {
-                    $user->update(['branch_id' => null]);
-
-                    return back()
-                        ->withErrors(['branch_id' => $e->getMessage()])
-                        ->withInput();
+        try {
+            $user = DB::transaction(function () use ($data) {
+                $user = User::create($data);
+                if ($user->role === User::ROLE_BRANCH_MANAGER && $user->branch_id) {
+                    Branch::query()->lockForUpdate()->findOrFail($user->branch_id)->assignManager($user);
                 }
-            }
+                return $user;
+            });
+        } catch (\InvalidArgumentException $e) {
+            return back()->withErrors(['branch_id' => $e->getMessage()])->withInput();
         }
 
         return redirect()

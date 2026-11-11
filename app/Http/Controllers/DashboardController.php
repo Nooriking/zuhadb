@@ -13,14 +13,18 @@ use App\Models\Sale;
 use App\Models\SalePayment;
 use App\Models\Supplier;
 use App\Models\User;
+use App\Services\CurrencyService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class DashboardController extends Controller
 {
+    public function __construct(private readonly CurrencyService $currencies) {}
+
     public function index(Request $request): Response
     {
         $user = $request->user();
@@ -42,8 +46,13 @@ class DashboardController extends Controller
             $days = 30;
         }
 
+        $reporting = $this->currencies->reportingContext();
+        $money = fn (float|string|null $amount): float => $this->currencies->reportAmount((float) ($amount ?? 0));
+
         /* =========================================================
          |  TOP-LEVEL KPIs
+         |  Sum ledger (*_afn) amounts that were fixed at write time,
+         |  then convert once for reporting display.
          ========================================================= */
 
         $completedSales = Sale::notTrashed()
@@ -51,60 +60,56 @@ class DashboardController extends Controller
             ->when($branchId, fn ($q) => $q->where('branch_id', $branchId));
 
         $todayRow = (clone $completedSales)
-            ->whereDate('sale_date', today())
+            ->whereBetween('sale_date', [today()->startOfDay(), today()->endOfDay()])
             ->selectRaw('COALESCE(SUM(total_afn), 0) as sales, COALESCE(SUM(store_profit_afn), 0) as profit, COUNT(*) as orders')
             ->first();
-        $todaySales  = (float) $todayRow->sales;
-        $todayProfit = (float) $todayRow->profit;
+        $todaySalesLedger = (float) $todayRow->sales;
+        $todayProfitLedger = (float) $todayRow->profit;
         $todayOrders = (int) $todayRow->orders;
-        $todayCollected = (float) SalePayment::query()
-            ->whereDate('paid_at', today())
+        $todayCollectedLedger = (float) SalePayment::query()
+            ->whereBetween('paid_at', [today()->startOfDay(), today()->endOfDay()])
             ->whereHas('sale', function ($q) use ($branchId) {
                 $q->notTrashed()->where('status', 'completed')
                     ->when($branchId, fn ($q) => $q->where('branch_id', $branchId));
             })
             ->sum('amount_afn');
 
-        $monthSales = (float) (clone $completedSales)
-            ->whereMonth('sale_date', now()->month)
-            ->whereYear('sale_date', now()->year)
+        $monthSalesLedger = (float) (clone $completedSales)
+            ->whereBetween('sale_date', [now()->startOfMonth(), now()->endOfMonth()])
             ->sum('total_afn');
 
-        $monthProfit = (float) (clone $completedSales)
-            ->whereMonth('sale_date', now()->month)
-            ->whereYear('sale_date', now()->year)
+        $monthProfitLedger = (float) (clone $completedSales)
+            ->whereBetween('sale_date', [now()->startOfMonth(), now()->endOfMonth()])
             ->sum('store_profit_afn');
 
-        $monthExpenses = $branchId
+        $monthExpensesLedger = $branchId
             ? 0.0
             : (float) Expense::notTrashed()
-                ->whereMonth('expense_date', now()->month)
-                ->whereYear('expense_date', now()->year)
+                ->whereBetween('expense_date', [now()->startOfMonth()->toDateString(), now()->endOfMonth()->toDateString()])
                 ->sum('amount_afn');
 
         $previousMonth = now()->subMonth();
-        $prevMonthSales = (float) (clone $completedSales)
-            ->whereMonth('sale_date', $previousMonth->month)
-            ->whereYear('sale_date', $previousMonth->year)
+        $prevMonthSalesLedger = (float) (clone $completedSales)
+            ->whereBetween('sale_date', [$previousMonth->copy()->startOfMonth(), $previousMonth->copy()->endOfMonth()])
             ->sum('total_afn');
 
-        $salesGrowth = $prevMonthSales > 0
-            ? round((($monthSales - $prevMonthSales) / $prevMonthSales) * 100, 1)
+        $salesGrowth = $prevMonthSalesLedger > 0
+            ? round((($monthSalesLedger - $prevMonthSalesLedger) / $prevMonthSalesLedger) * 100, 1)
             : null;
 
-        $outstandingDue = (float) Customer::notTrashed()->sum('current_due_afn');
+        $outstandingDueLedger = (float) Customer::notTrashed()->sum('current_due_afn');
 
         $kpis = [
-            'today_sales'      => round($todaySales, 2),
-            'today_collected'  => round($todayCollected, 2),
-            'today_profit'     => round($todayProfit, 2),
-            'today_orders'     => $todayOrders,
-            'month_sales'      => round($monthSales, 2),
-            'month_profit'     => round($monthProfit, 2),
-            'month_expenses'   => round($monthExpenses, 2),
-            'month_net'        => round($monthProfit - $monthExpenses, 2),
-            'sales_growth'     => $salesGrowth,
-            'outstanding_due'  => round($outstandingDue, 2),
+            'today_sales' => $money($todaySalesLedger),
+            'today_collected' => $money($todayCollectedLedger),
+            'today_profit' => $money($todayProfitLedger),
+            'today_orders' => $todayOrders,
+            'month_sales' => $money($monthSalesLedger),
+            'month_profit' => $money($monthProfitLedger),
+            'month_expenses' => $money($monthExpensesLedger),
+            'month_net' => $money($monthProfitLedger - $monthExpensesLedger),
+            'sales_growth' => $salesGrowth,
+            'outstanding_due' => $money($outstandingDueLedger),
         ];
 
         /* =========================================================
@@ -113,7 +118,6 @@ class DashboardController extends Controller
 
         $startDate = now()->subDays($days - 1)->startOfDay();
 
-        // 1. Sales trend — one point per day, including days with no sales
         $trendRows = (clone $completedSales)
             ->select(
                 DB::raw('DATE(sale_date) as date'),
@@ -121,7 +125,7 @@ class DashboardController extends Controller
                 DB::raw('SUM(store_profit_afn) as profit'),
                 DB::raw('COUNT(*) as count')
             )
-            ->whereDate('sale_date', '>=', $startDate->toDateString())
+            ->where('sale_date', '>=', $startDate)
             ->groupBy('date')
             ->orderBy('date')
             ->get()
@@ -134,15 +138,14 @@ class DashboardController extends Controller
         while ($cursor->lte($end)) {
             $row = $trendRows->get($cursor->toDateString());
             $salesTrend[] = [
-                'date'   => $cursor->format('M d'),
-                'sales'  => $row ? round((float) $row->sales, 2) : 0,
-                'profit' => $row ? round((float) $row->profit, 2) : 0,
-                'count'  => $row ? (int) $row->count : 0,
+                'date' => $cursor->format('M d'),
+                'sales' => $row ? $money((float) $row->sales) : 0.0,
+                'profit' => $row ? $money((float) $row->profit) : 0.0,
+                'count' => $row ? (int) $row->count : 0,
             ];
             $cursor->addDay();
         }
 
-        // 2. Brand distribution
         $brandSales = DB::table('sale_items')
             ->join('sales', 'sale_items.sale_id', '=', 'sales.id')
             ->join('product_variants', 'sale_items.variant_id', '=', 'product_variants.id')
@@ -152,7 +155,7 @@ class DashboardController extends Controller
             ->whereNull('sales.deleted_at')
             ->where('sales.status', 'completed')
             ->when($branchId, fn ($q) => $q->where('sales.branch_id', $branchId))
-            ->whereDate('sales.sale_date', '>=', $startDate->toDateString())
+            ->where('sales.sale_date', '>=', $startDate)
             ->select(
                 DB::raw("COALESCE(brands.name, 'No Brand') as brand"),
                 DB::raw('SUM(sale_items.line_total_afn) as total')
@@ -162,11 +165,10 @@ class DashboardController extends Controller
             ->limit(8)
             ->get()
             ->map(fn ($row) => [
-                'name'  => $row->brand,
-                'value' => (float) $row->total,
+                'name' => $row->brand,
+                'value' => $money((float) $row->total),
             ]);
 
-        // 3. Top selling products
         $topProducts = DB::table('sale_items')
             ->join('sales', 'sale_items.sale_id', '=', 'sales.id')
             ->join('product_variants', 'sale_items.variant_id', '=', 'product_variants.id')
@@ -176,7 +178,7 @@ class DashboardController extends Controller
             ->whereNull('sales.deleted_at')
             ->where('sales.status', 'completed')
             ->when($branchId, fn ($q) => $q->where('sales.branch_id', $branchId))
-            ->whereDate('sales.sale_date', '>=', $startDate->toDateString())
+            ->where('sales.sale_date', '>=', $startDate)
             ->select(
                 'products.id as product_id',
                 'products.name as product_name',
@@ -199,7 +201,7 @@ class DashboardController extends Controller
             ->orderByDesc('total_sales')
             ->limit(10)
             ->get()
-            ->map(function ($row) {
+            ->map(function ($row) use ($money) {
                 $displayName = trim(implode(' · ', array_filter([
                     $row->product_name,
                     $row->volume_ml ? "{$row->volume_ml}ml" : null,
@@ -207,23 +209,24 @@ class DashboardController extends Controller
                 ])));
 
                 return [
-                    'id'          => $row->variant_id,
-                    'name'        => $displayName,
-                    'brand'       => $row->brand_name,
-                    'total_qty'    => (int) $row->total_qty,
-                    'total_sales'  => round((float) $row->total_sales, 2),
-                    'total_profit' => round((float) $row->total_profit, 2),
+                    'id' => $row->variant_id,
+                    'name' => $displayName,
+                    'brand' => $row->brand_name,
+                    'total_qty' => (int) $row->total_qty,
+                    'total_sales' => $money((float) $row->total_sales),
+                    'total_profit' => $money((float) $row->total_profit),
+                    'total_sales_ledger' => round((float) $row->total_sales, 2),
+                    'total_profit_ledger' => round((float) $row->total_profit, 2),
                 ];
             });
 
-        // 4. Branch comparison
         $branchStats = DB::table('sales')
             ->join('branches', 'sales.branch_id', '=', 'branches.id')
             ->where('sales.trash', false)
             ->whereNull('sales.deleted_at')
             ->where('sales.status', 'completed')
             ->when($branchId, fn ($q) => $q->where('sales.branch_id', $branchId))
-            ->whereDate('sales.sale_date', '>=', $startDate->toDateString())
+            ->where('sales.sale_date', '>=', $startDate)
             ->select(
                 'branches.id',
                 'branches.name',
@@ -236,15 +239,14 @@ class DashboardController extends Controller
             ->orderByDesc('total_sales')
             ->get()
             ->map(fn ($row) => [
-                'id'     => $row->id,
-                'name'   => $row->name,
-                'code'   => $row->code,
-                'sales'  => (float) $row->total_sales,
-                'profit' => (float) $row->total_profit,
+                'id' => $row->id,
+                'name' => $row->name,
+                'code' => $row->code,
+                'sales' => $money((float) $row->total_sales),
+                'profit' => $money((float) $row->total_profit),
                 'orders' => (int) $row->orders,
             ]);
 
-        // 5. Payment method distribution
         $paymentMethods = DB::table('sale_payments')
             ->join('sales', 'sale_payments.sale_id', '=', 'sales.id')
             ->where('sales.trash', false)
@@ -259,42 +261,44 @@ class DashboardController extends Controller
             ->groupBy('sale_payments.payment_method')
             ->get()
             ->map(fn ($row) => [
-                'name'  => ucfirst((string) $row->payment_method),
-                'value' => round((float) $row->total, 2),
+                'name' => ucfirst((string) $row->payment_method),
+                'value' => $money((float) $row->total),
             ]);
 
-        $periodDue = (float) (clone $completedSales)
+        $periodDueLedger = (float) (clone $completedSales)
             ->whereDate('sale_date', '>=', $startDate->toDateString())
             ->sum('remaining_due_afn');
 
-        if ($periodDue > 0) {
+        if ($periodDueLedger > 0) {
             $paymentMethods->push([
-                'name'  => 'Due',
-                'value' => round($periodDue, 2),
+                'name' => 'Due',
+                'value' => $money($periodDueLedger),
             ]);
         }
+
+        $paymentCurrencyTotals = $this->paymentCurrencyTotals($branchId, $startDate->toDateString());
 
         /* =========================================================
          |  COUNTERS
          ========================================================= */
 
         $counters = [
-            'products'     => Product::notTrashed()->whereNull('variant_id')->count(),
-            'variants'     => ProductVariant::notTrashed()->count(),
-            'customers'    => Customer::notTrashed()->count(),
-            'suppliers'    => Supplier::notTrashed()->count(),
-            'investors'    => Investor::notTrashed()->count(),
-            'users'        => User::notTrashed()->count(),
-            'total_stock'  => (int) Inventory::notTrashed()->when($branchId, fn ($q) => $q->where('branch_id', $branchId))->sum('quantity'),
-
-            'low_stock'    => $this->lowStockQuery($branchId)->count(),
-
+            'products' => Product::notTrashed()->whereNull('variant_id')->count(),
+            'variants' => ProductVariant::notTrashed()->count(),
+            'customers' => Customer::notTrashed()->count(),
+            'suppliers' => Supplier::notTrashed()->count(),
+            'investors' => Investor::notTrashed()->count(),
+            'users' => User::notTrashed()->count(),
+            'total_stock' => (int) Inventory::notTrashed()->when($branchId, fn ($q) => $q->where('branch_id', $branchId))->sum('quantity'),
+            'low_stock' => $this->lowStockQuery($branchId)->count(),
             'out_of_stock' => Inventory::notTrashed()->when($branchId, fn ($q) => $q->where('branch_id', $branchId))->where('quantity', '<=', 0)->count(),
         ];
 
         /* =========================================================
          |  RECENT ACTIVITY
          ========================================================= */
+
+        $ledgerCode = $reporting['ledger']['code'] ?? (string) config('business.default_currency', 'AFN');
 
         $recentSales = Sale::query()
             ->with(['branch:id,name,code', 'customer:id,name'])
@@ -303,16 +307,22 @@ class DashboardController extends Controller
             ->orderByDesc('id')
             ->limit(8)
             ->get()
-            ->map(fn ($s) => [
-                'id'             => $s->id,
-                'invoice_number' => $s->invoice_number,
-                'total_afn'      => (float) $s->total_afn,
-                'payment_status' => $s->payment_status,
-                'status'         => $s->status,
-                'sale_date'      => optional($s->sale_date)->toDateString(),
-                'branch'         => $s->branch?->name,
-                'customer'       => $s->customer_name_snapshot ?: ($s->customer?->name ?? 'Walk-in'),
-            ]);
+            ->map(function ($s) use ($money, $ledgerCode) {
+                $ledgerTotal = (float) $s->total_afn;
+
+                return [
+                    'id' => $s->id,
+                    'invoice_number' => $s->invoice_number,
+                    'total_afn' => $money($ledgerTotal),
+                    'total_ledger' => round($ledgerTotal, 2),
+                    'ledger_currency_code' => $s->ledger_currency_code ?: $ledgerCode,
+                    'payment_status' => $s->payment_status,
+                    'status' => $s->status,
+                    'sale_date' => optional($s->sale_date)->toDateString(),
+                    'branch' => $s->branch?->name,
+                    'customer' => $s->customer_name_snapshot ?: ($s->customer?->name ?? 'Walk-in'),
+                ];
+            });
 
         /* =========================================================
          |  LOW STOCK ITEMS
@@ -336,12 +346,12 @@ class DashboardController extends Controller
                 ])));
 
                 return [
-                    'id'        => $inv->id,
-                    'branch'    => $inv->branch?->name,
-                    'product'   => $variantName !== '' ? $variantName : 'Unknown product',
-                    'brand'     => $inv->variant?->product?->brand?->name,
+                    'id' => $inv->id,
+                    'branch' => $inv->branch?->name,
+                    'product' => $variantName !== '' ? $variantName : 'Unknown product',
+                    'brand' => $inv->variant?->product?->brand?->name,
                     'volume_ml' => $inv->variant?->volume_ml,
-                    'quantity'  => (int) $inv->quantity,
+                    'quantity' => (int) $inv->quantity,
                     'min_stock' => (int) ($inv->variant?->minimum_stock ?? 0),
                 ];
             });
@@ -366,14 +376,16 @@ class DashboardController extends Controller
                 ->groupBy('customer_id')
                 ->pluck('due_date', 'customer_id');
 
-        $dueCustomers = $dueCustomers->map(function (Customer $customer) use ($dueDates) {
+        $dueCustomers = $dueCustomers->map(function (Customer $customer) use ($dueDates, $money) {
             $dueDate = $dueDates->get($customer->id);
+            $ledgerDue = (float) $customer->current_due_afn;
 
             return [
                 'id' => $customer->id,
                 'name' => $customer->name,
                 'phone' => $customer->phone,
-                'current_due_afn' => (float) $customer->current_due_afn,
+                'current_due_afn' => $money($ledgerDue),
+                'current_due_ledger' => round($ledgerDue, 2),
                 'due_date' => $dueDate ? Carbon::parse($dueDate)->toDateString() : null,
             ];
         });
@@ -393,19 +405,86 @@ class DashboardController extends Controller
             ]);
 
         return Inertia::render('dashboard', [
-            'dueCustomers'   => $dueCustomers,
-            'days'           => $days,
-            'kpis'           => $kpis,
-            'salesTrend'     => $salesTrend,
-            'brandSales'     => $brandSales,
-            'topProducts'    => $topProducts,
-            'branchStats'    => $branchStats,
+            'dueCustomers' => $dueCustomers,
+            'days' => $days,
+            'kpis' => $kpis,
+            'salesTrend' => $salesTrend,
+            'brandSales' => $brandSales,
+            'topProducts' => $topProducts,
+            'branchStats' => $branchStats,
             'paymentMethods' => $paymentMethods,
-            'counters'       => $counters,
-            'recentSales'    => $recentSales,
+            'paymentCurrencyTotals' => $paymentCurrencyTotals,
+            'counters' => $counters,
+            'recentSales' => $recentSales,
             'recentActivity' => $recentActivity,
-            'lowStockItems'  => $lowStockItems,
+            'lowStockItems' => $lowStockItems,
+            'reporting' => $reporting,
         ]);
+    }
+
+    /**
+     * Original tender totals for payments in the selected period.
+     * Uses amount_currency + currency_code snapshots from each payment —
+     * never recalculates with today's catalog rate.
+     *
+     * @return list<array{code: string, symbol: string|null, total: float}>
+     */
+    private function paymentCurrencyTotals(?int $branchId, string $fromDate): array
+    {
+        if (! Schema::hasColumn('sale_payments', 'currency_code')
+            || ! Schema::hasColumn('sale_payments', 'amount_currency')) {
+            return [];
+        }
+
+        $ledgerFallback = preg_replace('/[^A-Z0-9]/', '', strtoupper((string) config('business.default_currency', 'AFN'))) ?: 'AFN';
+
+        $rows = DB::table('sale_payments')
+            ->join('sales', 'sale_payments.sale_id', '=', 'sales.id')
+            ->leftJoin('currencies', 'currencies.id', '=', 'sale_payments.currency_id')
+            ->where('sales.trash', false)
+            ->whereNull('sales.deleted_at')
+            ->where('sales.status', 'completed')
+            ->when($branchId, fn ($q) => $q->where('sales.branch_id', $branchId))
+            ->where('sales.sale_date', '>=', $fromDate)
+            ->select(
+                'sale_payments.currency_code',
+                'sale_payments.ledger_currency_code',
+                DB::raw('MAX(currencies.symbol) as currency_symbol'),
+                DB::raw('SUM(COALESCE(sale_payments.amount_currency, sale_payments.amount_afn)) as total')
+            )
+            ->groupBy('sale_payments.currency_code', 'sale_payments.ledger_currency_code')
+            ->get();
+
+        $groups = [];
+        foreach ($rows as $row) {
+            $code = trim((string) ($row->currency_code ?: $row->ledger_currency_code ?: $ledgerFallback));
+            if ($code === '') {
+                $code = $ledgerFallback;
+            }
+
+            if (! isset($groups[$code])) {
+                $groups[$code] = [
+                    'code' => $code,
+                    'symbol' => $row->currency_symbol,
+                    'total' => 0.0,
+                ];
+            }
+
+            $amount = (float) $row->total;
+            $groups[$code]['total'] += $amount;
+
+            if ($groups[$code]['symbol'] === null && $row->currency_symbol !== null) {
+                $groups[$code]['symbol'] = $row->currency_symbol;
+            }
+        }
+
+        ksort($groups);
+
+        return array_values(array_map(fn (array $group) => [
+            'code' => $group['code'],
+            'symbol' => $group['symbol'],
+            'total' => round($group['total'], 2),
+        ], $groups));
     }
 
     /**
@@ -416,8 +495,8 @@ class DashboardController extends Controller
         return Inventory::notTrashed()
             ->when($branchId, fn ($q) => $q->where('branch_id', $branchId))
             ->whereHas('variant', function ($q) {
-            $q->where('minimum_stock', '>', 0)
-                ->whereColumn('inventories.quantity', '<=', 'product_variants.minimum_stock');
-        });
+                $q->where('minimum_stock', '>', 0)
+                    ->whereColumn('inventories.quantity', '<=', 'product_variants.minimum_stock');
+            });
     }
 }

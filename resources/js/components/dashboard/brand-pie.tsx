@@ -9,15 +9,17 @@ interface BrandData {
 
 interface Props {
     data: BrandData[];
+    currencyCode?: string;
 }
 
 const COLORS = ['#d4af37', '#0284c7', '#0f766e', '#8a6a2f', '#c4a35a', '#0369a1', '#6b5424', '#a6843a'];
 
 const formatPrice = (value: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value);
 
-export default function BrandPie({ data }: Props) {
+export default function BrandPie({ data, currencyCode }: Props) {
     const safeData = data ?? [];
     const total = safeData.reduce((sum, item) => sum + item.value, 0);
+    const suffix = currencyCode ? ` ${currencyCode}` : '';
 
     if (safeData.length === 0) {
         return <div className="text-muted-foreground flex h-[280px] items-center justify-center text-sm">No brand sales data.</div>;
@@ -34,7 +36,7 @@ export default function BrandPie({ data }: Props) {
                 <Tooltip
                     formatter={(value: number, name: string) => {
                         const percent = total > 0 ? ((value / total) * 100).toFixed(1) : '0';
-                        return [`${formatPrice(value)} AFN (${percent}%)`, name];
+                        return [`${formatPrice(value)}${suffix} (${percent}%)`, name];
                     }}
                 />
                 <Legend verticalAlign="bottom" height={36} iconType="circle" wrapperStyle={{ fontSize: '12px' }} />

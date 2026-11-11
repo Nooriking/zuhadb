@@ -12,16 +12,18 @@ interface DataPoint {
 
 interface Props {
     data: DataPoint[];
+    currencyCode?: string;
 }
 
 const formatPrice = (v: number) => new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(v);
 
-const money = (value: unknown) => {
+const money = (value: unknown, currencyCode?: string) => {
     const amount = Array.isArray(value) ? Number(value[0]) : Number(value);
-    return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(Number.isFinite(amount) ? amount : 0);
+    const formatted = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(Number.isFinite(amount) ? amount : 0);
+    return currencyCode ? `${formatted} ${currencyCode}` : formatted;
 };
 
-export default function SalesChart({ data }: Props) {
+export default function SalesChart({ data, currencyCode }: Props) {
     if (!data?.length) {
         return <div className="text-muted-foreground flex h-80 items-center justify-center text-sm">No sales in this period.</div>;
     }
@@ -51,7 +53,7 @@ export default function SalesChart({ data }: Props) {
                             fontSize: '12px',
                             color: 'var(--popover-foreground)',
                         }}
-                        formatter={(value, name) => [money(value) + ' AFN', name === 'sales' ? 'Sales' : 'Store profit']}
+                        formatter={(value, name) => [money(value, currencyCode), name === 'sales' ? 'Sales' : 'Store profit']}
                     />
                     <Area type="monotone" dataKey="sales" name="sales" stroke="#d4af37" strokeWidth={2} fill="url(#salesGradient)" />
                     <Area type="monotone" dataKey="profit" name="profit" stroke="#0284c7" strokeWidth={2.5} fill="url(#profitGradient)" />
