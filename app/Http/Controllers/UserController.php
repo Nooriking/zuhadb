@@ -6,6 +6,7 @@ use App\Http\Requests\StoreUserRequest;
 use App\Http\Requests\UpdateUserRequest;
 use App\Models\Branch;
 use App\Models\Expense;
+use App\Models\Investor;
 use App\Models\Product;
 use App\Models\Sale;
 use App\Models\User;
@@ -150,10 +151,22 @@ class UserController extends Controller
                 if ($user->role === User::ROLE_BRANCH_MANAGER && $user->branch_id) {
                     Branch::query()->lockForUpdate()->findOrFail($user->branch_id)->assignManager($user);
                 }
+
+                // Investor identity is the user row; seed an empty wallet for the directory.
+                if ($user->role === User::ROLE_INVESTOR) {
+                    Investor::query()->whereKey($user->id)->firstOrFail()->getOrCreateWallet();
+                }
+
                 return $user;
             });
         } catch (\InvalidArgumentException $e) {
             return back()->withErrors(['branch_id' => $e->getMessage()])->withInput();
+        }
+
+        if ($user->role === User::ROLE_INVESTOR) {
+            return redirect()
+                ->route('investors.show', $user->id)
+                ->with('success', "Investor \"{$user->name}\" was created. Manage capital and goods from this page — do not register identity again.");
         }
 
         return redirect()
@@ -327,6 +340,15 @@ class UserController extends Controller
             }
         }
 
+        // Role → investor: appear in Investors directory without a second identity form.
+        if ($oldRole !== User::ROLE_INVESTOR && $user->role === User::ROLE_INVESTOR) {
+            Investor::query()->whereKey($user->id)->firstOrFail()->getOrCreateWallet();
+
+            return redirect()
+                ->route('investors.show', $user->id)
+                ->with('success', "User \"{$user->name}\" is now an investor. Financial history (if any) was preserved.");
+        }
+
         return redirect()
             ->route('users.index')
             ->with('success', "User \"{$user->name}\" was updated successfully.");
@@ -428,6 +450,13 @@ class UserController extends Controller
             return back()->with('error', 'Super Admin users cannot be deleted.');
         }
 
+        if ($user->hasInvestorFinancialHistory()) {
+            return back()->with(
+                'error',
+                'This user has investor financial history. Deactivate the investor instead — financial records must be preserved.'
+            );
+        }
+
         $name = $user->name;
 
         $user->update([
@@ -498,6 +527,13 @@ class UserController extends Controller
 
         if ($user->isSuperAdmin()) {
             return back()->with('error', 'Super Admin users cannot be permanently deleted.');
+        }
+
+        if ($user->hasInvestorFinancialHistory()) {
+            return back()->with(
+                'error',
+                'Cannot permanently delete a user with investor financial history. Records must be preserved.'
+            );
         }
 
         $name = $user->name;

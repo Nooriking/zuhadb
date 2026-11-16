@@ -30,7 +30,7 @@ function formatCountdown(totalSeconds: number): string {
 }
 
 export default function Login({ status, canResetPassword, lockoutSeconds = null }: LoginProps) {
-    const { data, setData, post, processing, errors, reset, clearErrors } = useForm<LoginForm>({
+    const { data, setData, post, processing, errors, reset, clearErrors, transform } = useForm<LoginForm>({
         email: '',
         password: '',
         remember: false,
@@ -66,13 +66,24 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
 
     const isLocked = lockSecondsLeft > 0;
 
-    const submit: FormEventHandler = (e) => {
+    const submit: FormEventHandler<HTMLFormElement> = (e) => {
         e.preventDefault();
         if (isLocked || processing) return;
 
+        // Browser autofill can populate the DOM without firing React onChange.
+        // Read native values and transform the payload (setData alone is async).
+        const form = e.currentTarget;
+        const emailEl = form.elements.namedItem('email');
+        const passwordEl = form.elements.namedItem('password');
+        const email = emailEl instanceof HTMLInputElement ? emailEl.value : data.email;
+        const password = passwordEl instanceof HTMLInputElement ? passwordEl.value : data.password;
+
+        setData({ email, password, remember: data.remember });
         clearErrors();
+        transform((current) => ({ ...current, email, password, remember: data.remember }));
         post(route('login'), {
             onFinish: () => {
+                transform((current) => current);
                 reset('password');
                 setShowPassword(false);
             },
@@ -112,7 +123,7 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                 </div>
             )}
 
-            <form className="flex flex-col gap-5" onSubmit={submit} method="post" autoComplete="on">
+            <form className="flex flex-col gap-5" onSubmit={submit} method="post" action={route('login')} autoComplete="on">
                 <div className="grid gap-2">
                     <Label htmlFor="email" className="text-neutral-300">
                         Email or username

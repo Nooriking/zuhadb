@@ -59,6 +59,21 @@ class SearchController extends Controller
             ->limit(5)
             ->get();
 
+        $variantIds = $barcodeMatches->pluck('variant.id')
+            ->merge($nameMatches->flatMap(fn (Product $product) => $product->variants->pluck('id')))
+            ->filter()
+            ->unique()
+            ->values();
+
+        $stockByVariant = $variantIds->isEmpty()
+            ? collect()
+            : Product::query()
+                ->whereIn('variant_id', $variantIds)
+                ->where('trash', false)
+                ->selectRaw('variant_id, COALESCE(SUM(remaining_quantity), 0) as stock')
+                ->groupBy('variant_id')
+                ->pluck('stock', 'variant_id');
+
         /* ─────────────────────────────────────────────
          |  3) ساخت نتایج یکپارچه
          ───────────────────────────────────────────── */
@@ -69,9 +84,7 @@ class SearchController extends Controller
             $variant = $bc->variant;
             if (! $variant) continue;
 
-            $stock = Product::where('variant_id', $variant->id)
-                ->where('trash', false)
-                ->sum('remaining_quantity');
+            $stock = $stockByVariant->get($variant->id, 0);
 
             $results->push([
                 'type'            => 'barcode',
@@ -99,11 +112,9 @@ class SearchController extends Controller
 
         // Name matches
         foreach ($nameMatches as $product) {
-            $totalStock = $product->variants->sum(function ($v) {
-                return Product::where('variant_id', $v->id)
-                    ->where('trash', false)
-                    ->sum('remaining_quantity');
-            });
+            $totalStock = $product->variants->sum(
+                fn ($variant) => (int) $stockByVariant->get($variant->id, 0)
+            );
 
             $firstVariant = $product->variants->first();
             $primaryBarcode = $firstVariant?->barcodes->firstWhere('is_primary', true)

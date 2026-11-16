@@ -6,6 +6,7 @@ use App\Models\Inventory;
 use App\Models\Product;
 use App\Models\ProductBarcode;
 use App\Models\User;
+use Illuminate\Support\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -58,8 +59,6 @@ class AppSearchController extends Controller
         $canOpenProduct = $user->canAccessModule('products');
         $canEdit = $user->hasPermission('products.update');
 
-        $results = collect();
-
         $barcodes = ProductBarcode::query()
             ->where('barcode', 'like', $like)
             ->where('status', 'active')
@@ -70,6 +69,38 @@ class AppSearchController extends Controller
             ])
             ->limit(6)
             ->get();
+
+        $products = Product::query()
+            ->whereNull('variant_id')
+            ->where('trash', false)
+            ->where(function ($query) use ($like) {
+                $query->where('name', 'like', $like)
+                    ->orWhereHas('brand', fn ($brand) => $brand->where('name', 'like', $like));
+            })
+            ->with([
+                'brand:id,name',
+                'variants' => fn ($variants) => $variants->where('trash', false)->limit(1),
+                'variants.barcodes' => fn ($barcodes) => $barcodes->where('status', 'active')->orderByDesc('is_primary'),
+            ])
+            ->limit(6)
+            ->get();
+
+        // Load stock for all search results in one grouped query instead of one SUM
+        // query per barcode/product result.
+        $variantIds = $barcodes->pluck('variant.id')
+            ->merge($products->flatMap(fn ($product) => $product->variants->pluck('id')))
+            ->filter()
+            ->unique()
+            ->values();
+        $stockByVariant = Inventory::notTrashed()
+            ->whereIn('variant_id', $variantIds)
+            ->when($user->branch_id && ! $user->isSuperAdmin() && ! $user->isAdmin(),
+                fn ($query) => $query->where('branch_id', $user->branch_id))
+            ->selectRaw('variant_id, SUM(quantity) as stock')
+            ->groupBy('variant_id')
+            ->pluck('stock', 'variant_id');
+
+        $results = collect();
 
         foreach ($barcodes as $barcode) {
             $variant = $barcode->variant;
@@ -88,23 +119,9 @@ class AppSearchController extends Controller
                 $canSeeCost,
                 $canOpenProduct,
                 $canEdit,
+                $stockByVariant,
             ));
         }
-
-        $products = Product::query()
-            ->whereNull('variant_id')
-            ->where('trash', false)
-            ->where(function ($query) use ($like) {
-                $query->where('name', 'like', $like)
-                    ->orWhereHas('brand', fn ($brand) => $brand->where('name', 'like', $like));
-            })
-            ->with([
-                'brand:id,name',
-                'variants' => fn ($variants) => $variants->where('trash', false)->limit(1),
-                'variants.barcodes' => fn ($barcodes) => $barcodes->where('status', 'active')->orderByDesc('is_primary'),
-            ])
-            ->limit(6)
-            ->get();
 
         foreach ($products as $product) {
             $variant = $product->variants->first();
@@ -118,6 +135,7 @@ class AppSearchController extends Controller
                 $canSeeCost,
                 $canOpenProduct,
                 $canEdit,
+                $stockByVariant,
             ));
         }
 
@@ -138,18 +156,8 @@ class AppSearchController extends Controller
         bool $canSeeCost,
         bool $canOpenProduct,
         bool $canEdit,
+        Collection $stockByVariant,
     ): array {
-        $stockQuery = Inventory::notTrashed();
-        if ($variant) {
-            $stockQuery->where('variant_id', $variant->id);
-        } else {
-            $stockQuery->whereRaw('1 = 0');
-        }
-
-        if ($user->branch_id && ! $user->isSuperAdmin() && ! $user->isAdmin()) {
-            $stockQuery->where('branch_id', $user->branch_id);
-        }
-
         return [
             'product_id'     => $productId,
             'product_name'   => $name,
@@ -158,7 +166,7 @@ class AppSearchController extends Controller
             'barcode'        => $barcode,
             'sale_price'     => (float) ($variant?->sale_price_afn ?? 0),
             'purchase_price' => $canSeeCost ? (float) ($variant?->purchase_price_afn ?? 0) : null,
-            'stock'          => (int) $stockQuery->sum('quantity'),
+            'stock'          => (int) ($variant ? $stockByVariant->get($variant->id, 0) : 0),
             'url'            => $canOpenProduct ? "/products/{$productId}" : null,
             'url_edit'       => $canEdit ? "/products/{$productId}/edit" : null,
         ];

@@ -2,120 +2,92 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
-class Investor extends Model
+/**
+ * Investor identity is a User with role=investor.
+ *
+ * Financial tables retain the column name `investor_id`, which now references
+ * `users.id` (this model's primary key).
+ *
+ * Compatibility:
+ * - `full_name` maps to users.name
+ * - `user_id` accessor returns this user's id (self) for legacy policy checks
+ */
+class Investor extends User
 {
-    use HasFactory, SoftDeletes;
-
-    protected $table = 'investors';
-
-    protected $fillable = [
-        'user_id',
-        'full_name',
-        'phone',
-        'email',
-        'address',
-        'notes',
-        'status',
-        'trash',
-        'created_by',
-    ];
-
-    protected $casts = [
-        'trash'      => 'boolean',
-        'created_at' => 'datetime',
-        'updated_at' => 'datetime',
-        'deleted_at' => 'datetime',
-    ];
-
-    /* =========================================================
-     |  ✅ حذف شد — دیگر user_id را NULL نمی‌کنیم
-     |
-     |  قبلاً booted() داشتیم که وقتی investor به trash می‌رفت،
-     |  user_id را NULL می‌کرد. این باعث می‌شد investment بعدی
-     |  نتواند investor قبلی را پیدا کند و investor جدید بسازد.
-     |
-     |  حالا user_id حفظ می‌شود و با unique index در DB،
-     |  از ساخت investor تکراری جلوگیری می‌شود.
-     ========================================================= */
-
-    /* =========================================================
-     |  ✅ Helper — پیدا کردن یا ساختن investor برای user
-     ========================================================= */
+    protected $table = 'users';
 
     /**
-     * یک investor برای user پیدا می‌کند یا می‌سازد.
+     * Extra aliases accepted when creating/updating via legacy investor forms/tests.
      *
-     * - اگر investor فعال وجود دارد → همان را برمی‌گرداند
-     * - اگر investor در trash است → آن را restore می‌کند
-     * - اگر هیچ‌کدام نیست → یکی می‌سازد
-     *
-     * @param  int    $userId
-     * @param  array  $extraData  داده‌های اضافی برای ساخت investor جدید
-     * @return self
+     * @var list<string>
      */
-    public static function findOrCreateForUser(int $userId, array $extraData = []): self
+    protected $fillable = [
+        'branch_id',
+        'name',
+        'full_name',
+        'username',
+        'email',
+        'phone',
+        'password',
+        'role',
+        'status',
+        'trash',
+        'user_id',
+    ];
+
+    protected $appends = [
+        'two_factor_enabled',
+        'full_name',
+    ];
+
+    protected static function booted(): void
     {
-        // ۱. اول دنبال investor فعال بگرد
-        $investor = self::query()
-            ->where('user_id', $userId)
-            ->where('trash', false)
-            ->first();
+        parent::booted();
 
-        if ($investor) {
-            return $investor;
-        }
+        static::addGlobalScope('role_investor', function (Builder $builder) {
+            $builder->where($builder->getModel()->getTable().'.role', User::ROLE_INVESTOR);
+        });
 
-        // ۲. دنبال investor در trash بگرد (با ignoring SoftDeletes)
-        $trashedInvestor = self::withoutGlobalScope(\Illuminate\Database\Eloquent\SoftDeletingScope::class)
-            ->where('user_id', $userId)
-            ->where('trash', true)
-            ->first();
+        static::creating(function (Investor $model) {
+            $model->role = User::ROLE_INVESTOR;
 
-        if ($trashedInvestor) {
-            // Restore و آپدیت اطلاعات
-            $trashedInvestor->update([
-                'trash'      => false,
-                'deleted_at' => null,
-            ]);
+            if (empty($model->password)) {
+                $model->password = Str::random(40);
+            }
 
-            return $trashedInvestor->fresh();
-        }
+            if ($model->status === null || $model->status === '') {
+                $model->status = 'active';
+            }
 
-        // ۳. اگر هیچ‌کدام نبود، یکی بساز
-        $user = \App\Models\User::find($userId);
-
-        return self::create(array_merge([
-            'user_id'    => $userId,
-            'full_name'  => $user?->name ?? 'Unknown',
-            'phone'      => $user?->phone,
-            'email'      => $user?->email,
-            'status'     => 'active',
-            'trash'      => false,
-            'created_by' => auth()->id(),
-        ], $extraData));
+            if ($model->trash === null) {
+                $model->trash = false;
+            }
+        });
     }
 
     /* =========================================================
-     |  Relationships
+     |  Compatibility accessors
      ========================================================= */
 
-    public function user(): BelongsTo
+    public function getFullNameAttribute(): string
     {
-        return $this->belongsTo(User::class, 'user_id');
+        return (string) ($this->attributes['name'] ?? '');
     }
 
-    public function creator(): BelongsTo
+    public function setFullNameAttribute(?string $value): void
     {
-        return $this->belongsTo(User::class, 'created_by');
+        $this->attributes['name'] = $value;
     }
+
+    /* =========================================================
+     |  Relationships (investor_id → users.id)
+     ========================================================= */
 
     public function wallet(): HasOne
     {
@@ -158,40 +130,60 @@ class Investor extends Model
         return $this->hasMany(ProductBatch::class, 'investor_id');
     }
 
-    /* =========================================================
-     |  Scopes
-     ========================================================= */
-
-    public function scopeNotTrashed($query)
+    /**
+     * @deprecated Investor identity is the user. Kept for transitional callsites.
+     */
+    public function user(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
-        return $query->where('trash', false);
+        return $this->belongsTo(User::class, 'id');
     }
 
-    public function scopeOnlyTrashed($query)
+    public function creator(): \Illuminate\Database\Eloquent\Relations\BelongsTo
     {
-        return $query->withoutGlobalScope(\Illuminate\Database\Eloquent\SoftDeletingScope::class)
-                     ->where('trash', true);
-    }
-
-    public function scopeActive($query)
-    {
-        return $query->where('status', 'active');
+        return $this->belongsTo(User::class, 'user_id');
     }
 
     /* =========================================================
-     |  Wallet Helpers
+     |  Helpers
      ========================================================= */
+
+    /**
+     * Resolve the investor identity for a user id (must already have investor role).
+     */
+    public static function forUserId(int $userId): ?self
+    {
+        return static::query()->whereKey($userId)->first();
+    }
+
+    /**
+     * @deprecated Use the user with role=investor directly. Kept for transitional callers.
+     */
+    public static function findOrCreateForUser(int $userId, array $extraData = []): self
+    {
+        $investor = static::query()->whereKey($userId)->first();
+        if ($investor) {
+            return $investor;
+        }
+
+        $user = User::query()->findOrFail($userId);
+
+        if ($user->role !== User::ROLE_INVESTOR) {
+            $user->update(['role' => User::ROLE_INVESTOR]);
+        }
+
+        return static::query()->whereKey($userId)->firstOrFail();
+    }
 
     public function getOrCreateWallet(): InvestorWallet
     {
         return $this->wallet()->firstOrCreate(
             ['investor_id' => $this->id],
             [
-                'capital_balance_afn'      => 0,
-                'profit_balance_afn'       => 0,
-                'total_invested_afn'       => 0,
-                'total_profit_earned_afn'  => 0,
-                'total_withdrawn_afn'      => 0,
+                'capital_balance_afn' => 0,
+                'profit_balance_afn' => 0,
+                'total_invested_afn' => 0,
+                'total_profit_earned_afn' => 0,
+                'total_withdrawn_afn' => 0,
             ]
         );
     }
@@ -201,12 +193,9 @@ class Investor extends Model
         if (! $this->wallet) {
             return 0;
         }
+
         return (float) $this->wallet->capital_balance_afn + (float) $this->wallet->profit_balance_afn;
     }
-
-    /* =========================================================
-     |  ✅ Investment Type Helpers (Cash vs Goods)
-     ========================================================= */
 
     public function hasCashCapital(): bool
     {

@@ -238,7 +238,6 @@ class UpdateProductRequest extends FormRequest
         'status'      => ['required', Rule::in(['active', 'inactive'])],
         'description' => ['nullable', 'string', 'max:5000'],
         'image'       => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
-        ...$this->productUnitRules(),
         ...$this->productExchangeRateRules(),
 
         /* ─────────────── Variants ─────────────── */
@@ -284,7 +283,14 @@ class UpdateProductRequest extends FormRequest
         ],
 
         'purchases.*.variant_index'       => ['required', 'integer', 'min:0'],
-        'purchases.*.investor_id'         => ['nullable', 'integer', 'exists:investors,id'],
+        'purchases.*.investor_id'         => [
+            'nullable',
+            'integer',
+            Rule::exists('users', 'id')->where(fn ($q) => $q
+                ->where('role', \App\Models\User::ROLE_INVESTOR)
+                ->where('trash', false)
+                ->whereNull('deleted_at')),
+        ],
         'purchases.*.supplier_id'         => ['nullable', 'integer', 'exists:suppliers,id'],
         'purchases.*.quantity'            => ['required', 'integer', 'min:1'],
         'purchases.*.profit_per_unit'     => ['nullable', 'numeric', 'min:0'],

@@ -36,7 +36,7 @@ class InvestorWithdrawalController extends Controller
 
         $withdrawals = InvestorWithdrawal::query()
             ->with([
-                'investor:id,full_name,phone',
+                'investor:id,name,phone',
                 'currency:id,code,name,symbol',
                 'approvedBy:id,name',
                 'paidBy:id,name',
@@ -60,7 +60,7 @@ class InvestorWithdrawalController extends Controller
 
         return Inertia::render('investor-withdrawals/index', [
             'withdrawals' => $withdrawals,
-            'investors'   => Investor::notTrashed()->select('id', 'full_name')->orderBy('full_name')->get(),
+            'investors'   => Investor::notTrashed()->select('id', 'name')->orderBy('name')->get(),
             'filters'     => [
                 'search'      => $search,
                 'investor_id' => $investorId,
@@ -82,8 +82,8 @@ class InvestorWithdrawalController extends Controller
         return Inertia::render('investor-withdrawals/create', [
             'investors'  => Investor::notTrashed()->active()
                                 ->with('wallet')
-                                ->select('id', 'full_name', 'phone')
-                                ->orderBy('full_name')
+                                ->select('id', 'name', 'phone')
+                                ->orderBy('name')
                                 ->get(),
             'selectedInvestorId' => $investorId,
             'nextNumber' => InvestorWithdrawal::generateWithdrawalNumber(),
@@ -114,15 +114,21 @@ class InvestorWithdrawalController extends Controller
             $data['amount_currency'] = $amountEntered;
             unset($data['amount']);
 
-            // ⭐ بررسی موجودی
+            // Profit withdrawals only from payable (pending) profit balance on the cash wallet.
+            // Capital withdrawals only from cash capital — goods capital is not cash.
             if ($data['type'] === 'profit') {
-                if ($amountAfn > (float) $wallet->profit_balance_afn) {
-                    throw new \Exception('The withdrawal is larger than the profit available.');
+                $payable = (float) \App\Models\InvestorProfitEntry::query()
+                    ->where('investor_id', $investor->id)
+                    ->where('status', 'pending')
+                    ->sum('profit_amount_afn');
+                $available = min((float) $wallet->profit_balance_afn, $payable);
+                if ($amountAfn > $available + 0.01) {
+                    throw new \Exception('The withdrawal is larger than the payable profit available.');
                 }
                 $balanceBefore = (float) $wallet->profit_balance_afn;
             } else {
                 if ($amountAfn > (float) $wallet->capital_balance_afn) {
-                    throw new \Exception('The withdrawal is larger than the capital available.');
+                    throw new \Exception('The withdrawal is larger than the cash capital available. Goods capital cannot be withdrawn as cash.');
                 }
                 $balanceBefore = (float) $wallet->capital_balance_afn;
             }
@@ -149,7 +155,7 @@ class InvestorWithdrawalController extends Controller
     public function show(InvestorWithdrawal $withdrawal): Response
     {
         $withdrawal->load([
-            'investor:id,full_name,phone,email',
+            'investor:id,name,phone,email',
             'investment:id,investment_number',
             'approvedBy:id,name',
             'paidBy:id,name',
@@ -346,7 +352,7 @@ class InvestorWithdrawalController extends Controller
 
     public function receipt(InvestorWithdrawal $withdrawal): Response
     {
-        $withdrawal->load('investor:id,full_name,phone');
+        $withdrawal->load('investor:id,name,phone');
         $notes = (string) $withdrawal->notes;
         $capital = 0.0;
         $profit = 0.0;

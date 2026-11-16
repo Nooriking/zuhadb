@@ -6,12 +6,15 @@ use App\Models\Branch;
 use App\Models\Customer;
 use App\Models\Expense;
 use App\Models\Inventory;
+use App\Models\InvestmentProductAllocation;
+use App\Models\InvestorProfitEntry;
 use App\Models\ProductBatch;
 use App\Models\Sale;
 use App\Models\SaleItem;
 use App\Models\SaleReturn;
 use App\Models\SaleReturnItem;
 use App\Services\CustomerLedgerService;
+use App\Support\OriginalCurrencyMoney;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -31,10 +34,15 @@ class SaleReturnController extends Controller
         $branchId  = $request->query('branch_id');
         $status    = $request->query('status');
         $customerId = $request->query('customer_id');
+        $user      = $request->user();
+
+        if ($user?->isBranchScoped()) {
+            $branchId = $user->branch_id;
+        }
 
         $saleReturns = SaleReturn::query()
             ->with([
-                'sale:id,invoice_number',
+                'sale:id,invoice_number,sale_currency_code,sale_currency_symbol,sale_amount_currency,usd_to_afn_rate,aed_to_afn_rate,usd_to_ledger_rate,total_afn',
                 'branch:id,name,code',
                 'customer:id,name,phone,current_due_afn',
                 'creator:id,name',
@@ -56,17 +64,83 @@ class SaleReturnController extends Controller
             ->paginate(15)
             ->withQueryString();
 
+        $saleReturns->getCollection()->each(function (SaleReturn $saleReturn) {
+            $money = OriginalCurrencyMoney::forSaleReturn($saleReturn);
+            $saleReturn->setAttribute('currency_code', $money['code']);
+            $saleReturn->setAttribute('currency_symbol', $money['symbol']);
+            $saleReturn->setAttribute('currency_known', $money['known']);
+            $saleReturn->setAttribute('currency_label', $money['label']);
+            $saleReturn->setAttribute('display_amount', $money['amount']);
+            $saleReturn->setAttribute(
+                'display_refund',
+                $saleReturn->sale
+                    ? OriginalCurrencyMoney::fromLedgerAfn((float) $saleReturn->refund_amount_afn, $money['code'], $saleReturn->sale)
+                    : null
+            );
+            $saleReturn->setAttribute(
+                'display_previous_due',
+                $saleReturn->sale
+                    ? OriginalCurrencyMoney::fromLedgerAfn((float) $saleReturn->previous_due_afn, $money['code'], $saleReturn->sale)
+                    : null
+            );
+            $saleReturn->setAttribute(
+                'display_new_due',
+                $saleReturn->sale
+                    ? OriginalCurrencyMoney::fromLedgerAfn((float) $saleReturn->new_due_afn, $money['code'], $saleReturn->sale)
+                    : null
+            );
+        });
+
+        $completedReturns = SaleReturn::query()
+            ->notTrashed()
+            ->completed()
+            ->when($branchId, fn ($q, $v) => $q->where('branch_id', $v))
+            ->with(['sale:id,sale_currency_code,sale_currency_symbol,sale_amount_currency,usd_to_afn_rate,aed_to_afn_rate,usd_to_ledger_rate,total_afn'])
+            ->get(['id', 'sale_id', 'total_afn', 'return_date']);
+
+        $totalByCurrency = OriginalCurrencyMoney::sumByCurrency(
+            $completedReturns->map(function (SaleReturn $saleReturn) {
+                $money = OriginalCurrencyMoney::forSaleReturn($saleReturn);
+
+                return [
+                    'code' => $money['code'],
+                    'symbol' => $money['symbol'],
+                    'amount' => $money['amount'],
+                    'ledger_afn' => $money['ledger_afn'],
+                ];
+            })
+        );
+        $todayByCurrency = OriginalCurrencyMoney::sumByCurrency(
+            $completedReturns
+                ->filter(fn (SaleReturn $r) => optional($r->return_date)?->toDateString() === now()->toDateString())
+                ->map(function (SaleReturn $saleReturn) {
+                    $money = OriginalCurrencyMoney::forSaleReturn($saleReturn);
+
+                    return [
+                        'code' => $money['code'],
+                        'symbol' => $money['symbol'],
+                        'amount' => $money['amount'],
+                        'ledger_afn' => $money['ledger_afn'],
+                    ];
+                })
+        );
+
         /* ═══ Stats ═══ */
+        $statsBase = SaleReturn::notTrashed()
+            ->when($branchId, fn ($q, $v) => $q->where('branch_id', $v));
+
         $stats = [
-            'total_returns'   => SaleReturn::notTrashed()->count(),
-            'today_returns'   => SaleReturn::notTrashed()->whereDate('return_date', today())->count(),
-            'total_amount'    => (float) SaleReturn::notTrashed()->completed()->sum('total_afn'),
-            'today_amount'    => (float) SaleReturn::notTrashed()->completed()->whereDate('return_date', today())->sum('total_afn'),
+            'total_returns'   => (clone $statsBase)->count(),
+            'today_returns'   => (clone $statsBase)->whereDate('return_date', today())->count(),
+            'total_amount'    => (float) (clone $statsBase)->completed()->sum('total_afn'),
+            'today_amount'    => (float) (clone $statsBase)->completed()->whereDate('return_date', today())->sum('total_afn'),
+            'total_amount_by_currency' => $totalByCurrency['list'],
+            'today_amount_by_currency' => $todayByCurrency['list'],
         ];
 
         return Inertia::render('sale-returns/index', [
             'saleReturns' => $saleReturns,
-            'branches'    => Branch::notTrashed()->select('id', 'name', 'code')->get(),
+            'branches'    => Branch::notTrashed()->visibleTo($user)->select('id', 'name', 'code')->get(),
             'customers'   => Customer::notTrashed()->select('id', 'name', 'phone')->orderBy('name')->get(),
             'filters'     => [
                 'search'      => $search,
@@ -119,7 +193,6 @@ class SaleReturnController extends Controller
                 'customer:id,name,phone,current_due_afn',
                 'branch:id,name,code',
             ])->find($saleId);
-
             if ($selectedSale) {
                 $saleItems = $this->buildSaleItemsForReturn($selectedSale);
             } elseif (! $invoiceError) {
@@ -133,17 +206,31 @@ class SaleReturnController extends Controller
             ->with('customer:id,name,phone')
             ->orderByDesc('id')
             ->limit(100)
-            ->get(['id', 'invoice_number', 'total_afn', 'branch_id', 'customer_id', 'sale_date'])
-            ->map(fn (Sale $sale) => [
-                'id'              => $sale->id,
-                'invoice_number'  => $sale->invoice_number,
-                'total_afn'       => $sale->total_afn,
-                'sale_date'       => $sale->sale_date,
-                'customer_id'     => $sale->customer_id,
-                'branch_id'       => $sale->branch_id,
-                'customer_name'   => $sale->customer?->name,
-                'customer_phone'  => $sale->customer?->phone,
-            ]);
+            ->get([
+                'id', 'invoice_number', 'total_afn', 'branch_id', 'customer_id', 'sale_date',
+                'sale_currency_code', 'sale_currency_symbol', 'sale_amount_currency',
+                'usd_to_afn_rate', 'aed_to_afn_rate', 'usd_to_ledger_rate',
+            ])
+            ->map(function (Sale $sale) {
+                $money = OriginalCurrencyMoney::forSale($sale);
+
+                return [
+                    'id'              => $sale->id,
+                    'invoice_number'  => $sale->invoice_number,
+                    'total_afn'       => $sale->total_afn,
+                    'sale_date'       => $sale->sale_date,
+                    'customer_id'     => $sale->customer_id,
+                    'branch_id'       => $sale->branch_id,
+                    'customer_name'   => $sale->customer?->name,
+                    'customer_phone'  => $sale->customer?->phone,
+                    'currency_code'   => $money['code'],
+                    'currency_label'  => $money['label'],
+                    'currency_known'  => $money['known'],
+                    'display_amount'  => $money['amount'],
+                ];
+            });
+
+        $selectedMoney = $selectedSale ? OriginalCurrencyMoney::forSale($selectedSale) : null;
 
         return Inertia::render('sale-returns/create', [
             'sales'        => $sales,
@@ -154,6 +241,13 @@ class SaleReturnController extends Controller
                 'branch'            => $selectedSale->branch,
                 'total_afn'         => $selectedSale->total_afn,
                 'remaining_due_afn' => $selectedSale->remaining_due_afn,
+                'sale_currency_code' => $selectedMoney['code'],
+                'sale_currency_symbol' => $selectedMoney['symbol'],
+                'sale_currency_label' => $selectedMoney['label'],
+                'sale_currency_known' => $selectedMoney['known'],
+                'sale_amount_currency' => $selectedMoney['amount'],
+                'usd_to_afn_rate' => $selectedSale->usd_to_afn_rate,
+                'aed_to_afn_rate' => $selectedSale->aed_to_afn_rate,
             ] : null,
             'saleItems'     => $saleItems,
             'invoiceQuery'  => $invoiceQuery !== '' ? $invoiceQuery : null,
@@ -253,7 +347,7 @@ class SaleReturnController extends Controller
         if ($saleReturn->trash) abort(404);
 
         $saleReturn->load([
-            'sale:id,invoice_number,total_afn,remaining_due_afn,sale_date',
+            'sale:id,invoice_number,total_afn,remaining_due_afn,sale_date,sale_currency_code,sale_currency_symbol,sale_amount_currency,usd_to_afn_rate,aed_to_afn_rate,usd_to_ledger_rate',
             'branch:id,name,code',
             'customer:id,name,phone,current_due_afn,credit_limit_afn',
             'creator:id,name,email',
@@ -269,6 +363,42 @@ class SaleReturnController extends Controller
             ->filter()
             ->unique('id')
             ->values();
+
+        $money = OriginalCurrencyMoney::forSaleReturn($saleReturn);
+        $saleReturn->setAttribute('currency_code', $money['code']);
+        $saleReturn->setAttribute('currency_symbol', $money['symbol']);
+        $saleReturn->setAttribute('currency_known', $money['known']);
+        $saleReturn->setAttribute('currency_label', $money['label']);
+        $saleReturn->setAttribute('display_amount', $money['amount']);
+        if ($saleReturn->sale) {
+            $saleReturn->setAttribute(
+                'display_refund',
+                OriginalCurrencyMoney::fromLedgerAfn((float) $saleReturn->refund_amount_afn, $money['code'], $saleReturn->sale)
+            );
+            $saleReturn->setAttribute(
+                'display_previous_due',
+                OriginalCurrencyMoney::fromLedgerAfn((float) $saleReturn->previous_due_afn, $money['code'], $saleReturn->sale)
+            );
+            $saleReturn->setAttribute(
+                'display_new_due',
+                OriginalCurrencyMoney::fromLedgerAfn((float) $saleReturn->new_due_afn, $money['code'], $saleReturn->sale)
+            );
+
+            $saleReturn->items->each(function (SaleReturnItem $item) use ($money, $saleReturn) {
+                $item->setAttribute(
+                    'display_total',
+                    OriginalCurrencyMoney::fromLedgerAfn((float) $item->total_afn, $money['code'], $saleReturn->sale)
+                );
+                $item->setAttribute(
+                    'display_unit_price',
+                    OriginalCurrencyMoney::fromLedgerAfn((float) $item->unit_price_afn, $money['code'], $saleReturn->sale)
+                );
+                $item->setAttribute(
+                    'display_expense_amount',
+                    OriginalCurrencyMoney::fromLedgerAfn((float) ($item->expense_amount_afn ?? 0), $money['code'], $saleReturn->sale)
+                );
+            });
+        }
 
         return Inertia::render('sale-returns/show', [
             'saleReturn' => $saleReturn,
@@ -518,7 +648,7 @@ class SaleReturnController extends Controller
     }
 
     /**
-     * Complete a return: restock, ledger, deduct from sale totals, record shop expenses, mark completed.
+     * Complete a return: restock, reverse investor profit/allocations, ledger, adjust sale totals.
      */
     private function finalizeReturn(SaleReturn $saleReturn): void
     {
@@ -526,7 +656,7 @@ class SaleReturnController extends Controller
             return;
         }
 
-        $saleReturn->loadMissing(['items', 'customer']);
+        $saleReturn->loadMissing(['items.saleItem', 'customer']);
 
         if ($saleReturn->customer) {
             $saleReturn->update(['previous_due_afn' => (float) $saleReturn->customer->current_due_afn]);
@@ -535,24 +665,55 @@ class SaleReturnController extends Controller
         $this->applyReturnTotals($saleReturn);
         $saleReturn->refresh();
 
-        foreach ($saleReturn->items as $item) {
-            if ($item->shouldReturnToStock() && $item->batch_id) {
-                $batch = ProductBatch::find($item->batch_id);
+        $reversedInvestorProfit = 0.0;
+        $reversedCogs = 0.0;
 
-                if ($batch) {
-                    $batch->restoreStock($item->quantity);
+        foreach ($saleReturn->items as $item) {
+            $saleItem = $item->saleItem ?? ($item->sale_item_id ? SaleItem::find($item->sale_item_id) : null);
+            $restockParts = $this->resolveRestockParts($item, $saleItem);
+
+            if ($item->shouldReturnToStock()) {
+                foreach ($restockParts as $part) {
+                    $batch = ProductBatch::query()->lockForUpdate()->find($part['batch_id']);
+                    if (! $batch) {
+                        continue;
+                    }
+
+                    $qty = (int) $part['qty'];
+                    $batch->restoreStock($qty);
 
                     Inventory::increase(
-                        branchId:      $saleReturn->branch_id,
-                        variantId:     $item->variant_id,
-                        qty:           $item->quantity,
-                        type:          'return',
-                        batchId:       $batch->id,
+                        branchId: $saleReturn->branch_id,
+                        variantId: $item->variant_id,
+                        qty: $qty,
+                        type: 'return',
+                        batchId: $batch->id,
                         referenceType: SaleReturn::class,
-                        referenceId:   $saleReturn->id,
-                        notes:         "Returned via {$saleReturn->return_number}"
+                        referenceId: $saleReturn->id,
+                        notes: "Returned via {$saleReturn->return_number}"
+                    );
+
+                    $allocation = InvestmentProductAllocation::query()
+                        ->where('batch_id', $batch->id)
+                        ->where('status', '!=', 'cancelled')
+                        ->orderByDesc('id')
+                        ->lockForUpdate()
+                        ->first();
+
+                    $allocation?->recordReturn($qty);
+
+                    $reversedCogs = round(
+                        $reversedCogs + ((float) ($part['cost_per_unit_afn'] ?? $batch->unit_cost_afn) * $qty),
+                        2
                     );
                 }
+            }
+
+            if ($saleItem) {
+                $reversedInvestorProfit = round(
+                    $reversedInvestorProfit + $this->reverseInvestorProfitForReturn($saleItem, (int) $item->quantity),
+                    2
+                );
             }
         }
 
@@ -568,19 +729,156 @@ class SaleReturnController extends Controller
             if ($sale) {
                 $sale->update([
                     'remaining_due_afn' => $customer->current_due_afn,
-                    'due_afn'           => $customer->current_due_afn,
-                    'payment_status'    => $customer->current_due_afn <= 0.01 ? 'paid' : 'partial',
+                    'due_afn' => $customer->current_due_afn,
+                    'payment_status' => $customer->current_due_afn <= 0.01 ? 'paid' : 'partial',
                 ]);
             }
         }
 
-        $this->adjustSaleTotals($saleReturn, -1 * (float) $saleReturn->total_afn);
+        $this->adjustSaleTotals(
+            $saleReturn,
+            -1 * (float) $saleReturn->total_afn,
+            $reversedCogs,
+            $reversedInvestorProfit
+        );
 
         $saleReturn->update(['status' => SaleReturn::STATUS_COMPLETED]);
 
         foreach ($saleReturn->items as $item) {
             $this->syncItemExpense($saleReturn, $item);
         }
+    }
+
+    /**
+     * @return list<array{batch_id:int, qty:int, cost_per_unit_afn?:float|null}>
+     */
+    private function resolveRestockParts(SaleReturnItem $item, ?SaleItem $saleItem): array
+    {
+        $qty = (int) $item->quantity;
+        if ($qty <= 0) {
+            return [];
+        }
+
+        $breakdown = $saleItem?->cost_breakdown ?? [];
+        if (is_array($breakdown) && $breakdown !== []) {
+            // Prefer original FIFO parts (correct unit costs) even when a single batch_id is set.
+            $remaining = $qty;
+            $parts = [];
+            foreach (array_reverse($breakdown) as $part) {
+                if ($remaining <= 0) {
+                    break;
+                }
+                $partBatchId = (int) ($part['batch_id'] ?? 0);
+                if ($partBatchId <= 0) {
+                    continue;
+                }
+                if ($item->batch_id && $partBatchId !== (int) $item->batch_id) {
+                    continue;
+                }
+                $take = min($remaining, (int) ($part['qty'] ?? 0));
+                if ($take <= 0) {
+                    continue;
+                }
+                $parts[] = [
+                    'batch_id' => $partBatchId,
+                    'qty' => $take,
+                    'cost_per_unit_afn' => isset($part['cost_per_unit_afn']) ? (float) $part['cost_per_unit_afn'] : null,
+                ];
+                $remaining -= $take;
+            }
+            if ($parts !== []) {
+                if ($remaining > 0 && $item->batch_id) {
+                    $parts[] = [
+                        'batch_id' => (int) $item->batch_id,
+                        'qty' => $remaining,
+                        'cost_per_unit_afn' => isset($parts[0]['cost_per_unit_afn']) ? $parts[0]['cost_per_unit_afn'] : ($saleItem ? (float) $saleItem->cost_price_afn : null),
+                    ];
+                }
+
+                return $parts;
+            }
+        }
+
+        if ($item->batch_id) {
+            $unitCost = null;
+            if (is_array($breakdown)) {
+                foreach ($breakdown as $part) {
+                    if ((int) ($part['batch_id'] ?? 0) === (int) $item->batch_id && isset($part['cost_per_unit_afn'])) {
+                        $unitCost = (float) $part['cost_per_unit_afn'];
+                        break;
+                    }
+                }
+            }
+
+            return [[
+                'batch_id' => (int) $item->batch_id,
+                'qty' => $qty,
+                'cost_per_unit_afn' => $unitCost ?? ($saleItem ? (float) $saleItem->cost_price_afn : null),
+            ]];
+        }
+
+        return [];
+    }
+
+    private function reverseInvestorProfitForReturn(SaleItem $saleItem, int $returnedQty): float
+    {
+        if ($returnedQty <= 0) {
+            return 0.0;
+        }
+
+        $entries = InvestorProfitEntry::query()
+            ->where('sale_item_id', $saleItem->id)
+            ->where('entry_type', 'profit')
+            ->whereIn('status', ['pending', 'paid'])
+            ->orderByDesc('id')
+            ->lockForUpdate()
+            ->get();
+
+        $left = $returnedQty;
+        $reversed = 0.0;
+
+        foreach ($entries as $entry) {
+            if ($left <= 0) {
+                break;
+            }
+
+            // Net quantity still attributable to this profit entry after prior adjustments.
+            $alreadyReversedQty = (int) InvestorProfitEntry::query()
+                ->where('sale_item_id', $saleItem->id)
+                ->where('entry_type', 'adjustment')
+                ->where('notes', 'like', '%reversal of entry #'.$entry->id.'%')
+                ->sum('quantity');
+
+            $entryQty = max(0, (int) $entry->quantity - $alreadyReversedQty);
+            $take = min($left, $entryQty);
+            if ($take <= 0) {
+                continue;
+            }
+
+            $perUnit = abs((float) $entry->profit_per_unit_afn);
+            $reverseAmount = round($perUnit * $take, 2);
+            $entry->recordReturnReversal($take, 'Reversed by sale return');
+            $reversed = round($reversed + $reverseAmount, 2);
+            $left -= $take;
+        }
+
+        // Keep sale line investor/company profit aligned with remaining sold qty.
+        $originalQty = max(1, (int) $saleItem->quantity);
+        $remainingQty = max(0, $originalQty - $returnedQty);
+        $ratio = $originalQty > 0 ? ($remainingQty / $originalQty) : 0;
+        $newInvestor = round((float) $saleItem->investor_profit_afn * $ratio, 2);
+        // Prefer reducing by the exact reversed amount when returning from this line.
+        $newInvestor = round(max(0, (float) $saleItem->investor_profit_afn - $reversed), 2);
+        $gross = (float) ($saleItem->gross_profit_afn ?? ((float) $saleItem->store_profit_afn + (float) $saleItem->investor_profit_afn));
+        $newGross = round($gross * $ratio, 2);
+
+        $saleItem->update([
+            'investor_profit_afn' => $newInvestor,
+            'gross_profit_afn' => $newGross,
+            'store_profit_afn' => round($newGross - $newInvestor, 2),
+        ]);
+
+        return $reversed;
     }
 
     /**
@@ -618,10 +916,14 @@ class SaleReturnController extends Controller
         }
     }
 
-    private function adjustSaleTotals(SaleReturn $saleReturn, float $delta): void
-    {
+    private function adjustSaleTotals(
+        SaleReturn $saleReturn,
+        float $delta,
+        float $reversedCogs = 0.0,
+        float $reversedInvestorProfit = 0.0,
+    ): void {
         $delta = round($delta, 2);
-        if (abs($delta) < 0.01 || ! $saleReturn->sale_id) {
+        if ((abs($delta) < 0.01 && $reversedCogs < 0.01 && $reversedInvestorProfit < 0.01) || ! $saleReturn->sale_id) {
             return;
         }
 
@@ -630,10 +932,20 @@ class SaleReturnController extends Controller
             return;
         }
 
+        $newTotal = max(0, round((float) $sale->total_afn + $delta, 2));
+        $newCost = max(0, round((float) $sale->total_cost_afn - $reversedCogs, 2));
+        $newInvestorProfit = max(0, round((float) $sale->total_investor_profit_afn - $reversedInvestorProfit, 2));
+        $newGross = round($newTotal - $newCost, 2);
+        $newStoreProfit = round($newGross - $newInvestorProfit, 2);
+
         $sale->update([
             'subtotal_afn' => max(0, round((float) $sale->subtotal_afn + $delta, 2)),
-            'total_afn' => max(0, round((float) $sale->total_afn + $delta, 2)),
+            'total_afn' => $newTotal,
             'new_sale_amount_afn' => max(0, round((float) $sale->new_sale_amount_afn + $delta, 2)),
+            'total_cost_afn' => $newCost,
+            'total_profit_afn' => $newGross,
+            'total_investor_profit_afn' => $newInvestorProfit,
+            'store_profit_afn' => $newStoreProfit,
         ]);
     }
 

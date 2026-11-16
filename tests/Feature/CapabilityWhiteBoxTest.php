@@ -132,8 +132,9 @@ test('add stock with investor capital allocates investment and stores profit per
     $investor = Investor::factory()->create();
     $investment = \App\Models\Investment::factory()->create([
         'investor_id' => $investor->id,
-        'capital_amount_afn' => 1000,
-        'available_amount_afn' => 1000,
+        'source_type' => 'cash',
+        'capital_amount_afn' => 5000,
+        'available_amount_afn' => 5000,
         'allocated_amount_afn' => 0,
         'status' => 'active',
     ]);
@@ -156,15 +157,15 @@ test('add stock with investor capital allocates investment and stores profit per
     $productAllocation = \App\Models\InvestmentProductAllocation::query()->where('batch_id', $batch->id)->first();
     $purchaseAllocation = \App\Models\InvestmentPurchaseAllocation::query()->where('investment_id', $investment->id)->first();
 
-    expect((float) $investment->available_amount_afn)->toBe(980.0)
-        ->and((float) $investment->allocated_amount_afn)->toBe(20.0)
+    expect((float) $investment->available_amount_afn)->toBe(3600.0)
+        ->and((float) $investment->allocated_amount_afn)->toBe(1400.0)
         ->and($batch->investor_id)->toBe($investor->id)
-        ->and((float) $batch->profit_per_unit_afn)->toBe(1.0)
+        ->and((float) $batch->profit_per_unit_afn)->toBe(70.0)
         ->and($productAllocation)->not->toBeNull()
         ->and((int) $productAllocation->funded_quantity)->toBe(2)
-        ->and((float) $productAllocation->profit_per_unit_afn)->toBe(1.0)
+        ->and((float) $productAllocation->profit_per_unit_afn)->toBe(70.0)
         ->and($purchaseAllocation)->not->toBeNull()
-        ->and((float) $purchaseAllocation->allocated_amount_afn)->toBe(20.0);
+        ->and((float) $purchaseAllocation->allocated_amount_afn)->toBe(1400.0);
 });
 
 test('a branch manager is locked to one branch and an admin is not', function () {

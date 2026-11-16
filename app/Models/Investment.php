@@ -25,8 +25,15 @@ class Investment extends Model
         'currency_code',
         'currency_symbol',
         'exchange_rate',
+        'usd_to_afn_rate',
+        'aed_to_afn_rate',
+        'usd_to_aed_rate',
+        'rate_effective_at',
+        'rate_source',
         'capital_amount_currency',
         'capital_amount_afn',
+        'capital_amount_usd',
+        'capital_amount_aed',
         'available_amount_currency',
         'available_amount_afn',
         'allocated_amount_afn',
@@ -43,8 +50,14 @@ class Investment extends Model
 
     protected $casts = [
         'exchange_rate'             => 'decimal:8',
+        'usd_to_afn_rate'           => 'decimal:8',
+        'aed_to_afn_rate'           => 'decimal:8',
+        'usd_to_aed_rate'           => 'decimal:8',
+        'rate_effective_at'         => 'datetime',
         'capital_amount_currency'   => 'decimal:2',
         'capital_amount_afn'        => 'decimal:2',
+        'capital_amount_usd'        => 'decimal:2',
+        'capital_amount_aed'        => 'decimal:2',
         'available_amount_currency' => 'decimal:2',
         'available_amount_afn'      => 'decimal:2',
         'allocated_amount_afn'      => 'decimal:2',
@@ -205,32 +218,30 @@ class Investment extends Model
     }
 
     /* =========================================================
-     |  Status Management
-     ========================================================= */
-
-    public function refreshStatus(): void
-    {
-        $available = (float) $this->available_amount_afn;
-        $allocated = (float) $this->allocated_amount_afn;
-
-        if ($available <= 0.01 && $allocated > 0) {
-            $status = 'fully_used';
-        } elseif ($allocated > 0) {
-            $status = 'partially_used';
-        } else {
-            $status = 'active';
-        }
-
-        $this->update(['status' => $status]);
-    }
-
-    /* =========================================================
      |  Capital Helpers
      ========================================================= */
 
     public function hasAvailableCapital(): bool
     {
+        if ($this->isGoodsInvestment()) {
+            return $this->remainingGoodsCapitalAfn() > 0.01;
+        }
+
         return (float) $this->available_amount_afn > 0.01;
+    }
+
+    /**
+     * Goods capital still free to allocate to inventory (AFN).
+     */
+    public function remainingGoodsCapitalAfn(): float
+    {
+        if (! $this->isGoodsInvestment()) {
+            return (float) $this->available_amount_afn;
+        }
+
+        $allocated = (float) $this->purchaseAllocations()->sum('allocated_amount_afn');
+
+        return round(max(0, (float) $this->capital_amount_afn - $allocated), 2);
     }
 
     public function getProgressPercentAttribute(): float
@@ -262,7 +273,11 @@ class Investment extends Model
         ?string $notes = null
     ): InvestmentPurchaseAllocation {
         return DB::transaction(function () use ($purchaseId, $allocatedAmountAfn, $notes) {
-            $availableAfn = (float) $this->available_amount_afn;
+            if ($this->isGoodsInvestment()) {
+                $availableAfn = $this->remainingGoodsCapitalAfn();
+            } else {
+                $availableAfn = (float) $this->available_amount_afn;
+            }
 
             if ($allocatedAmountAfn > $availableAfn + 0.01) {
                 throw new \Exception(
@@ -279,16 +294,57 @@ class Investment extends Model
                 'created_by'           => Auth::id(),
             ]);
 
-            $this->update([
-                'available_amount_afn' => $availableAfn - $allocatedAmountAfn,
+            $updates = [
                 'allocated_amount_afn' => (float) $this->allocated_amount_afn + $allocatedAmountAfn,
                 'user_id'              => Auth::id(),
-            ]);
+            ];
 
+            if ($this->isCashInvestment()) {
+                $updates['available_amount_afn'] = $availableAfn - $allocatedAmountAfn;
+            }
+
+            $this->update($updates);
             $this->refreshStatus();
 
             return $allocation;
         });
+    }
+
+    /* =========================================================
+     |  Status Management
+     ========================================================= */
+
+    public function refreshStatus(): void
+    {
+        if ($this->isGoodsInvestment()) {
+            $remaining = $this->remainingGoodsCapitalAfn();
+            $allocated = (float) $this->allocated_amount_afn;
+
+            if ($remaining <= 0.01 && $allocated > 0) {
+                $status = 'fully_used';
+            } elseif ($allocated > 0) {
+                $status = 'partially_used';
+            } else {
+                $status = 'active';
+            }
+
+            $this->update(['status' => $status]);
+
+            return;
+        }
+
+        $available = (float) $this->available_amount_afn;
+        $allocated = (float) $this->allocated_amount_afn;
+
+        if ($available <= 0.01 && $allocated > 0) {
+            $status = 'fully_used';
+        } elseif ($allocated > 0) {
+            $status = 'partially_used';
+        } else {
+            $status = 'active';
+        }
+
+        $this->update(['status' => $status]);
     }
 
     /* =========================================================

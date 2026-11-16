@@ -15,7 +15,14 @@ class StoreInvestorWithdrawalRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'investor_id'       => ['required', 'exists:investors,id'],
+            'investor_id'       => [
+                'required',
+                'integer',
+                Rule::exists('users', 'id')->where(fn ($q) => $q
+                    ->where('role', \App\Models\User::ROLE_INVESTOR)
+                    ->where('trash', false)
+                    ->whereNull('deleted_at')),
+            ],
             'investment_id'     => ['nullable', 'exists:investments,id'],
             'type'              => ['required', Rule::in(['profit', 'capital'])],
             'currency_id'       => [

@@ -10,7 +10,11 @@ class UpdateBranchRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return true;
+        $branch = $this->route('branch');
+
+        return $branch instanceof \App\Models\Branch
+            && $this->user()
+            && $branch->canBeEditedBy($this->user());
     }
 
     public function rules(): array

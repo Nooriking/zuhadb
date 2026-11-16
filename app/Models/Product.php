@@ -10,7 +10,6 @@ use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
-use Illuminate\Validation\ValidationException;
 
 class Product extends Model
 {
@@ -31,9 +30,6 @@ class Product extends Model
         'gender',
         'status',
         'description',
-        'base_unit_name',
-        'pack_unit_name',
-        'units_per_pack',
 
         // Purchase info
         'variant_id',
@@ -49,6 +45,15 @@ class Product extends Model
         'purchase_line_amount',
         'rate_to_ledger',
         'rate_kind',
+        'usd_to_afn_rate',
+        'aed_to_afn_rate',
+        'usd_to_aed_rate',
+        'rate_effective_at',
+        'rate_source',
+        'unit_amount_usd',
+        'unit_amount_aed',
+        'line_amount_usd',
+        'line_amount_aed',
         'quantity',
         'remaining_quantity',
         'purchase_price_afn',
@@ -61,6 +66,8 @@ class Product extends Model
         'line_profit',
 
         // ✅ Store profit (جدید)
+        'profit_currency_id',
+        'profit_currency_code',
         'store_profit_per_unit',
         'line_store_profit',
 
@@ -83,6 +90,14 @@ class Product extends Model
         'purchase_unit_amount'   => 'decimal:2',
         'purchase_line_amount'   => 'decimal:2',
         'rate_to_ledger'         => 'decimal:8',
+        'usd_to_afn_rate'        => 'decimal:8',
+        'aed_to_afn_rate'        => 'decimal:8',
+        'usd_to_aed_rate'        => 'decimal:8',
+        'rate_effective_at'      => 'datetime',
+        'unit_amount_usd'        => 'decimal:4',
+        'unit_amount_aed'        => 'decimal:4',
+        'line_amount_usd'        => 'decimal:2',
+        'line_amount_aed'        => 'decimal:2',
         'quantity'               => 'integer',
         'remaining_quantity'     => 'integer',
         'purchase_price_afn'     => 'decimal:2',
@@ -97,7 +112,6 @@ class Product extends Model
         // ✅ Store profit (جدید)
         'store_profit_per_unit'  => 'decimal:2',
         'line_store_profit'      => 'decimal:2',
-        'units_per_pack'         => 'decimal:6',
 
         'created_at'             => 'datetime',
         'updated_at'             => 'datetime',
@@ -222,64 +236,6 @@ class Product extends Model
     public function scopeByGender(Builder $query, string $gender): Builder
     {
         return $query->where('gender', $gender);
-    }
-
-    public function hasUnitConversion(): bool
-    {
-        return filled($this->base_unit_name)
-            && filled($this->pack_unit_name)
-            && $this->units_per_pack !== null
-            && (float) $this->units_per_pack > 0;
-    }
-
-    public function conversionLabel(): ?string
-    {
-        if (! $this->hasUnitConversion()) {
-            return null;
-        }
-
-        $factor = rtrim(rtrim(number_format((float) $this->units_per_pack, 6, '.', ''), '0'), '.');
-
-        return '1 '.$this->pack_unit_name.' = '.$factor.' '.$this->base_unit_name;
-    }
-
-    /**
-     * Inventory and sales store quantities in the base unit.
-     */
-    public function quantityToBaseUnits(int $quantity, string $unit = 'base'): int
-    {
-        $unit = $unit === 'pack' ? 'pack' : 'base';
-
-        if ($unit === 'base') {
-            return $quantity;
-        }
-
-        if (! $this->hasUnitConversion()) {
-            throw ValidationException::withMessages([
-                'quantity_unit' => 'This product has no pack-to-base conversion defined.',
-            ]);
-        }
-
-        if (function_exists('bcmul')) {
-            $raw = bcmul((string) $quantity, (string) $this->units_per_pack, 6);
-        } else {
-            $raw = number_format($quantity * (float) $this->units_per_pack, 6, '.', '');
-        }
-
-        if (function_exists('bccomp') && bccomp($raw, (string) (int) $raw, 6) !== 0) {
-            throw ValidationException::withMessages([
-                'quantity' => 'Pack quantity must convert to a whole number of '.$this->base_unit_name.'.',
-            ]);
-        }
-
-        $base = (int) $raw;
-        if ($base < 1) {
-            throw ValidationException::withMessages([
-                'quantity' => 'Converted quantity must be at least 1 '.$this->base_unit_name.'.',
-            ]);
-        }
-
-        return $base;
     }
 
     public function scopeMainProducts(Builder $query): Builder

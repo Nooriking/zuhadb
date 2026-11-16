@@ -26,11 +26,11 @@ export function ProductExchangeRateFields({ usdToAfn, usdToAed, onChange, errors
     return (
         <div className="space-y-3 rounded-lg border p-4">
             <div>
-                <h4 className="text-sm font-semibold">Reference rates (not a transaction)</h4>
+                <h4 className="text-sm font-semibold">Product Reference Rates — Estimates Only</h4>
                 <p className="text-muted-foreground text-xs">
                     Direction is always “how many target units equal <strong>1 {usd}</strong>”. Example: if 1 {usd} = 70 {afn}, enter{' '}
-                    <strong>70</strong>. These are product-level reference rates for estimates only. They are not proof that a purchase,
-                    sale, or cash exchange happened at this rate, and they never rewrite catalog rates or historical snapshots.
+                    <strong>70</strong>. These rates are for form estimates and previews only. They are not proof of a currency exchange,
+                    do not overwrite the global FX board, and never become the FX snapshot of a purchase, sale, or investor-profit posting.
                 </p>
             </div>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

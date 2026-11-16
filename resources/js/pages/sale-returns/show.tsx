@@ -7,6 +7,7 @@ import { Separator } from '@/components/ui/separator';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
+import { formatOriginalAmount } from '@/lib/original-currency';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
 import { AlertTriangle, ArrowLeft, CheckCircle2, FileText, Package, RotateCcw, User, Wallet } from 'lucide-react';
@@ -24,6 +25,9 @@ interface ReturnItem {
     expense_bearer: 'shop' | 'customer';
     condition: 'good' | 'damaged' | 'expired' | 'other' | 'used';
     reason: string | null;
+    display_total?: number | null;
+    display_unit_price?: number | null;
+    display_expense_amount?: number | null;
     expense: { id: number; expense_number: string; title: string; amount_afn: string } | null;
     batch: { id: number; batch_code: string } | null;
     variant: {
@@ -46,6 +50,13 @@ interface SaleReturn {
     refund_method: string | null;
     reason: string | null;
     status: 'draft' | 'completed' | 'cancelled';
+    currency_code?: string | null;
+    currency_label?: string;
+    currency_known?: boolean;
+    display_amount?: number | null;
+    display_refund?: number | null;
+    display_previous_due?: number | null;
+    display_new_due?: number | null;
     sale: { id: number; invoice_number: string } | null;
     branch: { id: number; name: string; code: string } | null;
     customer: { id: number; name: string; phone: string | null; current_due_afn: string; credit_limit_afn: string } | null;
@@ -111,12 +122,16 @@ export default function SaleReturnsShow({ saleReturn, expenses = [] }: Props) {
         { title: saleReturn.return_number, href: `/sale-returns/${saleReturn.id}` },
     ];
 
-    const previousDue = parseFloat(saleReturn.previous_due_afn || '0');
-    const newDue = parseFloat(saleReturn.new_due_afn || '0');
-    const refund = parseFloat(saleReturn.refund_amount_afn || '0');
+    const currencyCode = saleReturn.currency_known === false ? null : saleReturn.currency_code || null;
+    const money = (amount: number | string | null | undefined) => formatOriginalAmount(amount, currencyCode);
+    const previousDue = saleReturn.display_previous_due ?? parseFloat(saleReturn.previous_due_afn || '0');
+    const newDue = saleReturn.display_new_due ?? parseFloat(saleReturn.new_due_afn || '0');
+    const refund = saleReturn.display_refund ?? parseFloat(saleReturn.refund_amount_afn || '0');
+    const totalDisplay = saleReturn.display_amount ?? parseFloat(saleReturn.total_afn || '0');
     const itemExpense = (item: ReturnItem) => {
-        const line = parseFloat(item.total_afn || '0');
-        return item.condition === 'used' ? line : Math.min(line, parseFloat(item.expense_amount_afn || '0'));
+        const line = item.display_total ?? parseFloat(item.total_afn || '0');
+        const expense = item.display_expense_amount ?? parseFloat(item.expense_amount_afn || '0');
+        return item.condition === 'used' ? Number(line) : Math.min(Number(line), Number(expense));
     };
     const shopExpenseAfn = saleReturn.items
         .filter((item) => item.expense_bearer === 'shop')
@@ -182,30 +197,33 @@ export default function SaleReturnsShow({ saleReturn, expenses = [] }: Props) {
                 {/* ═══════════ Due Impact Hero ═══════════ */}
                 <Card className="border-2 border-amber-300 bg-amber-50">
                     <CardContent className="p-6">
+                        <div className="mb-3 text-xs font-semibold">
+                            Currency: {saleReturn.currency_label || (currencyCode ? currencyCode : 'Unknown')}
+                        </div>
                         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
                             <div>
                                 <p className="text-muted-foreground text-xs uppercase">Return Amount</p>
                                 <p className="mt-1 font-mono text-2xl font-bold text-green-700">
-                                    {formatPrice(saleReturn.total_afn)} <span className="text-sm">AFN</span>
+                                    {money(totalDisplay)}
                                 </p>
                             </div>
                             <div>
                                 <p className="text-muted-foreground text-xs uppercase">Previous Due</p>
                                 <p className="mt-1 font-mono text-2xl font-bold text-amber-700">
-                                    {formatPrice(previousDue)} <span className="text-sm">AFN</span>
+                                    {money(previousDue)}
                                 </p>
                             </div>
                             <div>
                                 <p className="text-muted-foreground text-xs uppercase">New Due</p>
                                 <p className={`mt-1 font-mono text-2xl font-bold ${newDue > 0 ? 'text-red-700' : 'text-green-700'}`}>
-                                    {formatPrice(newDue)} <span className="text-sm">AFN</span>
+                                    {money(newDue)}
                                 </p>
                             </div>
                             {refund > 0 && (
                                 <div>
                                     <p className="text-muted-foreground text-xs uppercase">Refund</p>
                                     <p className="mt-1 font-mono text-2xl font-bold text-red-700">
-                                        {formatPrice(refund)} <span className="text-sm">AFN</span>
+                                        {money(refund)}
                                     </p>
                                 </div>
                             )}
@@ -291,18 +309,18 @@ export default function SaleReturnsShow({ saleReturn, expenses = [] }: Props) {
                         <CardContent className="space-y-2 text-sm">
                             <div className="grid grid-cols-2 gap-1">
                                 <span className="text-muted-foreground">Prev Due:</span>
-                                <span className="text-right font-mono text-xs text-amber-700">{formatPrice(previousDue)} AFN</span>
+                                <span className="text-right font-mono text-xs text-amber-700">{money(previousDue)}</span>
                                 <span className="text-muted-foreground">Return:</span>
-                                <span className="text-right font-mono text-xs text-green-700">-{formatPrice(saleReturn.total_afn)} AFN</span>
+                                <span className="text-right font-mono text-xs text-green-700">-{money(totalDisplay)}</span>
                                 <span className="col-span-2 my-1 border-t" />
                                 <span className="font-semibold">New Due:</span>
-                                <span className="text-right font-mono font-bold">{formatPrice(newDue)} AFN</span>
+                                <span className="text-right font-mono font-bold">{money(newDue)}</span>
 
                                 {refund > 0 && (
                                     <>
                                         <span className="col-span-2 my-1 border-t" />
                                         <span className="text-destructive font-bold">Refund:</span>
-                                        <span className="text-destructive text-right font-mono font-bold">{formatPrice(refund)} AFN</span>
+                                        <span className="text-destructive text-right font-mono font-bold">{money(refund)}</span>
                                         {saleReturn.refund_method && (
                                             <>
                                                 <span className="text-muted-foreground text-xs">Method:</span>
@@ -363,13 +381,13 @@ export default function SaleReturnsShow({ saleReturn, expenses = [] }: Props) {
                                             </TableCell>
                                             <TableCell className="font-mono text-xs">{item.batch?.batch_code || '—'}</TableCell>
                                             <TableCell className="text-center font-mono font-semibold">{item.quantity}</TableCell>
-                                            <TableCell className="text-right font-mono text-xs">{formatPrice(item.unit_price_afn)}</TableCell>
-                                            <TableCell className="text-right font-mono font-semibold">{formatPrice(item.total_afn)}</TableCell>
+                                            <TableCell className="text-right font-mono text-xs">{money(item.display_unit_price ?? item.unit_price_afn)}</TableCell>
+                                            <TableCell className="text-right font-mono font-semibold">{money(item.display_total ?? item.total_afn)}</TableCell>
                                             <TableCell>{getConditionBadge(item.condition)}</TableCell>
                                             <TableCell className="text-right">
                                                 {itemExpense(item) > 0 ? (
                                                     <div className="flex flex-col items-end gap-1">
-                                                        <span className="font-mono text-xs font-semibold">{formatPrice(itemExpense(item))} AFN</span>
+                                                        <span className="font-mono text-xs font-semibold">{money(itemExpense(item))}</span>
                                                         <Badge
                                                             variant="outline"
                                                             className={item.expense_bearer === 'shop' ? 'border-blue-300 text-blue-700' : 'border-orange-300 text-orange-700'}
@@ -410,15 +428,15 @@ export default function SaleReturnsShow({ saleReturn, expenses = [] }: Props) {
                                 {customerExpenseAfn > 0 && (
                                     <>
                                         <span className="text-orange-700">Expense — customer (deducted):</span>
-                                        <span className="text-right font-mono text-orange-700">-{formatPrice(customerExpenseAfn)} AFN</span>
+                                        <span className="text-right font-mono text-orange-700">-{money(customerExpenseAfn)}</span>
                                     </>
                                 )}
                                 <span className="font-bold">Return credit:</span>
-                                <span className="text-right font-mono font-bold">{formatPrice(saleReturn.total_afn)} AFN</span>
+                                <span className="text-right font-mono font-bold">{money(totalDisplay)}</span>
                                 {shopExpenseAfn > 0 && (
                                     <>
                                         <span className="text-blue-700">Expense — shop (office expense):</span>
-                                        <span className="text-right font-mono text-blue-700">{formatPrice(shopExpenseAfn)} AFN</span>
+                                        <span className="text-right font-mono text-blue-700">{money(shopExpenseAfn)}</span>
                                     </>
                                 )}
                             </div>
@@ -452,7 +470,7 @@ export default function SaleReturnsShow({ saleReturn, expenses = [] }: Props) {
                             <div>
                                 <p className="font-bold text-red-800">Refund Required</p>
                                 <p className="text-sm text-red-700">
-                                    The refund is larger than the customer due. Return {formatPrice(refund)} AFN to the customer.
+                                    The refund is larger than the customer due. Return {money(refund)} to the customer.
                                 </p>
                             </div>
                         </CardContent>

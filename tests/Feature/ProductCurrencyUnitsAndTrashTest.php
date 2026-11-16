@@ -62,9 +62,6 @@ test('creating a product stores entered currency amounts and ledger snapshots', 
         'brand_id' => $brand->id,
         'gender' => 'unisex',
         'status' => 'active',
-        'base_unit_name' => 'bottle',
-        'pack_unit_name' => 'box',
-        'units_per_pack' => '12',
         'variants' => [
             [
                 'volume_ml' => 100,
@@ -86,11 +83,7 @@ test('creating a product stores entered currency amounts and ledger snapshots', 
 
     $product = Product::query()->where('name', 'Currency Perfume')->whereNull('variant_id')->first();
 
-    expect($product)->not->toBeNull()
-        ->and($product->base_unit_name)->toBe('bottle')
-        ->and($product->pack_unit_name)->toBe('box')
-        ->and((float) $product->units_per_pack)->toBe(12.0)
-        ->and($product->conversionLabel())->toBe('1 box = 12 bottle');
+    expect($product)->not->toBeNull();
 
     $variant = ProductVariant::query()->where('product_id', $product->id)->first();
 
@@ -185,13 +178,122 @@ test('product exchange rates reject zero and negative values', function () {
         ->assertSessionHasErrors(['usd_to_afn_rate', 'usd_to_aed_rate']);
 });
 
-test('pack quantity conversion multiplies by the defined factor', function () {
-    $product = Product::factory()->create([
-        'variant_id' => null,
-        'base_unit_name' => 'bottle',
-        'pack_unit_name' => 'box',
-        'units_per_pack' => '12',
-    ]);
+test('product edit page loads reference rates and updating them does not rewrite purchase FX snapshots', function () {
+    $this->actingAs($this->admin);
 
-    expect($product->quantityToBaseUnits(2, 'pack'))->toBe(24);
+    $afn = Currency::query()->where('code', 'AFN')->first()
+        ?? Currency::factory()->create(['code' => 'AFN', 'is_base' => true, 'rate_to_default' => '1', 'status' => 'active']);
+    $usd = Currency::query()->where('code', 'USD')->first()
+        ?? Currency::factory()->create(['code' => 'USD', 'rate_to_default' => '70', 'status' => 'active', 'is_base' => false]);
+    $usd->update(['rate_to_default' => '70', 'status' => 'active', 'trash' => false]);
+
+    $brand = Brand::factory()->create();
+
+    $this->post('/products', [
+        'name' => 'Edit Estimate Perfume',
+        'brand_id' => $brand->id,
+        'gender' => 'unisex',
+        'status' => 'active',
+        'usd_to_afn_rate' => '70',
+        'usd_to_aed_rate' => '3.67',
+        'variants' => [
+            [
+                'volume_ml' => 100,
+                'purchase_amount' => 10,
+                'purchase_price_afn' => 10,
+                'purchase_currency_id' => $usd->id,
+                'sale_amount' => 20,
+                'sale_price_afn' => 20,
+                'sale_currency_id' => $usd->id,
+                'wholesale_amount' => 15,
+                'wholesale_price_afn' => 15,
+                'wholesale_currency_id' => $usd->id,
+                'barcodes' => [
+                    ['barcode' => '6660001112223', 'barcode_type' => 'EAN13', 'is_primary' => true],
+                ],
+            ],
+        ],
+        'purchases' => [
+            [
+                'variant_index' => 0,
+                'investor_id' => 'store',
+                'quantity' => 5,
+                'purchase_date' => now()->toDateString(),
+                'payment_status' => 'paid',
+                'usd_to_afn_rate' => '70',
+                'aed_to_afn_rate' => '19',
+            ],
+        ],
+    ])->assertRedirect('/products');
+
+    $product = Product::query()->where('name', 'Edit Estimate Perfume')->whereNull('variant_id')->first();
+    expect($product)->not->toBeNull();
+
+    $purchaseRow = Product::query()
+        ->whereNotNull('variant_id')
+        ->where('name', $product->name)
+        ->where('brand_id', $product->brand_id)
+        ->first();
+
+    expect($purchaseRow)->not->toBeNull();
+    $snapshotRate = (float) ($purchaseRow->exchange_rate ?? 0);
+    $snapshotLine = (float) ($purchaseRow->purchase_line_amount ?? 0);
+    $snapshotCode = $purchaseRow->purchase_currency_code;
+
+    $this->get("/products/{$product->id}/edit")
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page
+            ->component('products/edit')
+            ->where('usd_to_afn_rate', fn ($v) => (float) $v === 70.0)
+            ->where('usd_to_aed_rate', fn ($v) => (float) $v === 3.67)
+            ->has('currencies')
+        );
+
+    $variantId = $product->variants()->value('id');
+
+    $this->put("/products/{$product->id}", [
+        'name' => 'Edit Estimate Perfume',
+        'brand_id' => $brand->id,
+        'gender' => 'unisex',
+        'status' => 'active',
+        'usd_to_afn_rate' => '80',
+        'usd_to_aed_rate' => '3.67',
+        'variants' => [
+            [
+                'id' => $variantId,
+                'volume_ml' => 100,
+                'purchase_amount' => 10,
+                'purchase_price_afn' => 10,
+                'purchase_currency_id' => $usd->id,
+                'sale_amount' => 20,
+                'sale_price_afn' => 20,
+                'sale_currency_id' => $usd->id,
+                'wholesale_amount' => 15,
+                'wholesale_price_afn' => 15,
+                'wholesale_currency_id' => $usd->id,
+                'barcodes' => [
+                    ['id' => ProductVariant::find($variantId)?->barcodes()->value('id'), 'barcode' => '6660001112223', 'barcode_type' => 'EAN13', 'is_primary' => true],
+                ],
+            ],
+        ],
+        'purchases' => [
+            [
+                'id' => $purchaseRow->id,
+                'variant_index' => 0,
+                'investor_id' => 'store',
+                'quantity' => 5,
+                'purchase_date' => $purchaseRow->purchase_date?->toDateString() ?? now()->toDateString(),
+                'payment_status' => 'paid',
+            ],
+        ],
+    ])->assertRedirect('/products');
+
+    $purchaseRow->refresh();
+    $rates = app(ProductExchangeRateService::class);
+
+    // Reference rates updated for estimates; historical purchase snapshot untouched.
+    expect($rates->rate($product->fresh(), 'USD', 'AFN'))->toBe('80')
+        ->and((float) $purchaseRow->exchange_rate)->toBe($snapshotRate)
+        ->and((float) ($purchaseRow->purchase_line_amount ?? 0))->toBe($snapshotLine)
+        ->and($purchaseRow->purchase_currency_code)->toBe($snapshotCode);
 });

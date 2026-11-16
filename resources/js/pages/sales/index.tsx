@@ -1,12 +1,15 @@
 // resources/js/pages/sales/index.tsx
 
 import { FilterField, IndexFilters } from '@/components/index-filters';
+import ByCurrencyAmounts from '@/components/money/by-currency-amounts';
 import { DeleteAction, EditAction, PrintAction, RowActions, ViewAction } from '@/components/row-actions';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import AppLayout from '@/layouts/app-layout';
+import { formatOriginalAmount } from '@/lib/original-currency';
+import type { OriginalCurrencyTotal } from '@/lib/original-currency';
 import { getSwal } from '@/lib/swal';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
@@ -38,6 +41,13 @@ interface Sale {
     items_count: number;
     printed_count: number;
     exchange_rate?: number | null;
+    sale_currency_code?: string | null;
+    sale_currency_symbol?: string | null;
+    sale_currency_known?: boolean;
+    sale_currency_label?: string;
+    display_amount?: number | null;
+    display_paid?: number | null;
+    display_remaining?: number | null;
     branch: { id: number; name: string; code: string } | null;
     customer: { id: number; name: string; phone: string | null } | null;
     creator: { id: number; name: string } | null;
@@ -70,6 +80,9 @@ interface Props {
         today_count: number;
         today_profit: string;
         total_due: string;
+        today_sales_by_currency?: OriginalCurrencyTotal[];
+        today_profit_by_currency?: OriginalCurrencyTotal[];
+        total_due_by_currency?: OriginalCurrencyTotal[];
         avg_usd_rate?: number;
         latest_usd_rate?: number;
     };
@@ -274,7 +287,12 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                             <p className="text-muted-foreground text-xs">Today Sales</p>
                             <DollarSign className="text-muted-foreground h-4 w-4" />
                         </div>
-                        <p className="mt-1 text-2xl font-bold">{formatPrice(stats.today_sales)} AFN</p>
+                        <ByCurrencyAmounts
+                            amounts={stats.today_sales_by_currency}
+                            titlePrefix="فروش"
+                            valueClassName="font-mono text-sm font-bold"
+                            digits={2}
+                        />
                     </div>
                     <div className="bg-card rounded-lg border p-4 shadow-sm">
                         <div className="flex items-center justify-between">
@@ -288,14 +306,24 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                             <p className="text-muted-foreground text-xs">Today Profit</p>
                             <TrendingUp className="text-muted-foreground h-4 w-4" />
                         </div>
-                        <p className="mt-1 text-2xl font-bold">{formatPrice(stats.today_profit)} AFN</p>
+                        <ByCurrencyAmounts
+                            amounts={stats.today_profit_by_currency}
+                            titlePrefix="سود"
+                            valueClassName="font-mono text-sm font-bold"
+                            digits={2}
+                        />
                     </div>
                     <div className="bg-card rounded-lg border p-4 shadow-sm">
                         <div className="flex items-center justify-between">
                             <p className="text-muted-foreground text-xs">Total Due</p>
                             <TrendingDown className="text-muted-foreground h-4 w-4" />
                         </div>
-                        <p className="mt-1 text-2xl font-bold">{formatPrice(stats.total_due)} AFN</p>
+                        <ByCurrencyAmounts
+                            amounts={stats.total_due_by_currency}
+                            titlePrefix="قرض"
+                            valueClassName="font-mono text-sm font-bold"
+                            digits={2}
+                        />
                     </div>
                     <div className="bg-card rounded-lg border p-4 shadow-sm">
                         <div className="flex items-center justify-between">
@@ -444,6 +472,7 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                                 <TableHead>Invoice</TableHead>
                                 <TableHead>Customer</TableHead>
                                 <TableHead>Date</TableHead>
+                                <TableHead className="text-center">Currency</TableHead>
                                 <TableHead className="text-center">USD→AFN</TableHead>
                                 <TableHead className="text-right">Sale</TableHead>
                                 <TableHead className="text-right">Paid</TableHead>
@@ -455,14 +484,14 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                         <TableBody>
                             {sales.data.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={10} className="text-muted-foreground h-24 text-center">
+                                    <TableCell colSpan={11} className="text-muted-foreground h-24 text-center">
                                         No sales found.
                                     </TableCell>
                                 </TableRow>
                             ) : (
                                 sales.data.map((sale, index) => {
-                                    const remaining = parseFloat(sale.remaining_due_afn || '0');
                                     const canDelete = sale.status !== 'completed' || canEditCompleted;
+                                    const code = sale.sale_currency_known === false ? null : sale.sale_currency_code;
 
                                     return (
                                         <TableRow key={sale.id}>
@@ -491,14 +520,21 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                                                 )}
                                             </TableCell>
                                             <TableCell className="text-xs">{new Date(sale.sale_date).toLocaleDateString('en-US')}</TableCell>
+                                            <TableCell className="text-center text-xs font-semibold">
+                                                {sale.sale_currency_label || (code ? code : 'Unknown')}
+                                            </TableCell>
                                             <TableCell className="text-center font-mono text-sm font-semibold">
                                                 {sale.exchange_rate ? formatPrice(sale.exchange_rate, 2) : '—'}
                                             </TableCell>
                                             <TableCell className="text-right font-mono text-sm font-semibold">
-                                                {formatPrice(sale.new_sale_amount_afn || sale.total_afn)}
+                                                {formatOriginalAmount(sale.display_amount, code)}
                                             </TableCell>
-                                            <TableCell className="text-right font-mono text-xs">{formatPrice(sale.paid_afn)}</TableCell>
-                                            <TableCell className="text-right font-mono text-xs font-semibold">{formatPrice(remaining)}</TableCell>
+                                            <TableCell className="text-right font-mono text-xs">
+                                                {formatOriginalAmount(sale.display_paid, code)}
+                                            </TableCell>
+                                            <TableCell className="text-right font-mono text-xs font-semibold">
+                                                {formatOriginalAmount(sale.display_remaining, code)}
+                                            </TableCell>
                                             <TableCell>
                                                 <div className="flex flex-col gap-1">
                                                     {getPaymentBadge(sale.payment_status)}

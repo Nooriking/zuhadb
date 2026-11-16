@@ -1,5 +1,7 @@
 // resources/js/components/dashboard/kpi-card.tsx
 
+import ThreeCurrencyAmountView from '@/components/dashboard/three-currency-amount';
+import type { ThreeCurrencyAmount } from '@/lib/three-currency';
 import { type LucideIcon } from 'lucide-react';
 
 interface Props {
@@ -12,6 +14,9 @@ interface Props {
         value: number;
         isPositive: boolean;
     };
+    /** When set, AFN / USD / AED equivalents replace the single primary value. */
+    threeCurrency?: ThreeCurrencyAmount | null;
+    showThreeCurrencyHint?: boolean;
 }
 
 const COLORS = {
@@ -23,15 +28,29 @@ const COLORS = {
     gray: { bg: 'bg-gray-100 dark:bg-gray-800', text: 'text-gray-600 dark:text-gray-400', ring: 'ring-gray-200 dark:ring-gray-700' },
 };
 
-export default function KpiCard({ title, value, subtitle, icon: Icon, color = 'blue', trend }: Props) {
+export default function KpiCard({
+    title,
+    value,
+    subtitle,
+    icon: Icon,
+    color = 'blue',
+    trend,
+    threeCurrency,
+    showThreeCurrencyHint = false,
+}: Props) {
     const c = COLORS[color];
+    const useTri = Boolean(threeCurrency);
 
     return (
         <div className="bg-card rounded-lg border p-5 shadow-sm transition-shadow hover:shadow-md">
             <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                     <p className="text-muted-foreground text-xs font-medium uppercase">{title}</p>
-                    <p className="text-foreground mt-2 truncate text-2xl font-bold">{value}</p>
+                    {useTri ? (
+                        <ThreeCurrencyAmountView amounts={threeCurrency} layout="stack" showBasisHint={showThreeCurrencyHint} />
+                    ) : (
+                        <p className="text-foreground mt-2 truncate text-2xl font-bold">{value}</p>
+                    )}
                     {subtitle && <p className="text-muted-foreground mt-1 text-xs">{subtitle}</p>}
 
                     {trend && (

@@ -19,11 +19,19 @@ class SaleItem extends Model
         'product_name_snapshot',
         'sku_snapshot',
         'barcode_snapshot',
+        'sale_currency_code',
+        'sale_unit_amount',
+        'sale_line_amount',
+        'unit_amount_usd',
+        'unit_amount_aed',
+        'line_amount_usd',
+        'line_amount_aed',
         'quantity',
         'cost_price_afn',
         'sale_price_afn',
         'discount_afn',
         'line_total_afn',
+        'gross_profit_afn',
         'store_profit_afn',
         'investor_profit_afn',
         'cost_breakdown',   // ⭐ FIFO breakdown as JSON
@@ -31,10 +39,17 @@ class SaleItem extends Model
 
     protected $casts = [
         'quantity'             => 'integer',
+        'sale_unit_amount'     => 'decimal:4',
+        'sale_line_amount'     => 'decimal:2',
+        'unit_amount_usd'      => 'decimal:4',
+        'unit_amount_aed'      => 'decimal:4',
+        'line_amount_usd'      => 'decimal:2',
+        'line_amount_aed'      => 'decimal:2',
         'cost_price_afn'       => 'decimal:2',
         'sale_price_afn'       => 'decimal:2',
         'discount_afn'         => 'decimal:2',
         'line_total_afn'       => 'decimal:2',
+        'gross_profit_afn'     => 'decimal:2',
         'store_profit_afn'     => 'decimal:2',
         'investor_profit_afn'  => 'decimal:2',
         'cost_breakdown'       => 'array',
@@ -67,6 +82,11 @@ class SaleItem extends Model
 
     public function getTotalProfitAfnAttribute(): float
     {
+        // Prefer explicit gross; otherwise company (store) + investor = gross.
+        if ($this->gross_profit_afn !== null) {
+            return (float) $this->gross_profit_afn;
+        }
+
         return (float) $this->store_profit_afn + (float) $this->investor_profit_afn;
     }
 

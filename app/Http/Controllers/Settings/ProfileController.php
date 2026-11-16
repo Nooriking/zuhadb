@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Settings;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Settings\ProfileUpdateRequest;
-use App\Models\Investor;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Http\RedirectResponse;
@@ -40,12 +39,7 @@ class ProfileController extends Controller
 
         $user->save();
 
-        if ($user->isInvestor()) {
-            Investor::query()->where('user_id', $user->id)->update([
-                'full_name' => $user->name,
-                'email' => $user->email,
-            ]);
-        }
+        // Investor identity is the users row — profile fields are already saved above.
 
         return to_route('profile.edit');
     }

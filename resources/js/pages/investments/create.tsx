@@ -19,6 +19,7 @@ interface InvestorUser {
 interface Props {
     users: InvestorUser[];
     nextNumber: string;
+    defaultUserId?: number | null;
     sourceTypes?: Record<string, string>;
     currencies?: CatalogCurrency[];
     errors?: Record<string, string>;
@@ -33,12 +34,16 @@ const breadcrumbs: BreadcrumbItem[] = [
 export default function InvestmentsCreate({
     users,
     nextNumber,
+    defaultUserId = null,
     sourceTypes = { cash: 'Cash', goods: 'Goods' },
     currencies = [],
     errors: initialErrors,
 }: Props) {
+    const preselected =
+        defaultUserId && users.some((u) => u.id === defaultUserId) ? String(defaultUserId) : '';
+
     const [form, setForm] = useState({
-        user_id: '',
+        user_id: preselected,
         source_type: 'cash' as 'cash' | 'goods',
         capital_amount_afn: '',
         currency_id: defaultCurrencyId(currencies),
@@ -66,7 +71,6 @@ export default function InvestmentsCreate({
         setForm((prev) => ({
             ...prev,
             source_type: type,
-            capital_amount_afn: type === 'goods' ? '' : prev.capital_amount_afn,
         }));
     };
 
@@ -82,8 +86,14 @@ export default function InvestmentsCreate({
             clientErrors.user_id = 'Please select an investor.';
         }
 
-        if (isCash && capitalAfn <= 0) {
-            clientErrors.capital_amount_afn = 'Capital amount is required for cash investments.';
+        if (capitalAfn <= 0) {
+            clientErrors.capital_amount_afn = isCash
+                ? 'Capital amount is required for cash investments.'
+                : 'Goods contributions require a valued amount.';
+        }
+
+        if (!form.currency_id) {
+            clientErrors.currency_id = 'Currency is required.';
         }
 
         if (Object.keys(clientErrors).length > 0) {
@@ -95,9 +105,9 @@ export default function InvestmentsCreate({
         const payload = {
             user_id: form.user_id,
             source_type: form.source_type,
-            currency_id: isCash ? form.currency_id : null,
-            capital_amount: isCash && form.capital_amount_afn !== '' ? form.capital_amount_afn : '0',
-            capital_amount_afn: isCash && form.capital_amount_afn !== '' ? form.capital_amount_afn : '0',
+            currency_id: form.currency_id,
+            capital_amount: form.capital_amount_afn !== '' ? form.capital_amount_afn : '0',
+            capital_amount_afn: form.capital_amount_afn !== '' ? form.capital_amount_afn : '0',
             investment_date: form.investment_date,
             notes: form.notes,
         };
@@ -157,7 +167,8 @@ export default function InvestmentsCreate({
                                 </select>
                                 {errors.user_id && <p className="text-sm text-red-600">{errors.user_id}</p>}
                                 <p className="text-muted-foreground text-xs">
-                                    If this user does not have an investor profile yet, one will be created automatically.
+                                    Only users with the Investor role appear here. Register them in Users first. The same
+                                    person can receive unlimited investments.
                                 </p>
                             </div>
 
@@ -214,46 +225,29 @@ export default function InvestmentsCreate({
                             {errors.source_type && <p className="mt-2 text-sm text-red-600">{errors.source_type}</p>}
                         </div>
 
-                        {/* ═══════════ Capital Details (فقط برای نقدی) ═══════════ */}
-                        {isCash && (
-                            <div className="rounded-lg border border-dashed p-4">
-                                <h3 className="mb-3 text-sm font-semibold">Capital Details</h3>
-                                <MoneyField
-                                    label="Capital amount"
-                                    required={isCash}
-                                    amount={form.capital_amount_afn}
-                                    currencyId={form.currency_id}
-                                    currencies={currencies}
-                                    onAmountChange={(val) => handleChange('capital_amount_afn', val)}
-                                    onCurrencyChange={(val) => handleChange('currency_id', val)}
-                                    error={errors.capital_amount_afn || errors.currency_id || errors.capital_amount}
-                                />
+                        {/* ═══════════ Capital / Goods valuation ═══════════ */}
+                        <div className="rounded-lg border border-dashed p-4">
+                            <h3 className="mb-3 text-sm font-semibold">
+                                {isCash ? 'Capital Details' : 'Goods Valuation'}
+                            </h3>
+                            <MoneyField
+                                label={isCash ? 'Capital amount' : 'Goods value'}
+                                required
+                                amount={form.capital_amount_afn}
+                                currencyId={form.currency_id}
+                                currencies={currencies}
+                                onAmountChange={(val) => handleChange('capital_amount_afn', val)}
+                                onCurrencyChange={(val) => handleChange('currency_id', val)}
+                                error={errors.capital_amount_afn || errors.currency_id || errors.capital_amount}
+                            />
 
-                                {capitalAfn > 0 && (
-                                    <div className="mt-4 rounded-lg border bg-blue-50 p-3">
-                                        <div className="grid grid-cols-2 gap-2 text-sm">
-                                            <span className="text-gray-600">Capital Amount (AFN):</span>
-                                            <span className="text-right font-mono font-bold text-blue-700">{formatPrice(capitalAfn)} AFN</span>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {/* ═══════════ راهنمای حالت جنسی ═══════════ */}
-                        {!isCash && (
-                            <div className="flex items-start gap-3 rounded-lg border-2 border-blue-300 bg-blue-50 p-4">
-                                <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" />
-                                <div className="text-sm">
-                                    <p className="font-semibold text-blue-800">📦 Goods Investment Mode</p>
-                                    <p className="mt-0.5 text-blue-700">
-                                        No cash pot will be created. To record the actual goods, go to{' '}
-                                        <span className="rounded bg-blue-100 px-1.5 py-0.5 font-mono text-xs">Products → Add Stock</span> and link
-                                        them to this investor.
-                                    </p>
-                                </div>
-                            </div>
-                        )}
+                            {!isCash && (
+                                <p className="text-muted-foreground mt-2 text-sm">
+                                    Enter the historical value of this delivery. Cash wallet will not increase. Link received stock to this
+                                    investment in Products → Add Stock.
+                                </p>
+                            )}
+                        </div>
 
                         <div className="space-y-2">
                             <label className="text-sm font-medium">Notes</label>

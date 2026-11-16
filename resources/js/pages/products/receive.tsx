@@ -1,4 +1,9 @@
 import { BackButton, FormActions } from '@/components/form-page';
+import {
+    TransactionExchangeRateSection,
+    threeCurrencyEquivalents,
+    type FxBoardContext,
+} from '@/components/transaction-exchange-rate-section';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -20,12 +25,15 @@ interface VariantOption {
     sale_price_afn: string;
     stock_quantity: number;
     barcodes: string[];
-    base_unit_name?: string | null;
-    pack_unit_name?: string | null;
-    units_per_pack?: string | number | null;
-    conversion_label?: string | null;
     usd_to_afn_rate?: string | null;
     usd_to_aed_rate?: string | null;
+}
+
+interface CurrencyOption {
+    id: number;
+    code: string;
+    name: string;
+    symbol: string | null;
 }
 
 interface InvestorOption {
@@ -35,12 +43,12 @@ interface InvestorOption {
 
 interface InvestmentOption {
     id: number;
-    investment_number: string;
     investor_id: number;
-    investor_name: string | null;
-    available_amount_afn: string;
-    capital_amount_afn: string;
-    status: string;
+    investment_number: string | null;
+    source_type: string;
+    currency_code: string | null;
+    available_amount_afn: number;
+    label: string;
 }
 
 interface SupplierOption {
@@ -53,6 +61,9 @@ interface Props {
     investors: InvestorOption[];
     investments?: InvestmentOption[];
     suppliers: SupplierOption[];
+    currencies?: CurrencyOption[];
+    fxBoard?: FxBoardContext;
+    canManageRates?: boolean;
     errors?: Record<string, string>;
 }
 
@@ -62,20 +73,36 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Add stock', href: '/products/receive' },
 ];
 
-const money = (value: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(value || 0);
+const money = (value: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 }).format(value || 0);
 
-export default function ProductReceive({ variants, investors, investments = [], suppliers, errors = {} }: Props) {
+export default function ProductReceive({
+    variants,
+    investors,
+    investments = [],
+    suppliers,
+    currencies = [],
+    fxBoard,
+    canManageRates = false,
+    errors = {},
+}: Props) {
+    const ledgerId = useMemo(() => {
+        const afn = currencies.find((c) => c.code === 'AFN');
+        return afn ? String(afn.id) : currencies[0] ? String(currencies[0].id) : '';
+    }, [currencies]);
+
     const [form, setForm] = useState({
         variant_id: variants[0] ? String(variants[0].id) : '',
         quantity: '1',
-        quantity_unit: 'base' as 'base' | 'pack',
-        purchase_price_afn: variants[0] ? String(variants[0].purchase_price_afn || '') : '',
+        purchase_currency_id: ledgerId,
+        purchase_unit_amount: variants[0] ? String(variants[0].purchase_price_afn || '') : '',
         sale_price_afn: variants[0] ? String(variants[0].sale_price_afn || '') : '',
         funding_source: 'office' as 'office' | 'investor',
         investor_id: '',
         investment_id: '',
-        exchange_rate: variants[0]?.usd_to_afn_rate ? String(variants[0].usd_to_afn_rate) : '',
+        usd_to_afn_rate: fxBoard?.board?.usd_to_afn_rate ? String(fxBoard.board.usd_to_afn_rate) : '',
+        aed_to_afn_rate: fxBoard?.board?.aed_to_afn_rate ? String(fxBoard.board.aed_to_afn_rate) : '',
         profit_per_unit: '',
+        profit_currency_id: ledgerId,
         purchase_date: new Date().toISOString().slice(0, 10),
         invoice_number: '',
         notes: '',
@@ -89,87 +116,53 @@ export default function ProductReceive({ variants, investors, investments = [], 
     const [loading, setLoading] = useState(false);
 
     const selected = useMemo(() => list.find((v) => String(v.id) === form.variant_id), [list, form.variant_id]);
-    const isInvestor = form.funding_source === 'investor';
-    const qty = parseInt(form.quantity, 10) || 0;
-    const purchasePrice = parseFloat(form.purchase_price_afn) || 0;
-    const profitAfn = parseFloat(form.profit_per_unit) || 0;
-    const packFactor = selected ? Number(selected.units_per_pack) : 0;
-    const hasPack = Boolean(selected?.base_unit_name && selected?.pack_unit_name && packFactor > 0);
-    const baseQty = form.quantity_unit === 'pack' && hasPack ? qty * packFactor : qty;
-    const totalCostAfn = purchasePrice * baseQty;
-    const totalProfitAfn = profitAfn * baseQty;
-
-    const investorInvestments = useMemo(() => {
-        if (!form.investor_id) return [];
-        return investments.filter((row) => String(row.investor_id) === String(form.investor_id));
-    }, [investments, form.investor_id]);
-
-    const selectedInvestment = useMemo(
-        () => investments.find((row) => String(row.id) === String(form.investment_id)),
-        [investments, form.investment_id],
+    const selectedCurrency = useMemo(
+        () => currencies.find((c) => String(c.id) === form.purchase_currency_id),
+        [currencies, form.purchase_currency_id],
     );
-    const availableAfn = selectedInvestment ? parseFloat(selectedInvestment.available_amount_afn) || 0 : 0;
-    const remainingAfter = availableAfn - totalCostAfn;
-
-    /* ═══════════════════════════════════════════════════════
-     |  ✅ LIVE VALIDATION
-     ═══════════════════════════════════════════════════════ */
+    const profitCurrency = useMemo(
+        () => currencies.find((c) => String(c.id) === form.profit_currency_id),
+        [currencies, form.profit_currency_id],
+    );
+    const isInvestor = form.funding_source === 'investor';
+    const investorInvestments = useMemo(
+        () => investments.filter((inv) => String(inv.investor_id) === form.investor_id),
+        [investments, form.investor_id],
+    );
+    const qty = parseInt(form.quantity, 10) || 0;
+    const unitOriginal = parseFloat(form.purchase_unit_amount) || 0;
+    const usdRate = parseFloat(form.usd_to_afn_rate) || 0;
+    const aedRate = parseFloat(form.aed_to_afn_rate) || 0;
+    const eq = threeCurrencyEquivalents(unitOriginal, selectedCurrency?.code || 'AFN', usdRate, aedRate);
+    const lineEq = threeCurrencyEquivalents(unitOriginal * qty, selectedCurrency?.code || 'AFN', usdRate, aedRate);
+    const purchasePriceAfn = eq.afn;
+    const profitOriginal = parseFloat(form.profit_per_unit) || 0;
+    const profitEq = threeCurrencyEquivalents(profitOriginal, profitCurrency?.code || 'AFN', usdRate, aedRate);
+    const profitAfn = profitEq.afn;
+    const totalCostAfn = lineEq.afn;
+    const totalProfitAfn = profitAfn * qty;
+    const salePrice = parseFloat(form.sale_price_afn) || 0;
+    const companyPreviewPerUnit = Math.max(0, salePrice - purchasePriceAfn - profitAfn);
 
     const liveProblems = useMemo(() => {
         const problems: string[] = [];
-        const salePrice = parseFloat(form.sale_price_afn) || 0;
-
-        if (!form.variant_id) {
-            problems.push('Select a product');
-        }
-
-        if (qty <= 0) {
-            problems.push('Quantity must be at least 1');
-        }
-
-        if (salePrice < purchasePrice) {
-            problems.push('Sale price cannot be less than purchase price');
-        }
-
-        if (isInvestor) {
-            if (!form.investor_id) {
-                problems.push('Select an investor');
-            }
-            if (!form.investment_id) {
-                problems.push('Select an investment pot');
-            }
-            if (totalCostAfn > availableAfn + 0.01) {
-                problems.push(`Insufficient capital (need ${money(totalCostAfn)} AFN, have ${money(availableAfn)} AFN)`);
-            }
-        }
-
+        if (!form.variant_id) problems.push('Select a product');
+        if (qty <= 0) problems.push('Quantity must be at least 1');
+        if (!form.purchase_currency_id) problems.push('Select purchase currency');
+        if (unitOriginal < 0) problems.push('Purchase price cannot be negative');
+        if (salePrice < purchasePriceAfn) problems.push('Sale price (AFN) cannot be less than purchase cost (AFN)');
+        if (usdRate <= 0 || aedRate <= 0) problems.push('Exchange rates must be greater than zero');
+        if (isInvestor && !form.investor_id) problems.push('Select an investor');
         return problems;
-    }, [
-        form.variant_id,
-        form.investor_id,
-        form.investment_id,
-        form.sale_price_afn,
-        isInvestor,
-        qty,
-        purchasePrice,
-        totalCostAfn,
-        availableAfn,
-    ]);
-
-    const canSubmit = liveProblems.length === 0;
-
-    /* ═══════════════════════════════════════════════════════
-     |  Handlers — ✅ همه functional setForm
-     ═══════════════════════════════════════════════════════ */
+    }, [form.variant_id, form.purchase_currency_id, form.investor_id, qty, unitOriginal, salePrice, purchasePriceAfn, usdRate, aedRate, isInvestor]);
 
     const pickVariant = (id: string) => {
         const variant = list.find((v) => String(v.id) === id);
         setForm((prev) => ({
             ...prev,
             variant_id: id,
-            purchase_price_afn: variant ? String(variant.purchase_price_afn || '') : prev.purchase_price_afn,
+            purchase_unit_amount: variant ? String(variant.purchase_price_afn || '') : prev.purchase_unit_amount,
             sale_price_afn: variant ? String(variant.sale_price_afn || '') : prev.sale_price_afn,
-            exchange_rate: variant?.usd_to_afn_rate ? String(variant.usd_to_afn_rate) : prev.exchange_rate,
         }));
     };
 
@@ -178,9 +171,8 @@ export default function ProductReceive({ variants, investors, investments = [], 
         setForm((prev) => ({
             ...prev,
             variant_id: String(variant.id),
-            purchase_price_afn: String(variant.purchase_price_afn || ''),
+            purchase_unit_amount: String(variant.purchase_price_afn || ''),
             sale_price_afn: String(variant.sale_price_afn || ''),
-            exchange_rate: variant.usd_to_afn_rate ? String(variant.usd_to_afn_rate) : prev.exchange_rate,
         }));
         setScanMessage(`${variant.name} loaded from the database.`);
         setScan('');
@@ -196,27 +188,12 @@ export default function ProductReceive({ variants, investors, investments = [], 
         }));
     };
 
-    /* ═══════════════════════════════════════════════════════
-     |  ✅ انتخاب سرمایه‌گذار — بازنویسی کامل
-     ═══════════════════════════════════════════════════════ */
-
-    const setInvestor = (investorId: string) => {
-        // پیدا کردن اولین investment این سرمایه‌گذار
-        const firstInvestment = investments.find((row) => String(row.investor_id) === String(investorId));
-
+    const setInvestor = (investorId: string) =>
         setForm((prev) => ({
             ...prev,
             investor_id: String(investorId),
-            investment_id: firstInvestment ? String(firstInvestment.id) : '',
+            investment_id: '',
         }));
-    };
-
-    const setInvestment = (investmentId: string) => {
-        setForm((prev) => ({
-            ...prev,
-            investment_id: String(investmentId),
-        }));
-    };
 
     const scanBarcode = async () => {
         const code = scan.trim();
@@ -240,97 +217,51 @@ export default function ProductReceive({ variants, investors, investments = [], 
         }
     };
 
-    /* ═══════════════════════════════════════════════════════
-     |  SUBMIT
-     ═══════════════════════════════════════════════════════ */
-
     const submit = (e: React.FormEvent) => {
         e.preventDefault();
         setScanMessage('');
-
-        const salePrice = parseFloat(form.sale_price_afn) || 0;
-
-        if (!form.variant_id) {
-            setScanMessage('❌ Please select a product.');
+        if (liveProblems.length > 0) {
+            setScanMessage(`❌ ${liveProblems[0]}`);
             window.scrollTo({ top: 0, behavior: 'smooth' });
             return;
         }
-
-        if (qty <= 0) {
-            setScanMessage('❌ Quantity must be at least 1.');
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-            return;
-        }
-
-        if (purchasePrice < 0 || salePrice < 0 || profitAfn < 0) {
-            setScanMessage('❌ Prices cannot be negative.');
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-            return;
-        }
-
-        if (salePrice < purchasePrice) {
-            setScanMessage('❌ Sale price cannot be less than the purchase price.');
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-            return;
-        }
-
-        if (isInvestor) {
-            if (!form.investor_id) {
-                setScanMessage('❌ Please select an investor.');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-                return;
-            }
-            if (!form.investment_id) {
-                setScanMessage('❌ Please select which investment capital pays for this stock.');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-                return;
-            }
-            if (totalCostAfn > availableAfn + 0.01) {
-                setScanMessage(`❌ This stock costs ${money(totalCostAfn)} AFN but only ${money(availableAfn)} AFN is available.`);
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-                return;
-            }
-        }
-
         setLoading(true);
-
-        router.post(
-            '/products/receive',
-            {
-                ...form,
-                investor_id: isInvestor ? form.investor_id : 'store',
-                investment_id: isInvestor ? form.investment_id : '',
-                profit_per_unit: isInvestor ? form.profit_per_unit : '0',
+        const payload: Record<string, unknown> = {
+            ...form,
+            investor_id: isInvestor ? form.investor_id : null,
+            investment_id: isInvestor && form.investment_id ? form.investment_id : null,
+            profit_per_unit: isInvestor ? form.profit_per_unit : '0',
+            profit_currency_id: isInvestor ? form.profit_currency_id || ledgerId : ledgerId,
+        };
+        if (!canManageRates) {
+            delete payload.usd_to_afn_rate;
+            delete payload.aed_to_afn_rate;
+            delete payload.rate_source;
+        } else {
+            payload.rate_source = 'transaction';
+        }
+        router.post('/products/receive', payload, {
+            onFinish: () => setLoading(false),
+            onError: (errs) => {
+                const firstError = Object.values(errs)[0] as string;
+                setScanMessage(`❌ ${firstError || 'Could not save. Please check the form.'}`);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
             },
-            {
-                onFinish: () => setLoading(false),
-                onError: (errs) => {
-                    const firstError = Object.values(errs)[0] as string;
-                    setScanMessage(`❌ ${firstError || 'Could not save. Please check the form.'}`);
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                },
-            },
-        );
+        });
     };
-
-    /* ═══════════════════════════════════════════════════════
-     |  Render
-     ═══════════════════════════════════════════════════════ */
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="Add stock" />
             <form onSubmit={submit} className="flex flex-col gap-6 p-6">
-                {/* Header */}
                 <div className="flex flex-wrap items-center gap-3">
                     <BackButton href="/products" />
                     <div>
                         <h1 className="text-2xl font-bold tracking-tight">Add stock</h1>
-                        <p className="text-muted-foreground text-sm">Choose funding source, then receive inventory</p>
+                        <p className="text-muted-foreground text-sm">Confirm exchange rates, then receive inventory in the purchase currency</p>
                     </div>
                 </div>
 
-                {/* ✅ Live Validation Banner */}
                 {liveProblems.length > 0 && (
                     <div className="rounded-lg border-2 border-amber-400 bg-amber-50 p-4">
                         <div className="mb-2 flex items-center gap-2">
@@ -347,320 +278,18 @@ export default function ProductReceive({ variants, investors, investments = [], 
                     </div>
                 )}
 
-                {/* Scan barcode */}
-                <div className="border-primary bg-primary/5 rounded-xl border-2 p-5">
-                    <h2 className="text-lg font-semibold">Scan barcode</h2>
-                    <p className="text-muted-foreground mb-3 text-sm">Looks up the product in the database.</p>
-                    <div className="flex gap-2">
-                        <Input
-                            value={scan}
-                            onChange={(e) => setScan(e.target.value)}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                    e.preventDefault();
-                                    void scanBarcode();
-                                }
-                            }}
-                            placeholder="Scan or type, then Enter"
-                            className="bg-background h-12 font-mono text-lg"
-                            autoFocus
-                        />
-                        <Button type="button" className="h-12 px-6" onClick={() => void scanBarcode()} disabled={scanning}>
-                            {scanning ? 'Looking up…' : 'Find'}
-                        </Button>
-                    </div>
+                <TransactionExchangeRateSection
+                    usdToAfn={form.usd_to_afn_rate}
+                    aedToAfn={form.aed_to_afn_rate}
+                    onChange={(field, value) => setForm((prev) => ({ ...prev, [field]: value }))}
+                    context={fxBoard}
+                    canManageRates={canManageRates}
+                    errors={errors}
+                />
 
-                    {scanMessage && (
-                        <div
-                            className={`mt-3 flex items-center gap-2 rounded-lg border-2 p-3 text-sm font-semibold ${
-                                scanMessage.startsWith('❌')
-                                    ? 'border-red-400 bg-red-50 text-red-700'
-                                    : 'border-emerald-400 bg-emerald-50 text-emerald-700'
-                            }`}
-                        >
-                            <AlertCircle className="h-5 w-5 shrink-0" />
-                            <span>{scanMessage}</span>
-                        </div>
-                    )}
-                </div>
-
-                {/* Funding Source */}
-                <Card>
-                    <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                            <Landmark className="h-5 w-5" /> Funding source
-                        </CardTitle>
-                        <CardDescription>
-                            Office money stays with the shop. Investor capital is deducted from an active investment and investor profit is tracked
-                            per unit.
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                        <div className="grid gap-3 sm:grid-cols-2">
-                            <button
-                                type="button"
-                                onClick={() => setFundingSource('office')}
-                                className={`rounded-xl border-2 p-4 text-left transition ${
-                                    !isInvestor ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/40'
-                                }`}
-                            >
-                                <div className="mb-2 flex items-center gap-2 font-semibold">
-                                    <Building2 className="h-5 w-5" /> Office money
-                                </div>
-                                <p className="text-muted-foreground text-sm">Paid from shop / company cash. No investor capital or profit share.</p>
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setFundingSource('investor')}
-                                className={`rounded-xl border-2 p-4 text-left transition ${
-                                    isInvestor ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/40'
-                                }`}
-                            >
-                                <div className="mb-2 flex items-center gap-2 font-semibold">
-                                    <CircleDollarSign className="h-5 w-5" /> Investor capital
-                                </div>
-                                <p className="text-muted-foreground text-sm">
-                                    Uses an investment pot. Capital is allocated and profit / unit is owed to the investor.
-                                </p>
-                            </button>
-                        </div>
-                        {errors.funding_source && <p className="text-destructive text-xs">{errors.funding_source}</p>}
-
-                        {isInvestor && (
-                            <div className="space-y-4 rounded-lg border border-emerald-300 bg-emerald-50/50 p-4 dark:bg-emerald-950/20">
-                                <div className="grid gap-4 md:grid-cols-2">
-                                    {/* ═══ INVESTOR ═══ */}
-                                    <div className="space-y-2">
-                                        <Label>
-                                            Investor <span className="text-destructive">*</span>
-                                        </Label>
-                                        <Select value={form.investor_id || ''} onValueChange={setInvestor}>
-                                            <SelectTrigger>
-                                                <SelectValue placeholder="Select investor" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {investors.map((inv) => (
-                                                    <SelectItem key={inv.id} value={String(inv.id)}>
-                                                        {inv.name}
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                        {errors.investor_id && <p className="text-destructive text-xs">{errors.investor_id}</p>}
-                                    </div>
-
-                                    {/* ═══ INVESTMENT ═══ */}
-                                    <div className="space-y-2">
-                                        <Label>
-                                            Investment (capital pot) <span className="text-destructive">*</span>
-                                        </Label>
-                                        <Select value={form.investment_id || ''} onValueChange={setInvestment} disabled={!form.investor_id}>
-                                            <SelectTrigger>
-                                                <SelectValue placeholder={form.investor_id ? 'Select investment' : 'Pick investor first'} />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {investorInvestments.length === 0 ? (
-                                                    <div className="text-muted-foreground px-3 py-4 text-center text-sm">
-                                                        No available investment capital for this investor
-                                                    </div>
-                                                ) : (
-                                                    investorInvestments.map((row) => (
-                                                        <SelectItem key={row.id} value={String(row.id)}>
-                                                            <div className="flex flex-col items-start py-0.5">
-                                                                <span className="font-mono text-sm">{row.investment_number}</span>
-                                                                <span className="text-muted-foreground text-xs">
-                                                                    Available {money(parseFloat(row.available_amount_afn))} AFN
-                                                                </span>
-                                                            </div>
-                                                        </SelectItem>
-                                                    ))
-                                                )}
-                                            </SelectContent>
-                                        </Select>
-                                        {errors.investment_id && <p className="text-destructive text-xs">{errors.investment_id}</p>}
-                                    </div>
-                                </div>
-
-                                <div className="grid gap-4 md:grid-cols-2">
-                                    <div className="space-y-2">
-                                        <Label className="flex items-center gap-2">
-                                            <TrendingUp className="h-4 w-4" /> Investor profit / unit (AFN)
-                                        </Label>
-                                        <Input
-                                            type="number"
-                                            min="0"
-                                            step="0.01"
-                                            value={form.profit_per_unit}
-                                            onChange={(e) => setForm((prev) => ({ ...prev, profit_per_unit: e.target.value }))}
-                                            placeholder="0"
-                                        />
-                                        <p className="text-muted-foreground text-xs">
-                                            Entered and stored in AFN (ledger). This is the investor share per base unit, not the store margin.
-                                        </p>
-                                        {errors.profit_per_unit && <p className="text-destructive text-xs">{errors.profit_per_unit}</p>}
-                                    </div>
-                                </div>
-
-                                {selectedInvestment && qty > 0 && (
-                                    <div className="bg-background grid gap-3 rounded-lg border p-3 text-sm sm:grid-cols-4">
-                                        <div>
-                                            <p className="text-muted-foreground text-xs">Stock cost</p>
-                                            <p className="font-mono font-semibold">{money(totalCostAfn)} AFN</p>
-                                        </div>
-                                        <div>
-                                            <p className="text-muted-foreground text-xs">Available now</p>
-                                            <p className="font-mono font-semibold">{money(availableAfn)} AFN</p>
-                                        </div>
-                                        <div>
-                                            <p className="text-muted-foreground text-xs">After this receive</p>
-                                            <p className={`font-mono font-semibold ${remainingAfter < 0 ? 'text-destructive' : 'text-emerald-700'}`}>
-                                                {money(remainingAfter)} AFN
-                                            </p>
-                                        </div>
-                                        <div>
-                                            <p className="text-muted-foreground text-xs">Investor profit total</p>
-                                            <p className="font-mono font-semibold text-emerald-700">{money(totalProfitAfn)} AFN</p>
-                                            <p className="text-muted-foreground text-xs">owed when sold</p>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
-
-                {/* Product */}
-                <Card>
-                    <CardHeader>
-                        <CardTitle>Product</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                        <div className="space-y-2">
-                            <Label>Product</Label>
-                            <Select value={form.variant_id} onValueChange={pickVariant}>
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Select product" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {list.map((variant) => (
-                                        <SelectItem key={variant.id} value={String(variant.id)}>
-                                            {variant.name}
-                                            {variant.volume_ml ? ` · ${variant.volume_ml}ml` : ''}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                            {errors.variant_id && <p className="text-destructive text-xs">{errors.variant_id}</p>}
-                        </div>
-
-                        {selected && (
-                            <div className="border-primary/40 bg-primary/5 grid grid-cols-2 gap-3 rounded-lg border p-4 md:grid-cols-4">
-                                <div>
-                                    <p className="text-muted-foreground text-xs">Name</p>
-                                    <p className="text-sm font-medium">{selected.name}</p>
-                                </div>
-                                <div>
-                                    <p className="text-muted-foreground text-xs">Volume</p>
-                                    <p className="text-sm font-medium">{selected.volume_ml ? `${selected.volume_ml} ml` : '—'}</p>
-                                </div>
-                                <div>
-                                    <p className="text-muted-foreground text-xs">Concentration</p>
-                                    <p className="text-sm font-medium">{selected.concentration ? selected.concentration.toUpperCase() : '—'}</p>
-                                </div>
-                                <div>
-                                    <p className="text-muted-foreground text-xs">Current stock</p>
-                                    <p className="text-sm font-medium">
-                                        {selected.stock_quantity}
-                                        <span className="text-muted-foreground">
-                                            {' '}
-                                            → {selected.stock_quantity + baseQty}
-                                            {selected.base_unit_name ? ` ${selected.base_unit_name}` : ''}
-                                        </span>
-                                    </p>
-                                </div>
-                                {selected.barcodes.length > 0 && (
-                                    <div className="col-span-2 md:col-span-4">
-                                        <p className="text-muted-foreground text-xs">Barcodes</p>
-                                        <p className="font-mono text-sm">{selected.barcodes.join(' · ')}</p>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
-
-                {/* Quantity & Prices */}
                 <div className="rounded-lg border p-4">
-                    <h2 className="mb-3 text-sm font-semibold">Quantity & prices</h2>
+                    <h2 className="mb-3 text-sm font-semibold">Purchase date & supplier</h2>
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                        <div className="space-y-2">
-                            <Label>
-                                Quantity
-                                {hasPack
-                                    ? ` (${form.quantity_unit === 'pack' ? selected?.pack_unit_name : selected?.base_unit_name})`
-                                    : selected?.base_unit_name
-                                      ? ` (${selected.base_unit_name})`
-                                      : ''}
-                            </Label>
-                            <Input
-                                type="number"
-                                min="1"
-                                value={form.quantity}
-                                onChange={(e) => setForm((prev) => ({ ...prev, quantity: e.target.value }))}
-                                required
-                            />
-                            {hasPack ? (
-                                <Select
-                                    value={form.quantity_unit}
-                                    onValueChange={(val) =>
-                                        setForm((prev) => ({ ...prev, quantity_unit: val as 'base' | 'pack' }))
-                                    }
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="base">{selected?.base_unit_name} (base)</SelectItem>
-                                        <SelectItem value="pack">
-                                            {selected?.pack_unit_name} ({selected?.conversion_label})
-                                        </SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            ) : null}
-                        </div>
-                        <div className="space-y-2">
-                            <Label>Purchase price (AFN)</Label>
-                            <Input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={form.purchase_price_afn}
-                                onChange={(e) => setForm((prev) => ({ ...prev, purchase_price_afn: e.target.value }))}
-                                required
-                            />
-                        </div>
-                        <div className="space-y-2">
-                            <Label>Sale price (AFN)</Label>
-                            <Input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={form.sale_price_afn}
-                                onChange={(e) => setForm((prev) => ({ ...prev, sale_price_afn: e.target.value }))}
-                                required
-                            />
-                        </div>
-                    </div>
-                </div>
-
-                {/* Bill */}
-                <div className="rounded-lg border p-4">
-                    <h2 className="mb-3 text-sm font-semibold">Bill</h2>
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                        <div className="space-y-2">
-                            <Label>Invoice number</Label>
-                            <Input value={form.invoice_number} onChange={(e) => setForm((prev) => ({ ...prev, invoice_number: e.target.value }))} />
-                        </div>
                         <div className="space-y-2">
                             <Label>Date</Label>
                             <Input
@@ -690,32 +319,321 @@ export default function ProductReceive({ variants, investors, investments = [], 
                             </Select>
                         </div>
                         <div className="space-y-2">
-                            <Label>Notes</Label>
-                            <Textarea value={form.notes} onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))} rows={2} />
+                            <Label>Invoice number</Label>
+                            <Input value={form.invoice_number} onChange={(e) => setForm((prev) => ({ ...prev, invoice_number: e.target.value }))} />
                         </div>
-                        {!isInvestor && (
-                            <div className="space-y-2">
-                                <Label>USD to AFN snapshot (optional)</Label>
-                                <Input
-                                    type="number"
-                                    min="0"
-                                    step="0.01"
-                                    value={form.exchange_rate}
-                                    onChange={(e) => setForm((prev) => ({ ...prev, exchange_rate: e.target.value }))}
-                                    placeholder="AFN per 1 USD, e.g. 70"
-                                />
-                                <p className="text-muted-foreground text-xs">
-                                    Stored on this receipt only if you submit it. It does not rewrite older sales or payments.
-                                    {selected?.usd_to_afn_rate
-                                        ? ` This product’s catalog USD→AFN rate is ${selected.usd_to_afn_rate}.`
-                                        : ''}
-                                </p>
-                            </div>
-                        )}
                     </div>
                 </div>
 
-                {/* Actions */}
+                <div className="border-primary bg-primary/5 rounded-xl border-2 p-5">
+                    <h2 className="text-lg font-semibold">Scan barcode</h2>
+                    <div className="mt-3 flex gap-2">
+                        <Input
+                            value={scan}
+                            onChange={(e) => setScan(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    void scanBarcode();
+                                }
+                            }}
+                            placeholder="Scan or type, then Enter"
+                            className="bg-background h-12 font-mono text-lg"
+                        />
+                        <Button type="button" className="h-12 px-6" onClick={() => void scanBarcode()} disabled={scanning}>
+                            {scanning ? 'Looking up…' : 'Find'}
+                        </Button>
+                    </div>
+                    {scanMessage && (
+                        <div
+                            className={`mt-3 flex items-center gap-2 rounded-lg border-2 p-3 text-sm font-semibold ${
+                                scanMessage.startsWith('❌')
+                                    ? 'border-red-400 bg-red-50 text-red-700'
+                                    : 'border-emerald-400 bg-emerald-50 text-emerald-700'
+                            }`}
+                        >
+                            <AlertCircle className="h-5 w-5 shrink-0" />
+                            <span>{scanMessage}</span>
+                        </div>
+                    )}
+                </div>
+
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            <Landmark className="h-5 w-5" /> Funding source
+                        </CardTitle>
+                        <CardDescription>Investor goods keep the original purchase currency and never increase the cash wallet.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div className="grid gap-3 sm:grid-cols-2">
+                            <button
+                                type="button"
+                                onClick={() => setFundingSource('office')}
+                                className={`rounded-xl border-2 p-4 text-left transition ${
+                                    !isInvestor ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/40'
+                                }`}
+                            >
+                                <div className="mb-2 flex items-center gap-2 font-semibold">
+                                    <Building2 className="h-5 w-5" /> Office money
+                                </div>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setFundingSource('investor')}
+                                className={`rounded-xl border-2 p-4 text-left transition ${
+                                    isInvestor ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/40'
+                                }`}
+                            >
+                                <div className="mb-2 flex items-center gap-2 font-semibold">
+                                    <CircleDollarSign className="h-5 w-5" /> Investor goods
+                                </div>
+                            </button>
+                        </div>
+                        {isInvestor && (
+                            <div className="space-y-4">
+                                <div className="grid gap-4 md:grid-cols-2">
+                                    <div className="space-y-2">
+                                        <Label>
+                                            Investor <span className="text-destructive">*</span>
+                                        </Label>
+                                        <Select value={form.investor_id || ''} onValueChange={setInvestor}>
+                                            <SelectTrigger>
+                                                <SelectValue placeholder="Select investor" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {investors.map((inv) => (
+                                                    <SelectItem key={inv.id} value={String(inv.id)}>
+                                                        {inv.name}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label>Cash / goods capital (optional)</Label>
+                                        <Select
+                                            value={form.investment_id || 'new_goods'}
+                                            onValueChange={(v) =>
+                                                setForm((prev) => ({
+                                                    ...prev,
+                                                    investment_id: v === 'new_goods' ? '' : v,
+                                                }))
+                                            }
+                                            disabled={!form.investor_id}
+                                        >
+                                            <SelectTrigger>
+                                                <SelectValue placeholder="New goods contribution" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="new_goods">New goods contribution (no cash draw)</SelectItem>
+                                                {investorInvestments.map((inv) => (
+                                                    <SelectItem key={inv.id} value={String(inv.id)}>
+                                                        {inv.label}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                        <p className="text-muted-foreground text-xs">
+                                            Leave as new goods to record in-kind stock. Select cash capital to allocate existing funds.
+                                        </p>
+                                        {errors.investment_id ? (
+                                            <p className="text-destructive text-xs">{errors.investment_id}</p>
+                                        ) : null}
+                                    </div>
+                                </div>
+                                <div className="grid gap-4 md:grid-cols-3">
+                                    <div className="space-y-2">
+                                        <Label>Profit currency</Label>
+                                        <Select
+                                            value={form.profit_currency_id || ledgerId}
+                                            onValueChange={(v) => setForm((prev) => ({ ...prev, profit_currency_id: v }))}
+                                        >
+                                            <SelectTrigger>
+                                                <SelectValue placeholder="Currency" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {currencies
+                                                    .filter((c) => ['AFN', 'USD', 'AED'].includes(c.code))
+                                                    .map((c) => (
+                                                        <SelectItem key={c.id} value={String(c.id)}>
+                                                            {c.code}
+                                                        </SelectItem>
+                                                    ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="space-y-2 md:col-span-2">
+                                        <Label className="flex items-center gap-2">
+                                            <TrendingUp className="h-4 w-4" /> Fixed investor profit / unit (
+                                            {profitCurrency?.code || 'AFN'})
+                                        </Label>
+                                        <Input
+                                            type="number"
+                                            min="0"
+                                            step="0.01"
+                                            value={form.profit_per_unit}
+                                            onChange={(e) => setForm((prev) => ({ ...prev, profit_per_unit: e.target.value }))}
+                                        />
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                                    <div className="rounded-lg border p-3 text-sm">
+                                        <p className="text-muted-foreground text-xs">Original PPU</p>
+                                        <p className="font-semibold">
+                                            {money(profitOriginal)} {profitCurrency?.code || 'AFN'}
+                                        </p>
+                                    </div>
+                                    <div className="rounded-lg border p-3 text-sm">
+                                        <p className="text-muted-foreground text-xs">AFN / USD / AED PPU</p>
+                                        <p className="font-semibold">
+                                            {money(profitEq.afn)} AFN · {money(profitEq.usd)} USD · {money(profitEq.aed)} AED
+                                        </p>
+                                    </div>
+                                    <div className="rounded-lg border p-3 text-sm">
+                                        <p className="text-muted-foreground text-xs">Company preview / unit</p>
+                                        <p className="font-semibold">{money(companyPreviewPerUnit)} AFN</p>
+                                        <p className="text-muted-foreground text-xs">sale − cost − investor (preview)</p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Product</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div className="space-y-2">
+                            <Label>Product</Label>
+                            <Select value={form.variant_id} onValueChange={pickVariant}>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select product" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {list.map((variant) => (
+                                        <SelectItem key={variant.id} value={String(variant.id)}>
+                                            {variant.name}
+                                            {variant.volume_ml ? ` · ${variant.volume_ml}ml` : ''}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        {selected && (
+                            <div className="border-primary/40 bg-primary/5 grid grid-cols-2 gap-3 rounded-lg border p-4 md:grid-cols-4">
+                                <div>
+                                    <p className="text-muted-foreground text-xs">Name</p>
+                                    <p className="text-sm font-medium">{selected.name}</p>
+                                </div>
+                                <div>
+                                    <p className="text-muted-foreground text-xs">Current stock</p>
+                                    <p className="text-sm font-medium">
+                                        {selected.stock_quantity}
+                                        <span className="text-muted-foreground"> → {selected.stock_quantity + qty}</span>
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+
+                <div className="rounded-lg border p-4">
+                    <h2 className="mb-3 text-sm font-semibold">Quantity, purchase currency & prices</h2>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                        <div className="space-y-2">
+                            <Label>Quantity</Label>
+                            <Input
+                                type="number"
+                                min="1"
+                                value={form.quantity}
+                                onChange={(e) => setForm((prev) => ({ ...prev, quantity: e.target.value }))}
+                                required
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Purchase currency</Label>
+                            <Select
+                                value={form.purchase_currency_id}
+                                onValueChange={(v) => setForm((prev) => ({ ...prev, purchase_currency_id: v }))}
+                            >
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Currency" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {currencies
+                                        .filter((c) => ['AFN', 'USD', 'AED'].includes(c.code))
+                                        .map((c) => (
+                                            <SelectItem key={c.id} value={String(c.id)}>
+                                                {c.code} {c.symbol ? `(${c.symbol})` : ''}
+                                            </SelectItem>
+                                        ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Unit purchase price ({selectedCurrency?.code || '—'})</Label>
+                            <Input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={form.purchase_unit_amount}
+                                onChange={(e) => setForm((prev) => ({ ...prev, purchase_unit_amount: e.target.value }))}
+                                required
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Sale price (AFN catalog)</Label>
+                            <Input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={form.sale_price_afn}
+                                onChange={(e) => setForm((prev) => ({ ...prev, sale_price_afn: e.target.value }))}
+                                required
+                            />
+                        </div>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                        <div className="rounded-lg border p-3 text-sm">
+                            <p className="text-muted-foreground text-xs">Original</p>
+                            <p className="font-semibold">
+                                {money(unitOriginal)} {selectedCurrency?.code} / unit
+                            </p>
+                            <p>
+                                Total {money(unitOriginal * qty)} {selectedCurrency?.code}
+                            </p>
+                        </div>
+                        <div className="rounded-lg border p-3 text-sm">
+                            <p className="text-muted-foreground text-xs">AFN equivalent</p>
+                            <p className="font-semibold">{money(eq.afn)} AFN / unit</p>
+                            <p>Total {money(lineEq.afn)} AFN</p>
+                        </div>
+                        <div className="rounded-lg border p-3 text-sm">
+                            <p className="text-muted-foreground text-xs">USD / AED equivalents</p>
+                            <p>
+                                {money(eq.usd)} USD · {money(eq.aed)} AED / unit
+                            </p>
+                            <p>
+                                Total {money(lineEq.usd)} USD · {money(lineEq.aed)} AED
+                            </p>
+                        </div>
+                    </div>
+                    {isInvestor && qty > 0 ? (
+                        <p className="text-muted-foreground mt-3 text-sm">
+                            Goods contribution {money(totalCostAfn)} AFN historical · investor sale profit {money(totalProfitAfn)} AFN
+                        </p>
+                    ) : null}
+                </div>
+
+                <div className="rounded-lg border p-4">
+                    <Label>Notes</Label>
+                    <Textarea className="mt-2" value={form.notes} onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))} rows={2} />
+                </div>
+
                 <FormActions backHref="/products" submitLabel="Add stock" loading={loading} />
             </form>
         </AppLayout>

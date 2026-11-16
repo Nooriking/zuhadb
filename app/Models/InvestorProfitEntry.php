@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\Money;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -200,14 +201,42 @@ class InvestorProfitEntry extends Model
                 $investmentId = $investment?->id;
             }
 
-            $profitAmountAfn = $profitPerUnitAfn * $quantity;
+            $existing = self::query()
+                ->where('sale_item_id', $saleItemId)
+                ->where('investment_product_allocation_id', $productAllocationId)
+                ->where('entry_type', 'profit')
+                ->where('status', '!=', 'cancelled')
+                ->lockForUpdate()
+                ->first();
+
+            if ($existing) {
+                return $existing;
+            }
+
+            $profitAmountAfn = Money::round(
+                Money::mul((string) $profitPerUnitAfn, (string) $quantity, 8),
+                2
+            );
             $ledger = Currency::ledger();
-            $snapCurrencyId = $currencyId ?? $investment?->currency_id ?? $ledger?->id;
-            $snapCode = $investment?->currency_code ?? $ledger?->code;
-            $snapSymbol = $investment?->currency_symbol ?? $ledger?->symbol;
-            $snapRate = $exchangeRate ?? $investment?->exchange_rate ?? ($ledger ? 1 : null);
+            // Prefer the batch-configured investor profit currency — independent of purchase currency.
+            $profitCurrency = $currencyId
+                ? Currency::query()->notTrashed()->find($currencyId)
+                : null;
+            $snapCurrencyId = $profitCurrency?->id ?? $investment?->currency_id ?? $ledger?->id;
+            $snapCode = $profitCurrency?->code ?? $investment?->currency_code ?? $ledger?->code;
+            $snapSymbol = $profitCurrency?->symbol ?? $investment?->currency_symbol ?? $ledger?->symbol;
+            if ($exchangeRate !== null && (float) $exchangeRate > 0) {
+                $snapRate = $exchangeRate;
+            } elseif ($profitCurrency && $ledger && $profitCurrency->id === $ledger->id) {
+                $snapRate = 1.0;
+            } else {
+                $snapRate = $investment?->exchange_rate ?? ($ledger ? 1.0 : null);
+            }
             $profitPerUnitOriginal = $profitPerUnitCurrency ?? $profitPerUnitAfn;
-            $profitAmountOriginal = $profitPerUnitOriginal * $quantity;
+            $profitAmountOriginal = Money::round(
+                Money::mul((string) $profitPerUnitOriginal, (string) $quantity, 8),
+                2
+            );
 
             $entry = self::create([
                 'investor_id'                      => $investorId,
@@ -232,7 +261,10 @@ class InvestorProfitEntry extends Model
 
             if ($investment) {
                 $investment->update([
-                    'profit_amount_afn' => (float) $investment->profit_amount_afn + $profitAmountAfn,
+                    'profit_amount_afn' => Money::round(
+                        Money::add((string) $investment->profit_amount_afn, (string) $profitAmountAfn, 8),
+                        2
+                    ),
                 ]);
             }
 
@@ -240,8 +272,14 @@ class InvestorProfitEntry extends Model
             if ($investor) {
                 $wallet = $investor->getOrCreateWallet();
                 $wallet->update([
-                    'profit_balance_afn'      => (float) $wallet->profit_balance_afn + $profitAmountAfn,
-                    'total_profit_earned_afn' => (float) $wallet->total_profit_earned_afn + $profitAmountAfn,
+                    'profit_balance_afn'      => Money::round(
+                        Money::add((string) $wallet->profit_balance_afn, (string) $profitAmountAfn, 8),
+                        2
+                    ),
+                    'total_profit_earned_afn' => Money::round(
+                        Money::add((string) $wallet->total_profit_earned_afn, (string) $profitAmountAfn, 8),
+                        2
+                    ),
                     'last_transaction_at'     => now(),
                 ]);
             }
@@ -298,8 +336,14 @@ class InvestorProfitEntry extends Model
 
             if ($wallet) {
                 $wallet->update([
-                    'profit_balance_afn'      => max(0, (float) $wallet->profit_balance_afn - (float) $this->profit_amount_afn),
-                    'total_profit_earned_afn' => max(0, (float) $wallet->total_profit_earned_afn - (float) $this->profit_amount_afn),
+                    'profit_balance_afn'      => Money::round(
+                        Money::maxZero(Money::sub((string) $wallet->profit_balance_afn, (string) $this->profit_amount_afn, 8)),
+                        2
+                    ),
+                    'total_profit_earned_afn' => Money::round(
+                        Money::maxZero(Money::sub((string) $wallet->total_profit_earned_afn, (string) $this->profit_amount_afn, 8)),
+                        2
+                    ),
                     'last_transaction_at'     => now(),
                 ]);
             }
@@ -307,7 +351,10 @@ class InvestorProfitEntry extends Model
             /* ═══ برگرداندن مبلغ از investment ═══ */
             if ($this->investment) {
                 $this->investment->update([
-                    'profit_amount_afn' => max(0, (float) $this->investment->profit_amount_afn - (float) $this->profit_amount_afn),
+                    'profit_amount_afn' => Money::round(
+                        Money::maxZero(Money::sub((string) $this->investment->profit_amount_afn, (string) $this->profit_amount_afn, 8)),
+                        2
+                    ),
                 ]);
             }
 
@@ -315,6 +362,155 @@ class InvestorProfitEntry extends Model
                 'status' => 'cancelled',
                 'notes'  => $reason ? ($this->notes . "\nCancelled: " . $reason) : $this->notes,
             ]);
+        });
+    }
+
+    /**
+     * Immutable reversal for a returned quantity. Never deletes the original entry.
+     * Works for pending (partial mutate + adjustment) and paid (adjustment only).
+     */
+    public function recordReturnReversal(int $quantity, string $reason = 'Reversed by sale return'): self
+    {
+        $quantity = max(0, $quantity);
+        if ($quantity <= 0) {
+            return $this;
+        }
+
+        return DB::transaction(function () use ($quantity, $reason) {
+            $perUnit = (string) $this->profit_per_unit_afn;
+            $reverseAmount = Money::round(Money::mul($perUnit, (string) $quantity, 8), 2);
+            $entryQty = (int) $this->quantity;
+
+            if ($this->status === 'pending') {
+                if ($quantity >= $entryQty) {
+                    $this->cancel($reason);
+
+                    return $this->fresh() ?? $this;
+                }
+
+                $newQty = $entryQty - $quantity;
+                // Reverse original-currency total using historical profit_per_unit_currency —
+                // never subtract AFN ledger amount from the original-currency column.
+                $perUnitCurrency = (string) ($this->profit_per_unit_currency ?? $perUnit);
+                $reverseAmountCurrency = Money::round(
+                    Money::mul($perUnitCurrency, (string) $quantity, 8),
+                    2
+                );
+                $wallet = $this->investor?->getOrCreateWallet();
+                if ($wallet) {
+                    $wallet->update([
+                        'profit_balance_afn' => Money::round(
+                            Money::maxZero(Money::sub((string) $wallet->profit_balance_afn, $reverseAmount, 8)),
+                            2
+                        ),
+                        'total_profit_earned_afn' => Money::round(
+                            Money::maxZero(Money::sub((string) $wallet->total_profit_earned_afn, $reverseAmount, 8)),
+                            2
+                        ),
+                        'last_transaction_at' => now(),
+                    ]);
+                }
+                if ($this->investment) {
+                    $this->investment->update([
+                        'profit_amount_afn' => Money::round(
+                            Money::maxZero(Money::sub((string) $this->investment->profit_amount_afn, $reverseAmount, 8)),
+                            2
+                        ),
+                    ]);
+                }
+                $this->update([
+                    'quantity' => $newQty,
+                    'profit_amount_afn' => Money::round(
+                        Money::sub((string) $this->profit_amount_afn, $reverseAmount, 8),
+                        2
+                    ),
+                    'profit_amount_currency' => Money::round(
+                        Money::sub(
+                            (string) ($this->profit_amount_currency ?? $this->profit_amount_afn),
+                            $reverseAmountCurrency,
+                            8
+                        ),
+                        2
+                    ),
+                    'notes' => trim(($this->notes ?? '')."\nPartial reverse {$quantity} units on return"),
+                ]);
+
+                return $this->fresh() ?? $this;
+            }
+
+            $perUnitCurrency = (string) ($this->profit_per_unit_currency ?? $perUnit);
+
+            // Paid (or other non-pending): create immutable adjustment; do not mutate original.
+            $reversal = self::create([
+                'investor_id' => $this->investor_id,
+                'investment_id' => $this->investment_id,
+                'investment_product_allocation_id' => $this->investment_product_allocation_id,
+                'sale_id' => $this->sale_id,
+                'sale_item_id' => $this->sale_item_id,
+                'currency_id' => $this->currency_id,
+                'currency_code' => $this->currency_code,
+                'currency_symbol' => $this->currency_symbol,
+                'exchange_rate' => $this->exchange_rate,
+                'quantity' => $quantity,
+                'profit_per_unit_currency' => Money::mul($perUnitCurrency, '-1', 8),
+                'profit_per_unit_afn' => Money::mul($perUnit, '-1', 8),
+                'profit_amount_currency' => Money::mul(
+                    Money::round(Money::mul($perUnitCurrency, (string) $quantity, 8), 2),
+                    '-1',
+                    2
+                ),
+                'profit_amount_afn' => Money::mul($reverseAmount, '-1', 2),
+                'entry_type' => 'adjustment',
+                'status' => 'paid',
+                'earned_at' => now(),
+                'paid_at' => now(),
+                'notes' => $reason.' (reversal of entry #'.$this->id.')',
+            ]);
+
+            if ($this->investment) {
+                $this->investment->update([
+                    'profit_amount_afn' => Money::round(
+                        Money::maxZero(Money::sub((string) $this->investment->profit_amount_afn, $reverseAmount, 8)),
+                        2
+                    ),
+                ]);
+            }
+
+            $investor = Investor::find($this->investor_id);
+            if ($investor) {
+                $wallet = $investor->getOrCreateWallet();
+                $wallet->update([
+                    'profit_balance_afn' => Money::round(
+                        Money::maxZero(Money::sub((string) $wallet->profit_balance_afn, $reverseAmount, 8)),
+                        2
+                    ),
+                    'total_profit_earned_afn' => Money::round(
+                        Money::maxZero(Money::sub((string) $wallet->total_profit_earned_afn, $reverseAmount, 8)),
+                        2
+                    ),
+                    'last_transaction_at' => now(),
+                ]);
+            }
+
+            InvestorTransaction::record(
+                investorId: (int) $this->investor_id,
+                type: 'adjustment',
+                amountAfn: $reverseAmount,
+                balanceType: 'profit',
+                options: [
+                    'investment_id' => $this->investment_id,
+                    'currency_id' => $this->currency_id,
+                    'currency_code' => $this->currency_code,
+                    'currency_symbol' => $this->currency_symbol,
+                    'exchange_rate' => $this->exchange_rate,
+                    'amount_currency' => round((float) ($this->profit_per_unit_currency ?? $perUnit) * $quantity, 2),
+                    'reference_type' => Sale::class,
+                    'reference_id' => $this->sale_id,
+                    'description' => $reason.' for profit entry #'.$this->id,
+                ]
+            );
+
+            return $reversal;
         });
     }
 }

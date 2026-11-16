@@ -52,6 +52,7 @@ class InvestorTransaction extends Model
 
     public const TYPE_LABELS = [
         'capital_deposit'   => 'Capital Deposit',
+        'goods_deposit'     => 'Goods Deposit',
         'capital_withdrawn' => 'Capital Withdrawn',
         'profit_earned'     => 'Profit Earned',
         'profit_withdrawn'  => 'Profit Withdrawn',
@@ -62,6 +63,7 @@ class InvestorTransaction extends Model
 
     public const TYPE_COLORS = [
         'capital_deposit'   => 'green',
+        'goods_deposit'     => 'teal',
         'capital_withdrawn' => 'red',
         'profit_earned'     => 'blue',
         'profit_withdrawn'  => 'orange',

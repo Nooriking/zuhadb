@@ -10,7 +10,7 @@ class StoreBranchRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return true;
+        return (bool) $this->user()?->canManageBranches();
     }
 
     public function rules(): array

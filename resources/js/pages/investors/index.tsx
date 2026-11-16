@@ -1,6 +1,10 @@
 ﻿// resources/js/pages/investors/index.tsx
 
 import { FilterField, IndexFilters } from '@/components/index-filters';
+import CurrencySectionCards, {
+    type CurrencySectionMetric,
+    type ExchangeValuation,
+} from '@/components/investors/currency-section-cards';
 import { DeleteAction, EditAction, RowAction, RowActions, ViewAction } from '@/components/row-actions';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -11,7 +15,7 @@ import AppLayout from '@/layouts/app-layout';
 import { formatLedgerMoney, type SharedCurrencyPayload } from '@/lib/money';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router, usePage } from '@inertiajs/react';
-import { AlertTriangle, Banknote, Plus, ToggleLeft, Trash2, TrendingUp, Users, Wallet, X } from 'lucide-react';
+import { AlertTriangle, Plus, ToggleLeft, Trash2, Users, X } from 'lucide-react';
 import { useState } from 'react';
 
 interface Wallet {
@@ -25,18 +29,27 @@ interface Wallet {
 
 interface Investor {
     id: number;
+    name?: string;
     full_name: string;
     phone: string | null;
     email: string | null;
-    status: 'active' | 'inactive';
+    status: 'active' | 'inactive' | 'blocked';
     investments_count: number;
     withdrawals_count: number;
     purchase_rows_count?: number;
     purchase_items_count?: number;
     batches_count: number;
     unallocated_capital_afn?: string | number | null;
+    cash_capital_afn?: string | number | null;
+    goods_contribution_afn?: string | number | null;
+    goods_held_afn?: string | number | null;
+    goods_sold_afn?: string | number | null;
+    total_investor_profit_afn?: string | number | null;
+    paid_profit_afn?: string | number | null;
+    pending_profit_afn?: string | number | null;
+    total_withdrawals_afn?: string | number | null;
+    current_balance_afn?: string | number | null;
     wallet: Wallet | null;
-    user: { id: number; name: string } | null;
     creator: { id: number; name: string } | null;
 }
 
@@ -57,11 +70,28 @@ interface Props {
     stats: {
         total_investors: number;
         active_investors: number;
-        total_capital: string;
-        total_profit_paid: string;
-        total_withdrawn: string;
+        cash_capital?: string | number;
+        goods_contribution?: string | number;
+        goods_held?: string | number;
+        goods_sold?: string | number;
+        total_investor_profit?: string | number;
+        paid_profit?: string | number;
+        pending_profit?: string | number;
+        total_withdrawals?: string | number;
+        current_balance?: string | number;
+        total_capital?: string | number;
         total_unallocated?: string | number;
     };
+    kpi_sources?: Record<string, string>;
+    currencySections?: Record<string, CurrencySectionMetric> | null;
+    exchangeValuation?: ExchangeValuation | null;
+    limitations?: string[];
+    legacy?: {
+        profit_afn_without_currency?: string | number;
+        withdrawals_afn_without_currency?: string | number;
+        purchases_without_currency?: number;
+        note?: string;
+    } | null;
 }
 
 const breadcrumbs: BreadcrumbItem[] = [
@@ -69,7 +99,16 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Investors', href: '/investors' },
 ];
 
-export default function InvestorsIndex({ investors, filters, stats }: Props) {
+export default function InvestorsIndex({
+    investors,
+    filters,
+    stats,
+    kpi_sources,
+    currencySections = null,
+    exchangeValuation = null,
+    limitations = [],
+    legacy = null,
+}: Props) {
     const { toast } = useToast();
     const { currency } = usePage().props as { currency?: SharedCurrencyPayload };
     const money = (value: string | number | null | undefined) => formatLedgerMoney(value, currency);
@@ -142,57 +181,50 @@ export default function InvestorsIndex({ investors, filters, stats }: Props) {
                                 <Trash2 className="h-4 w-4" /> Trash
                             </Button>
                         </Link>
-                        <Link href="/investors/create">
+                        <Link href="/users/create">
                             <Button className="gap-2">
-                                <Plus className="h-4 w-4" /> New Investor
+                                <Plus className="h-4 w-4" /> New Investor User
                             </Button>
                         </Link>
                     </div>
                 </div>
 
-                {/* Stats Cards — ledger AFN totals from investor_wallets / investments */}
-                <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
-                    <div className="rounded-lg border bg-white p-4 shadow-sm">
-                        <div className="flex items-center justify-between">
-                            <p className="text-muted-foreground text-xs">Total Investors</p>
-                            <Users className="h-4 w-4 text-blue-500" />
-                        </div>
-                        <p className="mt-1 text-2xl font-bold">{stats.total_investors}</p>
-                    </div>
-                    <div className="rounded-lg border bg-white p-4 shadow-sm">
-                        <div className="flex items-center justify-between">
-                            <p className="text-muted-foreground text-xs">Active</p>
-                            <ToggleLeft className="h-4 w-4 text-green-500" />
-                        </div>
-                        <p className="mt-1 text-2xl font-bold text-green-600">{stats.active_investors}</p>
-                    </div>
-                    <div className="rounded-lg border bg-white p-4 shadow-sm">
-                        <div className="flex items-center justify-between">
-                            <p className="text-muted-foreground text-xs">Capital (AFN ledger)</p>
-                            <Wallet className="h-4 w-4 text-blue-500" />
-                        </div>
-                        <p className="mt-1 text-2xl font-bold text-blue-600">{money(stats.total_capital)}</p>
-                    </div>
-                    <div className="rounded-lg border bg-white p-4 shadow-sm">
-                        <div className="flex items-center justify-between">
-                            <p className="text-muted-foreground text-xs">Unallocated (AFN)</p>
-                            <Wallet className="h-4 w-4 text-sky-500" />
-                        </div>
-                        <p className="mt-1 text-2xl font-bold text-sky-600">{money(stats.total_unallocated ?? 0)}</p>
-                    </div>
-                    <div className="rounded-lg border bg-white p-4 shadow-sm">
-                        <div className="flex items-center justify-between">
-                            <p className="text-muted-foreground text-xs">Total Profit Earned</p>
-                            <TrendingUp className="h-4 w-4 text-purple-500" />
-                        </div>
-                        <p className="mt-1 text-2xl font-bold text-purple-600">{money(stats.total_profit_paid)}</p>
-                    </div>
-                    <div className="rounded-lg border bg-white p-4 shadow-sm">
-                        <div className="flex items-center justify-between">
-                            <p className="text-muted-foreground text-xs">Total Withdrawn</p>
-                            <Banknote className="h-4 w-4 text-orange-500" />
-                        </div>
-                        <p className="mt-1 text-2xl font-bold text-orange-600">{money(stats.total_withdrawn)}</p>
+                {/* Original-currency portfolio summaries — never cross-add AFN+USD+AED */}
+                <CurrencySectionCards
+                    currencySections={currencySections}
+                    exchangeValuation={exchangeValuation}
+                    limitations={limitations}
+                    legacy={legacy}
+                />
+
+                {/* AFN ledger KPIs (wallet / allocation ledger). Separate from original-currency sections above. */}
+                <div>
+                    <h2 className="mb-2 text-sm font-semibold tracking-wide text-gray-900 uppercase dark:text-white">
+                        AFN ledger portfolio totals
+                    </h2>
+                    <p className="text-muted-foreground mb-3 text-xs">
+                        Ledger figures in AFN only. Foreign originals are shown in the currency sections above — not converted into these cards.
+                    </p>
+                    <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
+                        {[
+                            { label: 'Cash Capital (AFN ledger)', value: stats.cash_capital, tip: kpi_sources?.cash_capital },
+                            { label: 'Goods Contribution (AFN ledger)', value: stats.goods_contribution, tip: kpi_sources?.goods_contribution },
+                            { label: 'Goods Held (AFN ledger)', value: stats.goods_held, tip: kpi_sources?.goods_held },
+                            { label: 'Goods Sold (AFN ledger)', value: stats.goods_sold, tip: kpi_sources?.goods_sold },
+                            { label: 'Total Investor Profit (AFN)', value: stats.total_investor_profit, tip: kpi_sources?.total_investor_profit },
+                            { label: 'Paid Profit (AFN)', value: stats.paid_profit, tip: kpi_sources?.paid_profit },
+                            { label: 'Pending Profit (AFN)', value: stats.pending_profit, tip: kpi_sources?.pending_profit },
+                            { label: 'Total Withdrawals (AFN)', value: stats.total_withdrawals, tip: kpi_sources?.total_withdrawals },
+                            { label: 'Current Balance (AFN)', value: stats.current_balance, tip: kpi_sources?.current_balance },
+                            { label: 'Active Investors', value: stats.active_investors, tip: 'users.role=investor status=active', raw: true },
+                        ].map((card) => (
+                            <div key={card.label} className="rounded-lg border bg-white p-4 shadow-sm" title={card.tip}>
+                                <p className="text-muted-foreground text-xs">{card.label}</p>
+                                <p className="mt-1 text-xl font-bold">
+                                    {'raw' in card && card.raw ? card.value : money(card.value ?? 0)}
+                                </p>
+                            </div>
+                        ))}
                     </div>
                 </div>
 
@@ -224,11 +256,15 @@ export default function InvestorsIndex({ investors, filters, stats }: Props) {
                             <TableRow>
                                 <TableHead className="w-16">#</TableHead>
                                 <TableHead>Investor</TableHead>
-                                <TableHead>Phone</TableHead>
-                                <TableHead className="text-right">Capital</TableHead>
-                                <TableHead className="text-right">Unallocated</TableHead>
-                                <TableHead className="text-center">Investments</TableHead>
-                                <TableHead className="text-center">Purchases</TableHead>
+                                <TableHead className="text-right">Cash Capital</TableHead>
+                                <TableHead className="text-right">Goods Contrib.</TableHead>
+                                <TableHead className="text-right">Goods Held</TableHead>
+                                <TableHead className="text-right">Goods Sold</TableHead>
+                                <TableHead className="text-right">Profit</TableHead>
+                                <TableHead className="text-right">Paid</TableHead>
+                                <TableHead className="text-right">Pending</TableHead>
+                                <TableHead className="text-right">Withdrawals</TableHead>
+                                <TableHead className="text-right">Balance</TableHead>
                                 <TableHead>Status</TableHead>
                                 <TableHead className="text-center">Actions</TableHead>
                             </TableRow>
@@ -236,7 +272,7 @@ export default function InvestorsIndex({ investors, filters, stats }: Props) {
                         <TableBody>
                             {investors.data.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={9} className="text-muted-foreground h-24 text-center">
+                                    <TableCell colSpan={13} className="text-muted-foreground h-24 text-center">
                                         No investors found.
                                     </TableCell>
                                 </TableRow>
@@ -245,28 +281,22 @@ export default function InvestorsIndex({ investors, filters, stats }: Props) {
                                     <TableRow key={investor.id}>
                                         <TableCell>{investors.from ? investors.from + index : index + 1}</TableCell>
                                         <TableCell>
-                                            <div className="font-medium">{investor.full_name}</div>
-                                            {investor.user && <div className="text-muted-foreground text-xs">@{investor.user.name}</div>}
+                                            <div className="font-medium">{investor.full_name || investor.name}</div>
+                                            {investor.phone && (
+                                                <div className="text-muted-foreground text-xs" dir="ltr">
+                                                    {investor.phone}
+                                                </div>
+                                            )}
                                         </TableCell>
-                                        <TableCell className="text-sm" dir="ltr">
-                                            {investor.phone || '—'}
-                                        </TableCell>
-                                        <TableCell className="text-right font-mono font-semibold">
-                                            {money(investor.wallet?.capital_balance_afn || 0)}
-                                        </TableCell>
-                                        <TableCell className="text-right font-mono text-sm text-sky-700">
-                                            {money(investor.unallocated_capital_afn || 0)}
-                                        </TableCell>
-                                        <TableCell className="text-center">
-                                            <Link href={`/investments?investor_id=${investor.id}`} className="hover:underline">
-                                                <Badge variant="secondary">{investor.investments_count}</Badge>
-                                            </Link>
-                                        </TableCell>
-                                        <TableCell className="text-center">
-                                            <Badge variant="outline">
-                                                {investor.purchase_rows_count ?? investor.purchase_items_count ?? 0}
-                                            </Badge>
-                                        </TableCell>
+                                        <TableCell className="text-right font-mono text-sm">{money(investor.cash_capital_afn || 0)}</TableCell>
+                                        <TableCell className="text-right font-mono text-sm">{money(investor.goods_contribution_afn || 0)}</TableCell>
+                                        <TableCell className="text-right font-mono text-sm">{money(investor.goods_held_afn || 0)}</TableCell>
+                                        <TableCell className="text-right font-mono text-sm">{money(investor.goods_sold_afn || 0)}</TableCell>
+                                        <TableCell className="text-right font-mono text-sm">{money(investor.total_investor_profit_afn || 0)}</TableCell>
+                                        <TableCell className="text-right font-mono text-sm">{money(investor.paid_profit_afn || 0)}</TableCell>
+                                        <TableCell className="text-right font-mono text-sm">{money(investor.pending_profit_afn || 0)}</TableCell>
+                                        <TableCell className="text-right font-mono text-sm">{money(investor.total_withdrawals_afn || 0)}</TableCell>
+                                        <TableCell className="text-right font-mono text-sm font-semibold">{money(investor.current_balance_afn || 0)}</TableCell>
                                         <TableCell>
                                             {investor.status === 'active' ? (
                                                 <Badge variant="success">Active</Badge>
@@ -277,7 +307,7 @@ export default function InvestorsIndex({ investors, filters, stats }: Props) {
                                         <TableCell>
                                             <RowActions>
                                                 <ViewAction href={`/investors/${investor.id}`} />
-                                                <EditAction href={`/investors/${investor.id}/edit`} />
+                                                <EditAction href={`/users/${investor.id}/edit`} />
                                                 <RowAction title="Toggle Status" onClick={() => handleToggleStatus(investor)}>
                                                     <ToggleLeft className="h-4 w-4" />
                                                 </RowAction>
@@ -324,7 +354,8 @@ export default function InvestorsIndex({ investors, filters, stats }: Props) {
                             <div className="flex-1">
                                 <h3 className="text-lg font-semibold">Are you sure?</h3>
                                 <p className="text-muted-foreground mt-1 text-sm">
-                                    Investor <strong>{investorToDelete.full_name}</strong> will be moved to trash.
+                                    Investor <strong>{investorToDelete.full_name || investorToDelete.name}</strong> will
+                                    be deactivated. Financial history is preserved.
                                 </p>
                             </div>
                             <button type="button" onClick={() => setInvestorToDelete(null)} className="text-muted-foreground hover:text-foreground">

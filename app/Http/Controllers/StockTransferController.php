@@ -26,6 +26,11 @@ class StockTransferController extends Controller
         $search   = $request->query('search');
         $branchId = $request->query('branch_id');
         $status   = $request->query('status');
+        $user     = $request->user();
+
+        if ($user?->isBranchScoped()) {
+            $branchId = $user->branch_id;
+        }
 
         $transfers = StockTransfer::query()
             ->with([
@@ -51,7 +56,7 @@ class StockTransferController extends Controller
 
         return Inertia::render('stock-transfers/index', [
             'transfers' => $transfers,
-            'branches'  => Branch::notTrashed()->select('id', 'name', 'code')->get(),
+            'branches'  => Branch::notTrashed()->visibleTo($user)->select('id', 'name', 'code')->get(),
             'filters'   => [
                 'search'    => $search,
                 'branch_id' => $branchId,

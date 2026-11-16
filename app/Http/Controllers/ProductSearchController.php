@@ -51,6 +51,24 @@ class ProductSearchController extends Controller
             ->limit(5)
             ->get();
 
+        // Resolve stock for every match in one grouped query. The previous loops
+        // issued one SUM per barcode result and per variant (unbounded by variant
+        // count), making POS search latency grow with the catalog shape.
+        $variantIds = $barcodeMatches->pluck('variant.id')
+            ->merge($nameMatches->flatMap(fn (Product $product) => $product->variants->pluck('id')))
+            ->filter()
+            ->unique()
+            ->values();
+
+        $stockByVariant = $variantIds->isEmpty()
+            ? collect()
+            : Product::query()
+                ->whereIn('variant_id', $variantIds)
+                ->where('trash', false)
+                ->selectRaw('variant_id, COALESCE(SUM(remaining_quantity), 0) as stock')
+                ->groupBy('variant_id')
+                ->pluck('stock', 'variant_id');
+
         $results = collect();
 
         /* ─── Barcode Results ─── */
@@ -60,9 +78,7 @@ class ProductSearchController extends Controller
                 continue;
             }
 
-            $stock = Product::where('variant_id', $variant->id)
-                ->where('trash', false)
-                ->sum('remaining_quantity');
+            $stock = $stockByVariant->get($variant->id, 0);
 
             $results->push([
                 'type'            => 'barcode',
@@ -88,9 +104,7 @@ class ProductSearchController extends Controller
         foreach ($nameMatches as $product) {
             $totalStock = 0;
             foreach ($product->variants as $v) {
-                $totalStock += (int) Product::where('variant_id', $v->id)
-                    ->where('trash', false)
-                    ->sum('remaining_quantity');
+                $totalStock += (int) $stockByVariant->get($v->id, 0);
             }
 
             $firstVariant = $product->variants->first();

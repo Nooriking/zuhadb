@@ -10,6 +10,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -134,10 +135,34 @@ class BranchController extends Controller
             'users' => fn ($q) => $q->limit(20),
         ]);
 
+        $salesCount = DB::table('sales')
+            ->where('branch_id', $branch->id)
+            ->whereNull('deleted_at')
+            ->when(Schema::hasColumn('sales', 'trash'), fn ($q) => $q->where('trash', false))
+            ->count();
+
+        $purchasesCount = Schema::hasTable('product_batches')
+            ? DB::table('product_batches')
+                ->where('branch_id', $branch->id)
+                ->when(Schema::hasColumn('product_batches', 'trash'), fn ($q) => $q->where('trash', false))
+                ->count()
+            : 0;
+
+        $expensesTotal = Schema::hasTable('expenses')
+            ? (float) DB::table('expenses')
+                ->where('branch_id', $branch->id)
+                ->whereNull('deleted_at')
+                ->when(Schema::hasColumn('expenses', 'trash'), fn ($q) => $q->where('trash', false))
+                ->sum('amount_afn')
+            : 0.0;
+
         return Inertia::render('branches/Show', [
             'branch' => $branch,
             'stats'  => [
-                'total_users' => $branch->users()->count(),
+                'total_users'     => $branch->users()->count(),
+                'total_sales'     => $salesCount,
+                'total_purchases' => $purchasesCount,
+                'total_expenses'  => $expensesTotal,
             ],
         ]);
     }

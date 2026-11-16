@@ -27,7 +27,7 @@ class InvestmentProductAllocationController extends Controller
         $allocations = InvestmentProductAllocation::query()
             ->with([
                 'investment:id,investment_number,investor_id',
-                'investment.investor:id,full_name',
+                'investment.investor:id,name',
                 'batch:id,batch_code,branch_id',
                 'batch.branch:id,name,code',
                 'variant.product:id,name',
@@ -77,7 +77,7 @@ class InvestmentProductAllocationController extends Controller
             });
 
         $investments = Investment::query()
-            ->with(['investor:id,full_name'])
+            ->with(['investor:id,name'])
             ->notTrashed()
             ->active()
             ->orderByDesc('id')
@@ -131,7 +131,7 @@ class InvestmentProductAllocationController extends Controller
     public function show(InvestmentProductAllocation $allocation): Response
     {
         $allocation->load([
-            'investment.investor:id,full_name,phone',
+            'investment.investor:id,name,phone',
             'purchaseAllocation.purchase:id,name,invoice_number,line_total',
             'batch.branch:id,name',
             'variant.product:id,name',

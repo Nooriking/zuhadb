@@ -13,20 +13,31 @@ use Inertia\Response;
 
 class InvestorProfitEntryController extends Controller
 {
+    private function scopedInvestorId(?\Illuminate\Contracts\Auth\Authenticatable $user): ?int
+    {
+        if (! $user || ! method_exists($user, 'isInvestor') || ! $user->isInvestor()) {
+            return null;
+        }
+
+        // Investor identity is the authenticated user row.
+        return $user->trash ? -1 : (int) $user->id;
+    }
+
     /* =========================================================
      |  INDEX — لیست همه‌ی سودها
      ========================================================= */
 
     public function index(Request $request): Response
     {
-        $investorId   = $request->query('investor_id');
+        $ownInvestorId = $this->scopedInvestorId($request->user());
+        $investorId   = $ownInvestorId ?? $request->query('investor_id');
         $investmentId = $request->query('investment_id');
         $status       = $request->query('status');
         $entryType    = $request->query('entry_type');
 
         $entries = InvestorProfitEntry::query()
             ->with([
-                'investor:id,full_name,phone',
+                'investor:id,name,phone',
                 'investment:id,investment_number',
                 'sale:id,invoice_number',
                 'payer:id,name',
@@ -41,8 +52,10 @@ class InvestorProfitEntryController extends Controller
             ->paginate(20)
             ->withQueryString();
 
-        // Stats
-        $profitRows = InvestorProfitEntry::query()
+        $base = InvestorProfitEntry::query()
+            ->when($ownInvestorId, fn ($q) => $q->where('investor_id', $ownInvestorId));
+
+        $profitRows = (clone $base)
             ->where('entry_type', 'profit')
             ->where('status', '!=', 'cancelled')
             ->with('currency')
@@ -55,19 +68,26 @@ class InvestorProfitEntryController extends Controller
             ]);
 
         $stats = [
-            'total_entries'    => InvestorProfitEntry::count(),
-            'pending_count'    => InvestorProfitEntry::pending()->count(),
-            'paid_count'       => InvestorProfitEntry::paid()->count(),
-            'total_profit_afn' => (float) InvestorProfitEntry::where('entry_type', 'profit')->where('status', '!=', 'cancelled')->sum('profit_amount_afn'),
-            'pending_profit'   => (float) InvestorProfitEntry::pending()->sum('profit_amount_afn'),
-            'paid_profit'      => (float) InvestorProfitEntry::paid()->sum('profit_amount_afn'),
+            'total_entries'    => (clone $base)->count(),
+            'pending_count'    => (clone $base)->pending()->count(),
+            'paid_count'       => (clone $base)->paid()->count(),
+            'total_profit_afn' => (float) (clone $base)->where('entry_type', 'profit')->where('status', '!=', 'cancelled')->sum('profit_amount_afn'),
+            'pending_profit'   => (float) (clone $base)->pending()->sum('profit_amount_afn'),
+            'paid_profit'      => (float) (clone $base)->paid()->sum('profit_amount_afn'),
             'profit_totals'    => app(\App\Services\CurrencyService::class)->summarize($profitRows),
         ];
 
         return Inertia::render('investor-profit-entries/index', [
             'entries'    => $entries,
-            'investors'  => Investor::notTrashed()->select('id', 'full_name')->orderBy('full_name')->get(),
-            'investments'=> Investment::notTrashed()->select('id', 'investment_number')->orderByDesc('id')->limit(200)->get(),
+            'investors'  => $ownInvestorId
+                ? Investor::notTrashed()->whereKey($ownInvestorId)->select('id', 'name')->get()
+                : Investor::notTrashed()->select('id', 'name')->orderBy('name')->get(),
+            'investments'=> Investment::notTrashed()
+                ->when($ownInvestorId, fn ($q) => $q->where('investor_id', $ownInvestorId))
+                ->select('id', 'investment_number')
+                ->orderByDesc('id')
+                ->limit(200)
+                ->get(),
             'filters'    => [
                 'investor_id'   => $investorId,
                 'investment_id' => $investmentId,
@@ -84,8 +104,13 @@ class InvestorProfitEntryController extends Controller
 
     public function show(InvestorProfitEntry $entry): Response
     {
+        $ownInvestorId = $this->scopedInvestorId(request()->user());
+        if ($ownInvestorId !== null && (int) $entry->investor_id !== $ownInvestorId) {
+            abort(403);
+        }
+
         $entry->load([
-            'investor:id,full_name,phone,email',
+            'investor:id,name,phone,email',
             'investment:id,investment_number,capital_amount_afn',
             'productAllocation.batch:id,batch_code',
             'productAllocation.variant.product:id,name',
@@ -174,6 +199,11 @@ class InvestorProfitEntryController extends Controller
 
     public function byInvestor(Investor $investor): Response
     {
+        $ownInvestorId = $this->scopedInvestorId(request()->user());
+        if ($ownInvestorId !== null && (int) $investor->id !== $ownInvestorId) {
+            abort(403);
+        }
+
         $entries = InvestorProfitEntry::query()
             ->with(['investment:id,investment_number', 'sale:id,invoice_number'])
             ->where('investor_id', $investor->id)
@@ -202,13 +232,18 @@ class InvestorProfitEntryController extends Controller
 
     public function byInvestment(Investment $investment): Response
     {
+        $ownInvestorId = $this->scopedInvestorId(request()->user());
+        if ($ownInvestorId !== null && (int) $investment->investor_id !== $ownInvestorId) {
+            abort(403);
+        }
+
         $entries = InvestorProfitEntry::query()
-            ->with(['investor:id,full_name', 'sale:id,invoice_number'])
+            ->with(['investor:id,name', 'sale:id,invoice_number'])
             ->where('investment_id', $investment->id)
             ->orderByDesc('earned_at')
             ->paginate(30);
 
-        $investment->load('investor:id,full_name');
+        $investment->load('investor:id,name');
 
         $stats = [
             'total_entries'   => InvestorProfitEntry::forInvestment($investment->id)->count(),

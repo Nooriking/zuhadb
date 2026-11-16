@@ -6,6 +6,7 @@ use App\Http\Requests\StoreExchangeRateRequest;
 use App\Http\Requests\UpdateExchangeRateRequest;
 use App\Models\Currency;
 use App\Models\ExchangeRate;
+use App\Services\CurrencyService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -14,6 +15,8 @@ use Inertia\Response;
 
 class ExchangeRateController extends Controller
 {
+    public function __construct(private readonly CurrencyService $currencies) {}
+
     /* =========================================================
      |  INDEX
      ========================================================= */
@@ -64,13 +67,21 @@ class ExchangeRateController extends Controller
     public function store(StoreExchangeRateRequest $request): RedirectResponse
     {
         $data = $request->validated();
-        $data['created_by'] = Auth::id();
+        $from = Currency::query()->findOrFail($data['from_currency_id']);
+        $to = Currency::query()->findOrFail($data['to_currency_id']);
 
-        $exchangeRate = ExchangeRate::create($data);
+        $this->currencies->postRate(
+            $from,
+            $to,
+            (string) $data['rate'],
+            $data['effective_at'],
+            Auth::id(),
+            'manual',
+        );
 
         return redirect()
             ->route('exchange-rates.index')
-            ->with('success', "Exchange rate created successfully.");
+            ->with('success', 'Exchange rate created successfully.');
     }
 
     /* =========================================================

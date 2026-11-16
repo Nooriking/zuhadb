@@ -14,7 +14,10 @@ use App\Models\Sale;
 use App\Models\SaleItem;
 use App\Models\SalePayment;
 use App\Models\User;
+use App\Support\FxBoard;
+use App\Support\Money;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class SaleService
@@ -59,6 +62,34 @@ class SaleService
                 ]);
             }
 
+            $ledger = Currency::ledger();
+            $saleCurrency = ! empty($data['sale_currency_id'])
+                ? $this->currency->requireActive((int) $data['sale_currency_id'], 'sale_currency_id')
+                : ($ledger ?? throw ValidationException::withMessages([
+                    'sale_currency_id' => 'Ledger currency (AFN) is required.',
+                ]));
+
+            $rateOverrides = [];
+            if (! empty($data['usd_to_afn_rate']) && (float) $data['usd_to_afn_rate'] > 0) {
+                $rateOverrides['usd_to_afn'] = (string) $data['usd_to_afn_rate'];
+            }
+            if (! empty($data['aed_to_afn_rate']) && (float) $data['aed_to_afn_rate'] > 0) {
+                $rateOverrides['aed_to_afn'] = (string) $data['aed_to_afn_rate'];
+            }
+            if ($rateOverrides !== []) {
+                $rateOverrides['source'] = (string) ($data['rate_source'] ?? 'transaction');
+            }
+
+            $board = $this->currency->boardAt($data['sale_date'], $rateOverrides, allowCatalogFallback: true);
+
+            unset(
+                $data['sale_currency_id'],
+                $data['usd_to_afn_rate'],
+                $data['aed_to_afn_rate'],
+                $data['rate_source'],
+                $data['usd_to_aed_rate'],
+            );
+
             $variantIds = collect($items)->pluck('variant_id')->unique()->all();
             $variants = ProductVariant::with([
                 'product:id,name',
@@ -67,22 +98,66 @@ class SaleService
 
             $subtotalAfn = 0.0;
             $totalCostAfn = 0.0;
+            $originalSubtotal = '0';
             $lineData = [];
 
             foreach ($items as $item) {
-                $prepared = $this->prepareSaleLine($branchId, $item, $variants);
+                $prepared = $this->prepareSaleLine($branchId, $item, $variants, $saleCurrency, $board);
                 $subtotalAfn = round($subtotalAfn + $prepared['line_subtotal_afn'], 2);
                 $totalCostAfn = round($totalCostAfn + $prepared['line_cost_afn'], 2);
+                $originalSubtotal = Money::round(
+                    function_exists('bcadd')
+                        ? bcadd($originalSubtotal, (string) $prepared['line_original_subtotal'], 2)
+                        : (string) ((float) $originalSubtotal + (float) $prepared['line_original_subtotal']),
+                    2
+                );
                 $lineData[] = $prepared['line'];
             }
 
-            $discountAfn = round((float) ($data['discount_afn'] ?? 0), 2);
+            $batchIds = collect($lineData)
+                ->flatMap(fn (array $line) => collect($line['cost_breakdown'] ?? [])->pluck('batch_id'))
+                ->unique()
+                ->values();
+            $batchesById = ProductBatch::query()
+                ->whereIn('id', $batchIds)
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+            $allocationsByBatch = InvestmentProductAllocation::query()
+                ->whereIn('batch_id', $batchIds)
+                ->where('status', 'active')
+                ->where('remaining_quantity', '>', 0)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get()
+                ->groupBy('batch_id');
+
+            $this->assertInvestorProfitFitsGross($lineData, $batchesById);
+
+            // Document discount may be entered in sale currency (discount_amount) or legacy AFN.
+            if (isset($data['discount_amount']) && $data['discount_amount'] !== '' && $data['discount_amount'] !== null) {
+                $discountOriginal = Money::round((string) $data['discount_amount'], 2);
+                $discountAfn = (float) $board->equivalents($discountOriginal, $saleCurrency->code, 2)['afn'];
+            } else {
+                $discountAfn = round((float) ($data['discount_afn'] ?? 0), 2);
+                $discountOriginal = $board->equivalents((string) $discountAfn, 'AFN', 2)[
+                    strtolower($saleCurrency->code) === 'usd' ? 'usd' : (strtolower($saleCurrency->code) === 'aed' ? 'aed' : 'afn')
+                ];
+            }
+            unset($data['discount_amount']);
 
             $data['subtotal_afn'] = $subtotalAfn;
             $data['discount_afn'] = $discountAfn;
             $data['total_afn'] = $this->calculateTotal($subtotalAfn, $discountAfn);
             $data['total_cost_afn'] = $totalCostAfn;
             $data['total_profit_afn'] = round($data['total_afn'] - $totalCostAfn, 2);
+
+            $originalTotal = Money::round(
+                function_exists('bcsub')
+                    ? bcsub($originalSubtotal, (string) $discountOriginal, 2)
+                    : (string) max(0, (float) $originalSubtotal - (float) $discountOriginal),
+                2
+            );
 
             $newSaleAmountAfn = round((float) $data['total_afn'], 2);
             $grandTotalDueAfn = round($previousDueAfn + $newSaleAmountAfn, 2);
@@ -91,10 +166,18 @@ class SaleService
             $data['new_sale_amount_afn'] = $newSaleAmountAfn;
             $data['grand_total_due_afn'] = $grandTotalDueAfn;
 
+            $fxSnapshot = $this->currency->saleBoardSnapshot(
+                (string) $data['total_afn'],
+                $board,
+                $saleCurrency,
+                $originalTotal,
+            );
+            unset($fxSnapshot['total_afn_check']);
+
             $sale = Sale::create(array_merge(
                 $data,
                 $this->currency->ledgerSnapshot(),
-                $this->currency->saleUsdSnapshot((string) $data['total_afn']),
+                $fxSnapshot,
             ));
 
             $totalInvestorProfit = 0.0;
@@ -105,41 +188,116 @@ class SaleService
 
                 $breakdown = $line['cost_breakdown'] ?? [];
                 $investorProfitForLine = 0.0;
+                $companyProfitForLine = 0.0;
+                $grossProfitForLine = (float) ($line['gross_profit_afn'] ?? 0);
+                $enrichedBreakdown = [];
 
                 foreach ($breakdown as $part) {
-                    $batch = ProductBatch::find($part['batch_id']);
+                    $batch = $batchesById->get($part['batch_id']);
                     if (! $batch) {
                         continue;
                     }
 
                     $take = (int) $part['qty'];
+                    $partGross = (float) ($part['gross_profit_afn'] ?? 0);
+                    $partInvestor = 0.0;
 
                     if ($batch->investor_id && (float) $batch->profit_per_unit_afn > 0) {
-                        $allocation = InvestmentProductAllocation::query()
-                            ->where('batch_id', $batch->id)
-                            ->where('status', 'active')
-                            ->where('remaining_quantity', '>', 0)
-                            ->orderBy('id')
-                            ->first();
-
-                        InvestorProfitEntry::recordProfit(
-                            investorId: $batch->investor_id,
-                            investmentId: $allocation?->investment_id,
-                            productAllocationId: $allocation?->id,
-                            saleId: $sale->id,
-                            saleItemId: $saleItem->id,
-                            quantity: $take,
-                            profitPerUnitAfn: (float) $batch->profit_per_unit_afn,
-                            notes: "Profit from batch {$batch->batch_code}"
+                        $partInvestor = (float) Money::round(
+                            Money::mul((string) $batch->profit_per_unit_afn, (string) $take, 8),
+                            2
                         );
+                        $left = $take;
+                        $batchAllocations = $allocationsByBatch->get($batch->id) ?? collect();
 
-                        $allocation?->recordSale($take);
+                        foreach ($batchAllocations as $allocation) {
+                            if ($left <= 0) {
+                                break;
+                            }
+                            if ($allocation->status !== 'active' || (int) $allocation->remaining_quantity <= 0) {
+                                continue;
+                            }
 
-                        $investorProfitForLine = round(
-                            $investorProfitForLine + ((float) $batch->profit_per_unit_afn * $take),
+                            $allocTake = min($left, (int) $allocation->remaining_quantity);
+                            if ($allocTake <= 0) {
+                                continue;
+                            }
+
+                            $profitOriginal = Schema::hasColumn('product_batches', 'profit_per_unit_currency')
+                                ? (float) ($batch->profit_per_unit_currency ?? $batch->profit_per_unit_afn)
+                                : (float) $batch->profit_per_unit_afn;
+                            $profitFx = $profitOriginal > 0
+                                ? (float) Money::round(
+                                    Money::div((string) $batch->profit_per_unit_afn, (string) $profitOriginal, 12),
+                                    8
+                                )
+                                : null;
+
+                            InvestorProfitEntry::recordProfit(
+                                investorId: (int) $batch->investor_id,
+                                investmentId: $allocation->investment_id,
+                                productAllocationId: $allocation->id,
+                                saleId: $sale->id,
+                                saleItemId: $saleItem->id,
+                                quantity: $allocTake,
+                                profitPerUnitAfn: (float) $batch->profit_per_unit_afn,
+                                profitPerUnitCurrency: $profitOriginal,
+                                currencyId: $batch->profit_currency_id ?? null,
+                                exchangeRate: $profitFx,
+                                notes: "Profit from batch {$batch->batch_code}"
+                            );
+
+                            $allocation->recordSale($allocTake);
+                            $left -= $allocTake;
+                        }
+
+                        // Investor-owned batch with no allocation row: still record profit against investor.
+                        if ($left > 0) {
+                            $profitOriginal = Schema::hasColumn('product_batches', 'profit_per_unit_currency')
+                                ? (float) ($batch->profit_per_unit_currency ?? $batch->profit_per_unit_afn)
+                                : (float) $batch->profit_per_unit_afn;
+                            $profitFx = $profitOriginal > 0
+                                ? (float) Money::round(
+                                    Money::div((string) $batch->profit_per_unit_afn, (string) $profitOriginal, 12),
+                                    8
+                                )
+                                : null;
+
+                            InvestorProfitEntry::recordProfit(
+                                investorId: (int) $batch->investor_id,
+                                investmentId: null,
+                                productAllocationId: null,
+                                saleId: $sale->id,
+                                saleItemId: $saleItem->id,
+                                quantity: $left,
+                                profitPerUnitAfn: (float) $batch->profit_per_unit_afn,
+                                profitPerUnitCurrency: $profitOriginal,
+                                currencyId: $batch->profit_currency_id ?? null,
+                                exchangeRate: $profitFx,
+                                notes: "Profit from batch {$batch->batch_code}"
+                            );
+                        }
+
+                        $investorProfitForLine = (float) Money::round(
+                            Money::add((string) $investorProfitForLine, (string) $partInvestor, 8),
                             2
                         );
                     }
+
+                    $partCompany = (float) Money::round(
+                        Money::sub((string) $partGross, (string) $partInvestor, 8),
+                        2
+                    );
+                    $companyProfitForLine = (float) Money::round(
+                        Money::add((string) $companyProfitForLine, (string) $partCompany, 8),
+                        2
+                    );
+
+                    $enrichedBreakdown[] = array_merge($part, [
+                        'investor_profit_afn' => $partInvestor,
+                        'company_profit_afn' => $partCompany,
+                        'profit_per_unit_afn' => (float) $batch->profit_per_unit_afn,
+                    ]);
 
                     $batch->reduceStock($take);
 
@@ -156,14 +314,17 @@ class SaleService
                 }
 
                 $saleItem->update([
+                    'gross_profit_afn' => $grossProfitForLine,
                     'investor_profit_afn' => $investorProfitForLine,
+                    'store_profit_afn' => round($grossProfitForLine - $investorProfitForLine, 2),
+                    'cost_breakdown' => $enrichedBreakdown !== [] ? $enrichedBreakdown : $breakdown,
                 ]);
 
                 $totalInvestorProfit = round($totalInvestorProfit + $investorProfitForLine, 2);
             }
 
             $paidAfn = 0.0;
-            $paymentIds = [];
+            $createdPayments = [];
 
             foreach ($payments as $payment) {
                 $resolved = $this->resolvePaymentMoney($payment);
@@ -183,7 +344,7 @@ class SaleService
                     'received_by' => $actor->id,
                 ]));
 
-                $paymentIds[] = $salePayment->id;
+                $createdPayments[] = $salePayment;
                 $paidAfn = round($paidAfn + $amountAfn, 2);
             }
 
@@ -191,11 +352,7 @@ class SaleService
             $paymentStatus = $this->paymentStatus($paidAfn, $grandTotalDueAfn);
 
             $runningDue = $grandTotalDueAfn;
-            foreach ($paymentIds as $paymentId) {
-                $createdPayment = SalePayment::find($paymentId);
-                if (! $createdPayment) {
-                    continue;
-                }
+            foreach ($createdPayments as $createdPayment) {
                 $runningDue = round(max(0, $runningDue - (float) $createdPayment->amount_afn), 2);
                 $createdPayment->update(['remaining_due_afn' => $runningDue]);
             }
@@ -214,11 +371,8 @@ class SaleService
             if ($customer) {
                 $this->ledger->recordSale($sale);
 
-                foreach ($paymentIds as $paymentId) {
-                    $payment = SalePayment::find($paymentId);
-                    if ($payment) {
-                        $this->ledger->recordPayment($payment);
-                    }
+                foreach ($createdPayments as $payment) {
+                    $this->ledger->recordPayment($payment);
                 }
 
                 $customer->update([
@@ -337,7 +491,7 @@ class SaleService
             description: "Payment on sale {$sale->invoice_number}",
             subject: $sale,
             properties: [
-                'amount_afn' => $data['amount_afn'],
+                'amount_afn' => $data['amount_afn'] ?? $data['amount'] ?? null,
                 'receipt_id' => $receipt->id,
             ],
             userId: $actor->id,
@@ -434,31 +588,84 @@ class SaleService
     }
 
     /**
-     * @param  \Illuminate\Support\Collection<int, ProductVariant>  $variants
-     * @param  array<string, mixed>  $item
-     * @return array{line_subtotal_afn: float, line_cost_afn: float, line: array<string, mixed>}
-     */
-    /**
      * Build one sale line with FIFO cost breakdown (also used by sale update).
+     *
+     * Line prices may be entered as sale_unit_amount in the document sale currency,
+     * or as legacy sale_price_afn (AFN). Profit always uses AFN ledger amounts.
      *
      * @param  \Illuminate\Support\Collection<int, ProductVariant>  $variants
      * @param  array<string, mixed>  $item
-     * @return array{line_subtotal_afn: float, line_cost_afn: float, line: array<string, mixed>}
+     * @return array{line_subtotal_afn: float, line_cost_afn: float, line_original_subtotal: string, line: array<string, mixed>}
      */
-    public function prepareSaleLine(int $branchId, array $item, $variants): array
-    {
+    public function prepareSaleLine(
+        int $branchId,
+        array $item,
+        $variants,
+        ?Currency $saleCurrency = null,
+        ?FxBoard $board = null,
+    ): array {
         $variantId = (int) $item['variant_id'];
         $qty = (int) $item['quantity'];
-        $priceAfn = round((float) $item['sale_price_afn'], 2);
-        $discAfn = round((float) ($item['discount_afn'] ?? 0), 2);
+        $saleCurrency = $saleCurrency ?? Currency::ledger();
+        $board = $board ?? $this->currency->boardAt(now(), [], allowCatalogFallback: true);
+        $code = strtoupper((string) ($saleCurrency?->code ?? 'AFN'));
+
+        if (isset($item['sale_unit_amount']) && $item['sale_unit_amount'] !== '' && $item['sale_unit_amount'] !== null) {
+            $unitOriginal = Money::round((string) $item['sale_unit_amount'], 4);
+        } elseif (isset($item['sale_price_afn']) && $item['sale_price_afn'] !== '' && $item['sale_price_afn'] !== null) {
+            // Legacy clients send AFN unit price; treat as AFN regardless of document currency.
+            $unitOriginal = Money::round((string) $item['sale_price_afn'], 4);
+            $code = 'AFN';
+        } else {
+            throw ValidationException::withMessages([
+                'sale_unit_amount' => 'Sale unit price is required.',
+            ]);
+        }
+
+        $unitEq = $board->equivalents($unitOriginal, $code, 4);
+        $priceAfn = (float) Money::round($unitEq['afn'], 2);
+
+        if (isset($item['discount_amount']) && $item['discount_amount'] !== '' && $item['discount_amount'] !== null) {
+            $discOriginal = Money::round((string) $item['discount_amount'], 2);
+            $discAfn = (float) $board->equivalents($discOriginal, $code, 2)['afn'];
+        } else {
+            $discAfn = round((float) ($item['discount_afn'] ?? 0), 2);
+        }
 
         $lineSubtotalAfn = round($priceAfn * $qty, 2);
         $lineTotalAfn = round($lineSubtotalAfn - $discAfn, 2);
+        $lineOriginal = Money::round(Money::mul($unitOriginal, (string) $qty, 8), 2);
+        $lineEq = $board->equivalents($lineOriginal, $code, 2);
 
         $fifo = ProductBatch::calculateFifoCost($branchId, $variantId, $qty);
         $lineCostAfn = round((float) $fifo['cost_afn'], 2);
         $breakdown = $fifo['breakdown'];
-        $lineProfitAfn = round($lineTotalAfn - $lineCostAfn, 2);
+        $grossProfitAfn = round($lineTotalAfn - $lineCostAfn, 2);
+
+        // Allocate net revenue across FIFO parts so per-batch gross = revenue_share − cost.
+        $revenuePerUnit = $qty > 0 ? round($lineTotalAfn / $qty, 6) : 0.0;
+        $allocatedRevenue = 0.0;
+        $enriched = [];
+        $lastIndex = count($breakdown) - 1;
+        foreach ($breakdown as $i => $part) {
+            $take = (int) $part['qty'];
+            $costPart = round((float) ($part['line_cost_afn'] ?? ((float) ($part['cost_per_unit_afn'] ?? 0) * $take)), 2);
+            if ($i === $lastIndex) {
+                $revenuePart = round($lineTotalAfn - $allocatedRevenue, 2);
+            } else {
+                $revenuePart = round($revenuePerUnit * $take, 2);
+                $allocatedRevenue = round($allocatedRevenue + $revenuePart, 2);
+            }
+            $grossPart = round($revenuePart - $costPart, 2);
+            $investorPpu = (float) ($part['profit_per_unit_afn'] ?? 0);
+            $enriched[] = array_merge($part, [
+                'revenue_afn' => $revenuePart,
+                'gross_profit_afn' => $grossPart,
+                'gross_profit_per_unit_afn' => $take > 0 ? round($grossPart / $take, 4) : 0,
+                'investor_profit_per_unit_afn' => $investorPpu,
+            ]);
+        }
+        $breakdown = $enriched;
 
         $variant = $variants->get($variantId);
         $productName = null;
@@ -482,25 +689,78 @@ class SaleService
         $batchIds = collect($breakdown)->pluck('batch_id')->filter()->unique()->values();
         $batchId = $batchIds->count() === 1 ? (int) $batchIds->first() : null;
 
+        $line = [
+            'variant_id' => $variantId,
+            'batch_id' => $batchId,
+            'product_name_snapshot' => $productName,
+            'sku_snapshot' => $sku,
+            'barcode_snapshot' => $barcode,
+            'sale_currency_code' => $code,
+            'sale_unit_amount' => $unitOriginal,
+            'sale_line_amount' => $lineOriginal,
+            'unit_amount_usd' => $unitEq['usd'],
+            'unit_amount_aed' => $unitEq['aed'],
+            'line_amount_usd' => $lineEq['usd'],
+            'line_amount_aed' => $lineEq['aed'],
+            'quantity' => $qty,
+            'cost_price_afn' => round($lineCostAfn / max($qty, 1), 2),
+            'sale_price_afn' => $priceAfn,
+            'discount_afn' => $discAfn,
+            'line_total_afn' => $lineTotalAfn,
+            // store_profit_afn = company residual after investor (filled after investor calc).
+            'store_profit_afn' => $grossProfitAfn,
+            'investor_profit_afn' => 0,
+            'cost_breakdown' => $breakdown,
+        ];
+
+        if (Schema::hasColumn('sale_items', 'gross_profit_afn')) {
+            $line['gross_profit_afn'] = $grossProfitAfn;
+        }
+
         return [
             'line_subtotal_afn' => $lineSubtotalAfn,
             'line_cost_afn' => $lineCostAfn,
-            'line' => [
-                'variant_id' => $variantId,
-                'batch_id' => $batchId,
-                'product_name_snapshot' => $productName,
-                'sku_snapshot' => $sku,
-                'barcode_snapshot' => $barcode,
-                'quantity' => $qty,
-                'cost_price_afn' => round($lineCostAfn / max($qty, 1), 2),
-                'sale_price_afn' => $priceAfn,
-                'discount_afn' => $discAfn,
-                'line_total_afn' => $lineTotalAfn,
-                'store_profit_afn' => $lineProfitAfn,
-                'investor_profit_afn' => 0,
-                'cost_breakdown' => $breakdown,
-            ],
+            'line_original_subtotal' => $lineOriginal,
+            'line' => $line,
         ];
+    }
+
+    /**
+     * Block sales where fixed investor profit per unit exceeds gross profit on any FIFO part.
+     *
+     * @param  list<array<string, mixed>>  $lineData
+     * @param  \Illuminate\Support\Collection<int, ProductBatch>  $batchesById
+     */
+    private function assertInvestorProfitFitsGross(array $lineData, $batchesById): void
+    {
+        foreach ($lineData as $lineIndex => $line) {
+            foreach ($line['cost_breakdown'] ?? [] as $part) {
+                $batch = $batchesById->get($part['batch_id'] ?? null);
+                if (! $batch || ! $batch->investor_id) {
+                    continue;
+                }
+
+                $investorPpu = (float) $batch->profit_per_unit_afn;
+                if ($investorPpu <= 0) {
+                    continue;
+                }
+
+                $take = max(1, (int) ($part['qty'] ?? 1));
+                $grossPerUnit = isset($part['gross_profit_per_unit_afn'])
+                    ? (float) $part['gross_profit_per_unit_afn']
+                    : round(((float) ($part['gross_profit_afn'] ?? 0)) / $take, 4);
+
+                if ($investorPpu > $grossPerUnit + 0.0001) {
+                    throw ValidationException::withMessages([
+                        "items.{$lineIndex}.sale_unit_amount" =>
+                            "Investor fixed profit per unit ({$investorPpu} AFN) exceeds gross profit per unit "
+                            ."({$grossPerUnit} AFN) for batch {$batch->batch_code}. "
+                            .'Raise the sale price, lower the investor profit, or choose different stock. '
+                            .'The sale was blocked so company profit cannot go negative.',
+                    ]);
+                }
+            }
+        }
     }
 
     /**
@@ -518,7 +778,14 @@ class SaleService
     {
         $ledger = Currency::ledger();
         $currencyId = $payment['currency_id'] ?? null;
-        $entered = $payment['amount'] ?? $payment['amount_afn'] ?? 0;
+        $entered = $payment['amount'] ?? $payment['amount_afn'] ?? null;
+        $paidAt = $payment['paid_at'] ?? now();
+
+        if ($entered === null || $entered === '') {
+            throw ValidationException::withMessages([
+                'amount' => 'Payment amount is required.',
+            ]);
+        }
 
         if (empty($currencyId) || ($ledger && (int) $currencyId === (int) $ledger->id)) {
             $amount = round((float) $entered, 2);
@@ -534,8 +801,12 @@ class SaleService
         }
 
         $currency = $this->currency->requireActive((int) $currencyId, 'currency_id');
-        $rate = $this->currency->rateToLedger($currency);
-        $afn = (float) $this->currency->toLedger((string) $entered, $currency);
+        $resolved = $this->currency->resolveAt($currency, $ledger ?? $currency, $paidAt);
+        $rate = (string) $resolved['rate'];
+        $afn = (float) \App\Support\Money::round(
+            \App\Support\Money::mul((string) $entered, $rate, 12),
+            2
+        );
 
         return [
             'amount_afn' => round($afn, 2),
@@ -543,7 +814,7 @@ class SaleService
             'currency_id' => $currency->id,
             'currency_code' => $currency->code,
             'rate_to_ledger' => $rate,
-            'rate_kind' => 'catalog',
+            'rate_kind' => $resolved['kind'] === 'catalog' ? 'catalog' : 'operational',
         ];
     }
 }

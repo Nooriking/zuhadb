@@ -1,10 +1,19 @@
 ﻿// resources/js/pages/investors/show.tsx
 
+import CurrencySectionCards, {
+    type CurrencySectionMetric,
+    type ExchangeValuation,
+} from '@/components/investors/currency-section-cards';
+import { MoneyField } from '@/components/money-field';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import AppLayout from '@/layouts/app-layout';
+import { defaultCurrencyId, type CatalogCurrency } from '@/lib/currencies';
 import { formatMoney } from '@/lib/money';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
@@ -168,6 +177,12 @@ interface Props {
         active_batches: number;
         funded_purchases?: number;
         realized_profit_afn?: number;
+        paid_profit_afn?: number | string;
+        pending_profit_afn?: number | string;
+        cash_capital_afn?: number | string;
+        goods_contribution_afn?: number | string;
+        goods_held_afn?: number | string;
+        goods_sold_afn?: number | string;
         has_cash_capital?: boolean;
         is_goods_investor?: boolean;
         active_goods_value_afn?: number;
@@ -176,6 +191,17 @@ interface Props {
     };
     funding?: FundingSummary;
     funded_purchases?: FundedPurchase[];
+    currencies?: CatalogCurrency[];
+    sourceTypes?: Record<string, string>;
+    currencySections?: Record<string, CurrencySectionMetric> | null;
+    exchangeValuation?: ExchangeValuation | null;
+    multiCurrencyLegacy?: {
+        profit_afn_without_currency?: string | number;
+        withdrawals_afn_without_currency?: string | number;
+        purchases_without_currency?: number;
+        note?: string;
+    } | null;
+    multiCurrencyLimitations?: string[];
 }
 
 const breadcrumbs = (investor: Investor): BreadcrumbItem[] => [
@@ -228,7 +254,17 @@ function originalMoney(
     return formatMoney(amountAfn ?? 0, ledgerAfN);
 }
 
-export default function InvestorsShow({ investor, stats, funding, funded_purchases = [] }: Props) {
+export default function InvestorsShow({
+    investor,
+    stats,
+    funding,
+    funded_purchases = [],
+    currencies = [],
+    currencySections = null,
+    exchangeValuation = null,
+    multiCurrencyLegacy = null,
+    multiCurrencyLimitations = [],
+}: Props) {
     const profitEntries = investor.profit_entries ?? [];
     const money = (
         amountCurrency: string | number | null | undefined,
@@ -238,6 +274,55 @@ export default function InvestorsShow({ investor, stats, funding, funded_purchas
     const [activeTab, setActiveTab] = useState<
         'overview' | 'investments' | 'purchases' | 'withdrawals' | 'profit' | 'batches' | 'transactions'
     >('overview');
+    const [capitalOpen, setCapitalOpen] = useState(false);
+    const [capitalType, setCapitalType] = useState<'cash' | 'goods'>('cash');
+    const [capitalForm, setCapitalForm] = useState({
+        capital_amount: '',
+        currency_id: defaultCurrencyId(currencies),
+        investment_date: new Date().toISOString().slice(0, 10),
+        notes: '',
+    });
+    const [capitalErrors, setCapitalErrors] = useState<Record<string, string>>({});
+    const [capitalLoading, setCapitalLoading] = useState(false);
+
+    const openCapital = (type: 'cash' | 'goods') => {
+        setCapitalType(type);
+        setCapitalErrors({});
+        setCapitalForm({
+            capital_amount: '',
+            currency_id: defaultCurrencyId(currencies),
+            investment_date: new Date().toISOString().slice(0, 10),
+            notes: '',
+        });
+        setCapitalOpen(true);
+    };
+
+    const submitCapital = (e: React.FormEvent) => {
+        e.preventDefault();
+        setCapitalLoading(true);
+        setCapitalErrors({});
+        router.post(
+            `/investors/${investor.id}/capital`,
+            {
+                source_type: capitalType,
+                currency_id: capitalForm.currency_id,
+                capital_amount: capitalForm.capital_amount,
+                investment_date: capitalForm.investment_date,
+                notes: capitalForm.notes,
+            },
+            {
+                preserveScroll: true,
+                onSuccess: () => {
+                    setCapitalOpen(false);
+                    setCapitalLoading(false);
+                },
+                onError: (errs) => {
+                    setCapitalErrors(errs);
+                    setCapitalLoading(false);
+                },
+            },
+        );
+    };
 
     const formatBucket = (bucket: CurrencyBucket) =>
         formatMoney(bucket.original_total, {
@@ -280,13 +365,26 @@ export default function InvestorsShow({ investor, stats, funding, funded_purchas
                                 <h1 className="text-2xl font-bold tracking-tight">{investor.full_name}</h1>
                                 {getStatusBadge(investor.status)}
                             </div>
-                            {investor.user && <p className="text-muted-foreground mt-1 text-sm">Linked user: @{investor.user.name}</p>}
+                            <p className="text-muted-foreground mt-1 text-sm">
+                                Investor user account — identity from Users module
+                            </p>
                         </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                        <Link href={`/investors/${investor.id}/edit`}>
+                        <Link href={`/users/${investor.id}/edit`}>
                             <Button variant="outline" className="gap-2">
-                                <Edit className="h-4 w-4" /> Edit
+                                <Edit className="h-4 w-4" /> Edit Identity
+                            </Button>
+                        </Link>
+                        <Button className="gap-2" onClick={() => openCapital('cash')}>
+                            <Wallet className="h-4 w-4" /> Add Cash Capital
+                        </Button>
+                        <Button variant="outline" className="gap-2" onClick={() => openCapital('goods')}>
+                            <Package className="h-4 w-4" /> Add Goods Contribution
+                        </Button>
+                        <Link href={`/products/receive?investor_id=${investor.id}`}>
+                            <Button variant="outline" className="gap-2">
+                                <Package className="h-4 w-4" /> Receive Investor Goods
                             </Button>
                         </Link>
                         <Link href={`/investor-profit-entries/by-investor/${investor.id}`}>
@@ -376,6 +474,31 @@ export default function InvestorsShow({ investor, stats, funding, funded_purchas
                         </p>
                     </div>
                 </div>
+
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
+                    {[
+                        { label: 'Cash Capital', value: stats.cash_capital_afn },
+                        { label: 'Goods Contribution', value: stats.goods_contribution_afn },
+                        { label: 'Goods Held', value: stats.goods_held_afn },
+                        { label: 'Goods Sold', value: stats.goods_sold_afn },
+                        { label: 'Investor Profit', value: stats.realized_profit_afn },
+                        { label: 'Paid Profit', value: stats.paid_profit_afn },
+                        { label: 'Pending Profit', value: stats.pending_profit_afn },
+                        { label: 'Available Cash', value: stats.available_cash_afn },
+                    ].map((card) => (
+                        <div key={card.label} className="rounded-lg border bg-white p-3 shadow-sm">
+                            <p className="text-muted-foreground text-[11px]">{card.label} (AFN ledger)</p>
+                            <p className="mt-1 font-mono text-sm font-semibold">{formatMoney(card.value ?? 0, ledgerAfN)}</p>
+                        </div>
+                    ))}
+                </div>
+
+                <CurrencySectionCards
+                    currencySections={currencySections}
+                    exchangeValuation={exchangeValuation}
+                    limitations={multiCurrencyLimitations}
+                    legacy={multiCurrencyLegacy}
+                />
 
                 {funding && (
                     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -918,6 +1041,60 @@ export default function InvestorsShow({ investor, stats, funding, funded_purchas
                     </Card>
                 )}
             </div>
+
+            <Dialog open={capitalOpen} onOpenChange={setCapitalOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>
+                            {capitalType === 'cash' ? 'Add Cash Capital' : 'Add Goods Contribution'}
+                        </DialogTitle>
+                        <DialogDescription>
+                            Records an internal capital pot for {investor.full_name}. Historical FX snapshots are preserved on
+                            the investment row.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <form onSubmit={submitCapital} className="space-y-4">
+                        <MoneyField
+                            label={capitalType === 'cash' ? 'Cash amount' : 'Goods value'}
+                            required
+                            amount={capitalForm.capital_amount}
+                            currencyId={capitalForm.currency_id}
+                            currencies={currencies}
+                            onAmountChange={(v) => setCapitalForm((prev) => ({ ...prev, capital_amount: v }))}
+                            onCurrencyChange={(v) => setCapitalForm((prev) => ({ ...prev, currency_id: v }))}
+                            error={capitalErrors.capital_amount || capitalErrors.currency_id}
+                        />
+                        <div className="space-y-2">
+                            <Label htmlFor="investment_date">Date</Label>
+                            <Input
+                                id="investment_date"
+                                type="date"
+                                value={capitalForm.investment_date}
+                                onChange={(e) => setCapitalForm((prev) => ({ ...prev, investment_date: e.target.value }))}
+                            />
+                            {capitalErrors.investment_date && (
+                                <p className="text-destructive text-xs">{capitalErrors.investment_date}</p>
+                            )}
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="capital_notes">Notes</Label>
+                            <Input
+                                id="capital_notes"
+                                value={capitalForm.notes}
+                                onChange={(e) => setCapitalForm((prev) => ({ ...prev, notes: e.target.value }))}
+                            />
+                        </div>
+                        <DialogFooter>
+                            <Button type="button" variant="outline" onClick={() => setCapitalOpen(false)}>
+                                Cancel
+                            </Button>
+                            <Button type="submit" disabled={capitalLoading}>
+                                {capitalLoading ? 'Saving…' : 'Save'}
+                            </Button>
+                        </DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
         </AppLayout>
     );
 }

@@ -79,6 +79,8 @@ class InventoryController extends Controller
                 'total_quantity' => (int) $stockTotals->total_quantity,
                 'total_amount'   => (float) Inventory::query()
                     ->where('inventories.trash', false)
+                    ->when($user?->isBranchScoped(), fn ($q) => $q->where('inventories.branch_id', $user->branch_id))
+                    ->when($branchId && ! $user?->isBranchScoped(), fn ($q) => $q->where('inventories.branch_id', $branchId))
                     ->join('product_variants', 'product_variants.id', '=', 'inventories.variant_id')
                     ->where('product_variants.trash', false)
                     ->sum(DB::raw('inventories.quantity * product_variants.sale_price_afn')),

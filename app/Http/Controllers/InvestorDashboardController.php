@@ -10,6 +10,7 @@ use App\Models\InvestorTransaction;
 use App\Models\InvestorWithdrawal;
 use App\Models\Product;
 use App\Services\CurrencyService;
+use App\Services\InvestorMultiCurrencyDashboardService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -19,7 +20,10 @@ use Inertia\Response;
 
 class InvestorDashboardController extends Controller
 {
-    public function __construct(private readonly CurrencyService $currencies) {}
+    public function __construct(
+        private readonly CurrencyService $currencies,
+        private readonly InvestorMultiCurrencyDashboardService $multiCurrency,
+    ) {}
 
     public function index(Request $request): Response
     {
@@ -32,18 +36,19 @@ class InvestorDashboardController extends Controller
         $endDate = now()->endOfDay();
 
         $own = (bool) $request->user()?->isInvestor();
-        $onlyId = $own
-            ? (int) (Investor::query()->where('user_id', $request->user()->id)->where('trash', false)->value('id') ?? 0)
-            : null;
+        // Investor identity is the user row itself.
+        $onlyId = $own ? (int) ($request->user()->id ?? 0) : null;
 
         $reporting = $this->currencies->reportingContext();
+        $fxBoard = $this->currencies->dashboardFxBoard();
         $money = fn (float|string|null $amount): float => $this->currencies->reportAmount((float) ($amount ?? 0));
 
         $walletQuery = DB::table('investor_wallets')
-            ->join('investors', 'investors.id', '=', 'investor_wallets.investor_id')
-            ->where('investors.trash', false)
-            ->whereNull('investors.deleted_at');
-        $this->restrictInvestor($walletQuery, $own, $onlyId, 'investors.id');
+            ->join('users', 'users.id', '=', 'investor_wallets.investor_id')
+            ->where('users.role', 'investor')
+            ->where('users.trash', false)
+            ->whereNull('users.deleted_at');
+        $this->restrictInvestor($walletQuery, $own, $onlyId, 'users.id');
 
         $walletRow = $walletQuery
             ->selectRaw('COALESCE(SUM(investor_wallets.capital_balance_afn), 0) as capital_balance')
@@ -110,8 +115,93 @@ class InvestorDashboardController extends Controller
         $lifetimeProfit = (float) ($walletRow->total_profit_earned ?? 0);
         $lifetimeWithdrawn = (float) ($walletRow->total_withdrawn ?? 0);
 
+        $cashCapitalAfn = (float) Investment::notTrashed()
+            ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
+            ->where('source_type', 'cash')
+            ->sum('capital_amount_afn');
+        $goodsCapitalAfn = (float) Investment::notTrashed()
+            ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
+            ->where('source_type', 'goods')
+            ->sum('capital_amount_afn');
+        $totalContributedAfn = round($cashCapitalAfn + $goodsCapitalAfn, 2);
+
+        $soldGoodsAfn = (float) InvestmentProductAllocation::query()
+            ->whereHas('investment', function ($q) use ($own, $onlyId) {
+                $q->where('trash', false);
+                $this->restrictInvestor($q, $own, $onlyId);
+            })
+            ->selectRaw('COALESCE(SUM(sold_quantity * cost_per_unit_afn), 0) as total')
+            ->value('total');
+        $remainingGoodsAfn = (float) InvestmentProductAllocation::query()
+            ->whereHas('investment', function ($q) use ($own, $onlyId) {
+                $q->where('trash', false);
+                $this->restrictInvestor($q, $own, $onlyId);
+            })
+            ->selectRaw('COALESCE(SUM(remaining_quantity * cost_per_unit_afn), 0) as total')
+            ->value('total');
+
+        $usd = \App\Models\Currency::query()->notTrashed()->where('code', 'USD')->first();
+        $aed = \App\Models\Currency::query()->notTrashed()->where('code', 'AED')->first();
+        $ledger = \App\Models\Currency::ledger();
+        $currentUsdEquivalent = null;
+        $currentAedEquivalent = null;
+        if ($ledger && $usd && $this->currencies->canConvert($ledger, $usd)) {
+            $currentUsdEquivalent = (float) $this->currencies->convert((string) $totalContributedAfn, $ledger, $usd);
+        }
+        if ($ledger && $aed && $this->currencies->canConvert($ledger, $aed)) {
+            $currentAedEquivalent = (float) $this->currencies->convert((string) $totalContributedAfn, $ledger, $aed);
+        }
+
+        // Original-currency goods totals (never sum AFN+USD+AED together).
+        $multiCurrencySummary = $this->multiCurrency->summarize($own && $onlyId > 0 ? $onlyId : null);
+        $goodsOriginalByCurrency = [
+            'AFN' => (float) ($multiCurrencySummary['currency_sections']['AFN']['goods_purchase_value'] ?? 0),
+            'USD' => (float) ($multiCurrencySummary['currency_sections']['USD']['goods_purchase_value'] ?? 0),
+            'AED' => (float) ($multiCurrencySummary['currency_sections']['AED']['goods_purchase_value'] ?? 0),
+        ];
+        $goodsHistoricalAfn = (float) (
+            $multiCurrencySummary['currency_sections']['AFN']['historical_afn']['goods_purchase_value']
+            ?? 0
+        );
+        $goodsHistoricalAfn = round(
+            $goodsHistoricalAfn
+            + (float) ($multiCurrencySummary['currency_sections']['USD']['historical_afn']['goods_purchase_value'] ?? 0)
+            + (float) ($multiCurrencySummary['currency_sections']['AED']['historical_afn']['goods_purchase_value'] ?? 0),
+            2
+        );
+
+        $kpis3c = $this->currencies->mapThreeCurrency([
+            'total_capital' => $currentCapital,
+            'cash_capital' => $cashCapitalAfn,
+            'goods_capital' => $goodsCapitalAfn,
+            'total_contributed_capital' => $totalContributedAfn,
+            'sold_goods_value' => $soldGoodsAfn,
+            'remaining_goods_value' => $remainingGoodsAfn,
+            'available_capital' => $availableCapital,
+            'invested_capital' => $investedCapital,
+            'lifetime_profit' => $lifetimeProfit,
+            'lifetime_withdrawn' => $lifetimeWithdrawn,
+            'period_contributions' => $periodContributions,
+            'total_profit' => $periodProfit,
+            'pending_profit' => $periodPendingProfit,
+            'paid_profit' => $periodPaidProfit,
+            'withdrawn_profit' => $periodWithdrawnProfit,
+            'withdrawn_capital' => $periodWithdrawnCapital,
+            'remaining_profit' => $remainingProfit,
+        ]);
+
         $kpis = [
             'total_capital' => $money($currentCapital),
+            'cash_capital' => $money($cashCapitalAfn),
+            'goods_capital' => $money($goodsCapitalAfn),
+            'total_contributed_capital' => $money($totalContributedAfn),
+            'historical_afn_capital' => round($totalContributedAfn, 2),
+            'goods_original_by_currency' => $goodsOriginalByCurrency,
+            'goods_historical_afn' => $goodsHistoricalAfn,
+            'current_usd_equivalent' => $currentUsdEquivalent,
+            'current_aed_equivalent' => $currentAedEquivalent,
+            'sold_goods_value' => $money($soldGoodsAfn),
+            'remaining_goods_value' => $money($remainingGoodsAfn),
             'available_capital' => $money($availableCapital),
             'invested_capital' => $money($investedCapital),
             'lifetime_profit' => $money($lifetimeProfit),
@@ -123,11 +213,11 @@ class InvestorDashboardController extends Controller
             'withdrawn_profit' => $money($periodWithdrawnProfit),
             'withdrawn_capital' => $money($periodWithdrawnCapital),
             'remaining_profit' => $money($remainingProfit),
-            'capital_utilization' => $currentCapital > 0
-                ? round(($investedCapital / $currentCapital) * 100, 1)
+            'capital_utilization' => $totalContributedAfn > 0
+                ? round(($investedCapital / $totalContributedAfn) * 100, 1)
                 : 0,
-            'profit_margin' => $currentCapital > 0
-                ? round(($lifetimeProfit / $currentCapital) * 100, 1)
+            'profit_margin' => $totalContributedAfn > 0
+                ? round(($lifetimeProfit / $totalContributedAfn) * 100, 1)
                 : 0,
         ];
 
@@ -137,24 +227,57 @@ class InvestorDashboardController extends Controller
                 ->whereNotNull('variant_id')
                 ->where('investor_id', $onlyId)
                 ->orderByDesc('id')
-                ->get(['id', 'name', 'quantity', 'remaining_quantity', 'line_total', 'profit_per_unit'])
+                ->get([
+                    'id',
+                    'name',
+                    'quantity',
+                    'remaining_quantity',
+                    'line_total',
+                    'profit_per_unit',
+                    'profit_currency_code',
+                    'purchase_currency_code',
+                    'purchase_unit_amount',
+                    'purchase_line_amount',
+                    'unit_amount_usd',
+                    'unit_amount_aed',
+                    'line_amount_usd',
+                    'line_amount_aed',
+                    'usd_to_afn_rate',
+                    'aed_to_afn_rate',
+                ])
             : collect();
 
         $stockItems = $purchases->map(function ($row) use ($money) {
             $qty = (int) $row->quantity;
+            $remaining = (int) $row->remaining_quantity;
+            $sold = max(0, $qty - $remaining);
             $cost = (float) $row->line_total;
-            $profit = (float) $row->profit_per_unit * $qty;
+            $profitPerUnit = (float) $row->profit_per_unit;
+            $profit = $profitPerUnit * $qty;
 
             return [
                 'name' => $row->name ?: 'Product',
                 'quantity' => $qty,
-                'remaining' => (int) $row->remaining_quantity,
+                'remaining' => $remaining,
+                'sold' => $sold,
                 'value' => $money($cost),
                 'profit' => $money($profit),
+                'profit_per_unit_afn' => $profitPerUnit,
+                'profit_currency_code' => $row->profit_currency_code,
+                'original_currency' => $row->purchase_currency_code,
+                'original_unit' => $row->purchase_unit_amount,
+                'original_line' => $row->purchase_line_amount,
+                'historical_afn' => round($cost, 2),
+                'historical_usd' => $row->line_amount_usd !== null ? (float) $row->line_amount_usd : null,
+                'historical_aed' => $row->line_amount_aed !== null ? (float) $row->line_amount_aed : null,
+                'usd_to_afn_rate' => $row->usd_to_afn_rate,
+                'aed_to_afn_rate' => $row->aed_to_afn_rate,
             ];
         })->values();
 
-        $kpis['stock_value'] = $money($purchases->sum(fn ($row) => (float) $row->line_total));
+        $stockValueLedger = (float) $purchases->sum(fn ($row) => (float) $row->line_total);
+        $kpis['stock_value'] = $money($stockValueLedger);
+        $kpis3c['stock_value'] = $this->currencies->threeCurrencyFromLedger($stockValueLedger);
 
         $trendRows = Investment::notTrashed()
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
@@ -173,37 +296,57 @@ class InvestorDashboardController extends Controller
             ->keyBy(fn ($row) => Carbon::parse($row->date)->toDateString());
 
         $capitalTrend = [];
+        $trendLedger = [];
         $cursor = $startDate->copy();
         while ($cursor->lte($endDate->copy()->startOfDay())) {
             $row = $trendRows->get($cursor->toDateString());
+            $key = $cursor->toDateString();
+            $capitalAfn = $row ? (float) $row->capital : 0.0;
+            $allocatedAfn = $row ? (float) $row->allocated : 0.0;
+            $profitAfn = $row ? (float) $row->profit : 0.0;
+            $trendLedger["{$key}|capital"] = $capitalAfn;
+            $trendLedger["{$key}|allocated"] = $allocatedAfn;
+            $trendLedger["{$key}|profit"] = $profitAfn;
             $capitalTrend[] = [
                 'date' => $cursor->format('M d'),
-                'capital' => $row ? $money($row->capital) : 0.0,
-                'allocated' => $row ? $money($row->allocated) : 0.0,
-                'profit' => $row ? $money($row->profit) : 0.0,
+                'date_key' => $key,
+                'capital' => $money($capitalAfn),
+                'allocated' => $money($allocatedAfn),
+                'profit' => $money($profitAfn),
                 'count' => $row ? (int) $row->count : 0,
             ];
             $cursor->addDay();
         }
 
+        $trend3c = $this->currencies->mapThreeCurrency($trendLedger);
+        $capitalTrend = array_map(function (array $point) use ($trend3c) {
+            $point['capital_3c'] = $trend3c[$point['date_key'].'|capital'] ?? null;
+            $point['allocated_3c'] = $trend3c[$point['date_key'].'|allocated'] ?? null;
+            $point['profit_3c'] = $trend3c[$point['date_key'].'|profit'] ?? null;
+            unset($point['date_key']);
+
+            return $point;
+        }, $capitalTrend);
+
         $profitByInvestor = InvestorProfitEntry::query()
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId, 'investor_profit_entries.investor_id'))
-            ->join('investors', 'investor_profit_entries.investor_id', '=', 'investors.id')
-            ->where('investors.trash', false)
+            ->join('users', 'investor_profit_entries.investor_id', '=', 'users.id')
+            ->where('users.role', 'investor')
+            ->where('users.trash', false)
             ->whereIn('investor_profit_entries.status', ['pending', 'paid'])
             ->where('investor_profit_entries.earned_at', '>=', $startDate)
             ->where('investor_profit_entries.earned_at', '<=', $endDate)
             ->select(
-                'investors.id',
-                'investors.full_name',
+                'users.id',
+                'users.name',
                 DB::raw('SUM(investor_profit_entries.profit_amount_afn) as total')
             )
-            ->groupBy('investors.id', 'investors.full_name')
+            ->groupBy('users.id', 'users.name')
             ->orderByDesc('total')
             ->limit(8)
             ->get()
             ->map(fn ($row) => [
-                'name' => $row->full_name,
+                'name' => $row->name,
                 'value' => $money($row->total),
             ]);
 
@@ -286,7 +429,7 @@ class InvestorDashboardController extends Controller
         ];
 
         $recentInvestments = Investment::query()
-            ->with(['investor:id,full_name,phone'])
+            ->with(['investor:id,name,phone'])
             ->notTrashed()
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
             ->whereDate('investment_date', '>=', $startDate->toDateString())
@@ -295,6 +438,7 @@ class InvestorDashboardController extends Controller
             ->get()
             ->map(fn ($inv) => [
                 'id' => $inv->id,
+                'investor_id' => $inv->investor_id,
                 'investment_number' => $inv->investment_number,
                 'investor' => $inv->investor?->full_name,
                 'investor_phone' => $inv->investor?->phone,
@@ -311,7 +455,7 @@ class InvestorDashboardController extends Controller
         $recentProfitEntries = InvestorProfitEntry::query()
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
             ->with([
-                'investor:id,full_name',
+                'investor:id,name',
                 'sale:id,invoice_number,total_afn',
             ])
             ->where('earned_at', '>=', $startDate)
@@ -333,7 +477,7 @@ class InvestorDashboardController extends Controller
 
         $recentWithdrawals = InvestorWithdrawal::query()
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
-            ->with(['investor:id,full_name'])
+            ->with(['investor:id,name'])
             ->whereDate('withdrawal_date', '>=', $startDate->toDateString())
             ->orderByDesc('id')
             ->limit(6)
@@ -349,17 +493,17 @@ class InvestorDashboardController extends Controller
             ]);
 
         $topInvestors = Investor::notTrashed()
-            ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId, 'investors.id'))
-            ->select('investors.*')
+            ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId, 'users.id'))
+            ->select('users.*')
             ->selectSub(
                 DB::table('investor_wallets')
                     ->selectRaw('COALESCE(capital_balance_afn, 0)')
-                    ->whereColumn('investor_wallets.investor_id', 'investors.id'),
+                    ->whereColumn('investor_wallets.investor_id', 'users.id'),
                 'capital_balance_afn'
             )
             ->selectSub(
                 Investment::selectRaw('COALESCE(SUM(allocated_amount_afn), 0)')
-                    ->whereColumn('investments.investor_id', 'investors.id')
+                    ->whereColumn('investments.investor_id', 'users.id')
                     ->where('investments.trash', false),
                 'total_allocated_afn'
             )
@@ -381,11 +525,11 @@ class InvestorDashboardController extends Controller
             ]);
 
         $topProfitableInvestors = Investor::notTrashed()
-            ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId, 'investors.id'))
-            ->select('investors.*')
+            ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId, 'users.id'))
+            ->select('users.*')
             ->selectSub(
                 InvestorProfitEntry::selectRaw('COALESCE(SUM(profit_amount_afn), 0)')
-                    ->whereColumn('investor_profit_entries.investor_id', 'investors.id')
+                    ->whereColumn('investor_profit_entries.investor_id', 'users.id')
                     ->whereIn('status', ['pending', 'paid'])
                     ->where('earned_at', '>=', $startDate)
                     ->where('earned_at', '<=', $endDate),
@@ -405,7 +549,7 @@ class InvestorDashboardController extends Controller
 
         $recentTransactions = InvestorTransaction::query()
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
-            ->with(['investor:id,full_name'])
+            ->with(['investor:id,name'])
             ->whereDate('transaction_date', '>=', $startDate->toDateString())
             ->orderByDesc('id')
             ->limit(10)
@@ -425,6 +569,7 @@ class InvestorDashboardController extends Controller
         return Inertia::render('investors/dashboard', [
             'days' => $days,
             'kpis' => $kpis,
+            'kpis3c' => $kpis3c,
             'capitalTrend' => $capitalTrend,
             'profitByInvestor' => $profitByInvestor,
             'withdrawalBreakdown' => $withdrawalBreakdown,
@@ -439,7 +584,13 @@ class InvestorDashboardController extends Controller
             'own' => $own,
             'stockItems' => $stockItems,
             'reporting' => $reporting,
+            'fxBoard' => $fxBoard,
             'originalCurrencyTotals' => $originalCurrencyTotals,
+            'currencySections' => $multiCurrencySummary['currency_sections'],
+            'exchangeValuation' => $multiCurrencySummary['exchange_valuation'],
+            'multiCurrencyLegacy' => $multiCurrencySummary['legacy'],
+            'multiCurrencyLimitations' => $multiCurrencySummary['limitations'],
+            'multiCurrencyFormulas' => $multiCurrencySummary['formulas'],
             'dashboardPath' => $own ? '/dashboard' : '/investors/dashboard',
         ]);
     }

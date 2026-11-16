@@ -78,6 +78,7 @@ interface Purchase {
     payment_status: string | null;
     exchange_rate: string | null;
     profit_per_unit: string;
+    profit_currency_code?: string | null;
     line_total: string;
     line_profit: string;
 
@@ -87,6 +88,18 @@ interface Purchase {
 
     purchase_price_afn: string;
     purchase_price_usd: string;
+    purchase_currency_code?: string | null;
+    purchase_unit_amount?: string | null;
+    purchase_line_amount?: string | null;
+    unit_amount_usd?: string | null;
+    unit_amount_aed?: string | null;
+    line_amount_usd?: string | null;
+    line_amount_aed?: string | null;
+    usd_to_afn_rate?: string | null;
+    aed_to_afn_rate?: string | null;
+    usd_to_aed_rate?: string | null;
+    rate_effective_at?: string | null;
+    rate_source?: string | null;
     notes: string | null;
     bill_image: string | null;
     variant?: {
@@ -101,9 +114,29 @@ interface Purchase {
     invoice_due_afn?: number;
 }
 
+type InventoryValuation = {
+    basis: string;
+    basis_label: string;
+    total_afn_remaining: string | number;
+    by_currency: Record<
+        string,
+        {
+            code: string;
+            original_amount: string | number;
+            historical_afn: string | number;
+            units: number;
+            batches: number;
+            weighted_average_fx_to_afn: string | number | null;
+            kind: string;
+            available: boolean;
+        }
+    >;
+};
+
 interface Props {
     product: Product;
     purchases?: Purchase[];
+    inventoryValuation?: InventoryValuation | null;
     usd_to_afn_rate?: string | null;
     usd_to_aed_rate?: string | null;
     exchangeRateContext?: {
@@ -195,6 +228,7 @@ const isInvestorPurchase = (investorId: number | null | undefined): boolean => {
 export default function ProductShow({
     product,
     purchases = [],
+    inventoryValuation = null,
     usd_to_afn_rate = null,
     usd_to_aed_rate = null,
     exchangeRateContext,
@@ -391,6 +425,42 @@ export default function ProductShow({
                             </CardHeader>
                         </Card>
                     </div>
+                )}
+
+                {inventoryValuation && (
+                    <Card>
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-base">Remaining inventory valuation</CardTitle>
+                            <CardDescription>{inventoryValuation.basis_label}</CardDescription>
+                        </CardHeader>
+                        <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-4">
+                            <div className="rounded-lg border p-3">
+                                <p className="text-muted-foreground text-xs">Total AFN remaining cost</p>
+                                <p className="mt-1 font-mono font-semibold">{formatPrice(inventoryValuation.total_afn_remaining)} AFN</p>
+                            </div>
+                            {(['AFN', 'USD', 'AED'] as const).map((code) => {
+                                const row = inventoryValuation.by_currency?.[code];
+                                if (!row) return null;
+                                return (
+                                    <div key={code} className="rounded-lg border p-3 text-sm">
+                                        <p className="font-semibold">{code}</p>
+                                        <p className="mt-1 font-mono">
+                                            {formatPrice(row.original_amount)} {code}
+                                        </p>
+                                        <p className="text-muted-foreground text-xs">
+                                            Historical AFN {formatPrice(row.historical_afn)} · {row.units} units
+                                        </p>
+                                        <p className="text-muted-foreground text-xs">
+                                            FX avg:{' '}
+                                            {row.weighted_average_fx_to_afn != null
+                                                ? `${formatRate(row.weighted_average_fx_to_afn)} (${row.kind})`
+                                                : 'Unavailable'}
+                                        </p>
+                                    </div>
+                                );
+                            })}
+                        </CardContent>
+                    </Card>
                 )}
 
                 {/* ═══════════ ✅ PROFIT SPLIT SUMMARY (NEW) ═══════════ */}
@@ -767,12 +837,19 @@ export default function ProductShow({
                                                     </TableCell>
 
                                                     <TableCell className="bg-blue-50 text-center">
-                                                        {rate > 0 ? (
-                                                            <div className="flex flex-col items-center">
-                                                                <span className="font-mono text-base font-bold text-blue-800">
-                                                                    {formatRate(rate)}
+                                                        {toNum(p.usd_to_afn_rate) > 0 || rate > 0 ? (
+                                                            <div className="flex flex-col items-center gap-0.5">
+                                                                <span className="font-mono text-sm font-bold text-blue-800">
+                                                                    USD {formatRate(toNum(p.usd_to_afn_rate) || rate)}
                                                                 </span>
-                                                                <span className="text-[10px] text-blue-600">AFN/USD</span>
+                                                                {toNum(p.aed_to_afn_rate) > 0 ? (
+                                                                    <span className="font-mono text-[10px] text-blue-700">
+                                                                        AED {formatRate(p.aed_to_afn_rate)}
+                                                                    </span>
+                                                                ) : null}
+                                                                <span className="text-[10px] text-blue-600">
+                                                                    historical · {p.rate_source || 'snapshot'}
+                                                                </span>
                                                             </div>
                                                         ) : (
                                                             <span className="text-muted-foreground text-xs">—</span>
@@ -787,17 +864,58 @@ export default function ProductShow({
                                                     </TableCell>
 
                                                     <TableCell className="text-right font-mono text-xs">
-                                                        {formatPrice(p.purchase_price_afn)}
+                                                        {p.purchase_unit_amount != null ? (
+                                                            <div className="space-y-0.5">
+                                                                <div className="font-semibold">
+                                                                    {formatPrice(p.purchase_unit_amount)}{' '}
+                                                                    <span className="text-muted-foreground">{p.purchase_currency_code || '—'}</span>
+                                                                </div>
+                                                                <div className="text-muted-foreground text-[10px]">
+                                                                    {formatPrice(toNum(p.unit_amount_usd))} USD · {formatPrice(toNum(p.unit_amount_aed))}{' '}
+                                                                    AED
+                                                                </div>
+                                                                <div className="text-[10px] text-blue-700">
+                                                                    {formatPrice(
+                                                                        p.quantity > 0 ? toNum(p.line_total) / p.quantity : toNum(p.purchase_price_afn),
+                                                                    )}{' '}
+                                                                    AFN
+                                                                </div>
+                                                            </div>
+                                                        ) : (
+                                                            formatPrice(p.purchase_price_afn)
+                                                        )}
                                                     </TableCell>
 
                                                     <TableCell className="text-right font-mono text-xs font-semibold">
-                                                        {formatPrice(p.line_total)}
+                                                        <div className="space-y-0.5">
+                                                            <div>
+                                                                {formatPrice(p.purchase_line_amount ?? p.line_total)}{' '}
+                                                                <span className="text-muted-foreground font-normal">
+                                                                    {p.purchase_currency_code || 'AFN'}
+                                                                </span>
+                                                            </div>
+                                                            <div className="text-muted-foreground text-[10px] font-normal">
+                                                                {formatPrice(p.line_total)} AFN
+                                                            </div>
+                                                            {(toNum(p.line_amount_usd) > 0 || toNum(p.line_amount_aed) > 0) && (
+                                                                <div className="text-muted-foreground text-[10px] font-normal">
+                                                                    {formatPrice(toNum(p.line_amount_usd))} USD ·{' '}
+                                                                    {formatPrice(toNum(p.line_amount_aed))} AED
+                                                                </div>
+                                                            )}
+                                                        </div>
                                                     </TableCell>
 
                                                     {/* ✅ Investor profit */}
                                                     <TableCell className="bg-blue-50 text-right font-mono text-xs">
                                                         {investorProfit > 0 ? (
-                                                            <span className="font-semibold text-blue-700">{formatPrice(investorProfit)}</span>
+                                                            <div className="space-y-0.5">
+                                                                <span className="font-semibold text-blue-700">{formatPrice(investorProfit)} AFN</span>
+                                                                <div className="text-[10px] text-blue-600">
+                                                                    {formatPrice(p.profit_per_unit)} / unit
+                                                                    {p.profit_currency_code ? ` (${p.profit_currency_code} cfg)` : ''}
+                                                                </div>
+                                                            </div>
                                                         ) : (
                                                             <span className="text-muted-foreground">—</span>
                                                         )}

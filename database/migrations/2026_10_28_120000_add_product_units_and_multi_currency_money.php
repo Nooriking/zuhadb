@@ -11,20 +11,6 @@ return new class extends Migration
     {
         $this->seedSystemCurrencies();
 
-        if (Schema::hasTable('products')) {
-            Schema::table('products', function (Blueprint $table) {
-                if (! Schema::hasColumn('products', 'base_unit_name')) {
-                    $table->string('base_unit_name', 50)->nullable()->after('description');
-                }
-                if (! Schema::hasColumn('products', 'pack_unit_name')) {
-                    $table->string('pack_unit_name', 50)->nullable()->after('base_unit_name');
-                }
-                if (! Schema::hasColumn('products', 'units_per_pack')) {
-                    $table->decimal('units_per_pack', 18, 6)->nullable()->after('pack_unit_name');
-                }
-            });
-        }
-
         if (Schema::hasTable('product_variants')) {
             Schema::table('product_variants', function (Blueprint $table) {
                 if (! Schema::hasColumn('product_variants', 'purchase_amount')) {

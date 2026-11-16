@@ -4,6 +4,24 @@ namespace App\Support;
 
 class Money
 {
+    public static function add(string $left, string $right, int $scale = 8): string
+    {
+        if (function_exists('bcadd')) {
+            return bcadd($left, $right, $scale);
+        }
+
+        return self::formatFloat((float) $left + (float) $right, $scale);
+    }
+
+    public static function sub(string $left, string $right, int $scale = 8): string
+    {
+        if (function_exists('bcsub')) {
+            return bcsub($left, $right, $scale);
+        }
+
+        return self::formatFloat((float) $left - (float) $right, $scale);
+    }
+
     public static function mul(string $left, string $right, int $scale = 8): string
     {
         if (function_exists('bcmul')) {
@@ -43,6 +61,15 @@ class Money
         }
 
         return self::formatFloat((float) $amount, $decimals);
+    }
+
+    public static function maxZero(string $amount, int $scale = 8): string
+    {
+        if (function_exists('bccomp')) {
+            return bccomp($amount, '0', $scale) < 0 ? self::formatFloat(0, $scale) : $amount;
+        }
+
+        return (float) $amount < 0 ? self::formatFloat(0, $scale) : $amount;
     }
 
     public static function format(string|int|float $amount, int $decimals, ?string $symbol = null, ?string $code = null): string

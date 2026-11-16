@@ -32,7 +32,6 @@ class InvestorDashboardSeeder extends Seeder
             ?? Investor::factory()->create([
                 'full_name' => 'Demo Investor',
                 'email' => 'investor@example.com',
-                'user_id' => User::query()->where('email', 'investor@example.com')->value('id'),
             ]);
 
         $investment = Investment::query()->where('investor_id', $investor->id)->orderBy('id')->first()

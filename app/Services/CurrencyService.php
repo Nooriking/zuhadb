@@ -3,9 +3,13 @@
 namespace App\Services;
 
 use App\Models\Currency;
+use App\Models\ExchangeRate;
+use App\Support\FxBoard;
 use App\Support\Money;
+use Carbon\CarbonInterface;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class CurrencyService
@@ -57,8 +61,11 @@ class CurrencyService
     /**
      * Units of the ledger (AFN) equal to 1 unit of $from.
      * Example: if 1 USD = 70 AFN this returns "70.00000000".
+     *
+     * Prefers the latest operational exchange_rates row at $at when present,
+     * otherwise falls back to the catalog rate_to_default.
      */
-    public function rateToLedger(Currency $from): string
+    public function rateToLedger(Currency $from, CarbonInterface|\DateTimeInterface|string|null $at = null): string
     {
         $ledger = Currency::ledger() ?? $from;
 
@@ -66,12 +73,318 @@ class CurrencyService
             return '1.00000000';
         }
 
-        return $this->convert('1', $from, $ledger, 8);
+        $resolved = $this->resolveAt($from, $ledger, $at, allowCatalogFallback: true);
+
+        return Money::round((string) $resolved['rate'], 8);
+    }
+
+    /**
+     * Resolve the FX rate from $from → $to at an effective timestamp.
+     * Never uses a future rate. Rejects zero/negative rates.
+     *
+     * @return array{rate: string, kind: string, effective_at: string|null, exchange_rate_id: int|null}
+     */
+    public function resolveAt(
+        Currency $from,
+        Currency $to,
+        CarbonInterface|\DateTimeInterface|string|null $at = null,
+        bool $allowCatalogFallback = true,
+        bool $allowMissing = false,
+    ): array {
+        if ($from->id === $to->id) {
+            return [
+                'rate' => '1.00000000',
+                'kind' => 'ledger',
+                'effective_at' => null,
+                'exchange_rate_id' => null,
+            ];
+        }
+
+        $atCarbon = $at
+            ? \Illuminate\Support\Carbon::parse($at)
+            : now();
+
+        if (Schema::hasTable('exchange_rates')) {
+            $row = ExchangeRate::query()
+                ->notTrashed()
+                ->where('from_currency_id', $from->id)
+                ->where('to_currency_id', $to->id)
+                ->where('effective_at', '<=', $atCarbon)
+                ->where('rate', '>', 0)
+                ->orderByDesc('effective_at')
+                ->orderByDesc('id')
+                ->first();
+
+            if ($row) {
+                return [
+                    'rate' => Money::round((string) $row->rate, 8),
+                    'kind' => 'operational',
+                    'effective_at' => optional($row->effective_at)?->toDateTimeString(),
+                    'exchange_rate_id' => $row->id,
+                ];
+            }
+
+            $inverse = ExchangeRate::query()
+                ->notTrashed()
+                ->where('from_currency_id', $to->id)
+                ->where('to_currency_id', $from->id)
+                ->where('effective_at', '<=', $atCarbon)
+                ->where('rate', '>', 0)
+                ->orderByDesc('effective_at')
+                ->orderByDesc('id')
+                ->first();
+
+            if ($inverse) {
+                $rate = Money::div('1', (string) $inverse->rate, 12);
+
+                return [
+                    'rate' => Money::round($rate, 8),
+                    'kind' => 'operational_inverse',
+                    'effective_at' => optional($inverse->effective_at)?->toDateTimeString(),
+                    'exchange_rate_id' => $inverse->id,
+                ];
+            }
+        }
+
+        if ($allowCatalogFallback && $this->canConvert($from, $to)) {
+            $rate = $this->convert('1', $from, $to, 8);
+
+            return [
+                'rate' => $rate,
+                'kind' => 'catalog',
+                'effective_at' => null,
+                'exchange_rate_id' => null,
+            ];
+        }
+
+        if ($allowMissing) {
+            return [
+                'rate' => '0',
+                'kind' => 'missing',
+                'effective_at' => null,
+                'exchange_rate_id' => null,
+            ];
+        }
+
+        throw ValidationException::withMessages([
+            'exchange_rate' => "No applicable exchange rate for {$from->code} → {$to->code} at {$atCarbon->toDateTimeString()}.",
+        ]);
+    }
+
+    /**
+     * Convert using resolveAt (historical-safe when operational rates exist).
+     */
+    public function convertAt(
+        string $amount,
+        Currency $from,
+        Currency $to,
+        CarbonInterface|\DateTimeInterface|string|null $at = null,
+        ?int $decimals = null,
+        bool $allowCatalogFallback = true,
+    ): string {
+        if ($from->id === $to->id) {
+            return Money::round($amount, $decimals ?? $to->decimal_places);
+        }
+
+        $resolved = $this->resolveAt($from, $to, $at, $allowCatalogFallback);
+
+        return Money::round(Money::mul($amount, $resolved['rate'], 12), $decimals ?? $to->decimal_places);
+    }
+
+    /**
+     * Post an operational rate and sync the catalog current rate when converting into the ledger/default.
+     */
+    public function postRate(
+        Currency $from,
+        Currency $to,
+        string $rate,
+        CarbonInterface|\DateTimeInterface|string $effectiveAt,
+        ?int $createdBy = null,
+        string $source = 'manual',
+    ): ExchangeRate {
+        if ((float) $rate <= 0) {
+            throw ValidationException::withMessages([
+                'rate' => 'Exchange rate must be greater than zero.',
+            ]);
+        }
+
+        if ($from->id === $to->id) {
+            throw ValidationException::withMessages([
+                'to_currency_id' => 'Source and target currencies must be different.',
+            ]);
+        }
+
+        return DB::transaction(function () use ($from, $to, $rate, $effectiveAt, $createdBy, $source) {
+            $row = ExchangeRate::create([
+                'from_currency_id' => $from->id,
+                'to_currency_id' => $to->id,
+                'rate' => Money::round($rate, 8),
+                'effective_at' => \Illuminate\Support\Carbon::parse($effectiveAt),
+                'source' => $source,
+                'created_by' => $createdBy ?? Auth::id(),
+                'trash' => false,
+            ]);
+
+            $ledger = Currency::ledger();
+            $default = Currency::getDefault();
+
+            // Keep catalog current rate in sync for convenience conversions.
+            if ($ledger && $to->id === $ledger->id) {
+                $from->update([
+                    'rate_to_default' => Money::round($rate, 8),
+                    'user_id' => $createdBy ?? Auth::id(),
+                ]);
+            } elseif ($default && $to->id === $default->id) {
+                $from->update([
+                    'rate_to_default' => Money::round($rate, 8),
+                    'user_id' => $createdBy ?? Auth::id(),
+                ]);
+            }
+
+            return $row;
+        });
+    }
+
+    /**
+     * Resolve the AFN-based FX board at a timestamp.
+     * Base rates: USD→AFN and AED→AFN. USD→AED is always derived as usd/aed.
+     *
+     * Overrides (when authorized upstream) may supply either base rate explicitly.
+     *
+     * @param  array{usd_to_afn?: string|float|null, aed_to_afn?: string|float|null, source?: string|null}  $overrides
+     */
+    public function boardAt(
+        CarbonInterface|\DateTimeInterface|string|null $at = null,
+        array $overrides = [],
+        bool $allowCatalogFallback = true,
+    ): FxBoard {
+        $ledger = Currency::ledger();
+        $usd = Currency::query()->notTrashed()->where('code', 'USD')->first();
+        $aed = Currency::query()->notTrashed()->where('code', 'AED')->first();
+
+        if (! $ledger || ! $usd || ! $aed) {
+            throw ValidationException::withMessages([
+                'exchange_rate' => 'AFN, USD, and AED currencies must exist before posting multi-currency transactions.',
+            ]);
+        }
+
+        if (array_key_exists('usd_to_afn', $overrides) && $overrides['usd_to_afn'] !== null && $overrides['usd_to_afn'] !== '') {
+            if ((float) $overrides['usd_to_afn'] <= 0) {
+                throw ValidationException::withMessages([
+                    'usd_to_afn_rate' => 'USD→AFN rate must be greater than zero.',
+                ]);
+            }
+        }
+        if (array_key_exists('aed_to_afn', $overrides) && $overrides['aed_to_afn'] !== null && $overrides['aed_to_afn'] !== '') {
+            if ((float) $overrides['aed_to_afn'] <= 0) {
+                throw ValidationException::withMessages([
+                    'aed_to_afn_rate' => 'AED→AFN rate must be greater than zero.',
+                ]);
+            }
+        }
+
+        $overrideUsd = isset($overrides['usd_to_afn']) && (float) $overrides['usd_to_afn'] > 0
+            ? Money::round((string) $overrides['usd_to_afn'], 8)
+            : null;
+        $overrideAed = isset($overrides['aed_to_afn']) && (float) $overrides['aed_to_afn'] > 0
+            ? Money::round((string) $overrides['aed_to_afn'], 8)
+            : null;
+
+        $usdResolved = $overrideUsd !== null
+            ? ['rate' => $overrideUsd, 'kind' => 'transaction', 'effective_at' => $at ? \Illuminate\Support\Carbon::parse($at)->toDateTimeString() : now()->toDateTimeString(), 'exchange_rate_id' => null]
+            : $this->resolveAt($usd, $ledger, $at, $allowCatalogFallback);
+
+        $aedResolved = $overrideAed !== null
+            ? ['rate' => $overrideAed, 'kind' => 'transaction', 'effective_at' => $at ? \Illuminate\Support\Carbon::parse($at)->toDateTimeString() : now()->toDateTimeString(), 'exchange_rate_id' => null]
+            : $this->resolveAt($aed, $ledger, $at, $allowCatalogFallback);
+
+        if ((float) $usdResolved['rate'] <= 0 || (float) $aedResolved['rate'] <= 0) {
+            throw ValidationException::withMessages([
+                'exchange_rate' => 'USD→AFN and AED→AFN rates must be greater than zero.',
+            ]);
+        }
+
+        $kind = ($overrideUsd !== null || $overrideAed !== null)
+            ? 'transaction'
+            : (($usdResolved['kind'] === 'catalog' || $aedResolved['kind'] === 'catalog') ? 'catalog' : 'operational');
+
+        $effective = $usdResolved['effective_at'] ?? $aedResolved['effective_at'] ?? (
+            $at ? \Illuminate\Support\Carbon::parse($at)->toDateTimeString() : now()->toDateTimeString()
+        );
+
+        return FxBoard::fromArray([
+            'usd_to_afn' => (string) $usdResolved['rate'],
+            'aed_to_afn' => (string) $aedResolved['rate'],
+            'effective_at' => $effective,
+            'source' => (string) ($overrides['source'] ?? $kind),
+            'kind' => $kind,
+        ]);
+    }
+
+    /**
+     * Payload for purchase/sale forms: current board + recent historical rates.
+     *
+     * @return array<string, mixed>
+     */
+    public function formBoardContext(CarbonInterface|\DateTimeInterface|string|null $at = null): array
+    {
+        $ledger = Currency::ledger();
+        $usd = Currency::query()->notTrashed()->where('code', 'USD')->first();
+        $aed = Currency::query()->notTrashed()->where('code', 'AED')->first();
+
+        try {
+            $board = $this->boardAt($at, [], allowCatalogFallback: true);
+        } catch (\Throwable) {
+            $board = null;
+        }
+
+        $history = [];
+        if (Schema::hasTable('exchange_rates') && $ledger && $usd) {
+            $history = ExchangeRate::query()
+                ->notTrashed()
+                ->where(function ($q) use ($usd, $aed, $ledger) {
+                    $q->where(function ($inner) use ($usd, $ledger) {
+                        $inner->where('from_currency_id', $usd->id)->where('to_currency_id', $ledger->id);
+                    });
+                    if ($aed) {
+                        $q->orWhere(function ($inner) use ($aed, $ledger) {
+                            $inner->where('from_currency_id', $aed->id)->where('to_currency_id', $ledger->id);
+                        });
+                    }
+                })
+                ->where('rate', '>', 0)
+                ->orderByDesc('effective_at')
+                ->orderByDesc('id')
+                ->limit(30)
+                ->get(['id', 'from_currency_id', 'to_currency_id', 'rate', 'effective_at', 'source'])
+                ->map(fn (ExchangeRate $row) => [
+                    'id' => $row->id,
+                    'from_currency_id' => $row->from_currency_id,
+                    'to_currency_id' => $row->to_currency_id,
+                    'rate' => (string) $row->rate,
+                    'effective_at' => optional($row->effective_at)?->toDateTimeString(),
+                    'source' => $row->source,
+                ])
+                ->values()
+                ->all();
+        }
+
+        return [
+            'currencies' => [
+                'afn' => $ledger ? Currency::toShared($ledger) : null,
+                'usd' => $usd ? Currency::toShared($usd) : null,
+                'aed' => $aed ? Currency::toShared($aed) : null,
+            ],
+            'board' => $board?->toSnapshot(),
+            'board_kind' => $board?->kind,
+            'history' => $history,
+            'policy' => 'Base rates are AFN per 1 USD and AFN per 1 AED. USD/AED is derived as usd_to_afn ÷ aed_to_afn.',
+        ];
     }
 
     /**
      * Catalog snapshot used only as a labeled conversion of an AFN ledger amount into USD.
-     * Returns nulls when USD or a positive rate is missing — never invents a rate.
+     * Prefer transaction board snapshots when posting new sales.
      *
      * @return array{usd_to_ledger_rate: string|null, usd_equivalent_amount: string|null, fx_rate_kind: string|null}
      */
@@ -98,6 +411,29 @@ class CurrencyService
     }
 
     /**
+     * Full three-currency sale snapshot from a transaction FX board.
+     *
+     * @return array<string, mixed>
+     */
+    public function saleBoardSnapshot(string $ledgerAmountAfn, FxBoard $board, Currency $saleCurrency, string $originalTotal): array
+    {
+        $eq = $board->equivalents($originalTotal, $saleCurrency->code, 2);
+
+        return array_merge($board->toSnapshot(), [
+            'sale_currency_id' => $saleCurrency->id,
+            'sale_currency_code' => $saleCurrency->code,
+            'sale_currency_symbol' => $saleCurrency->symbol,
+            'sale_amount_currency' => Money::round($originalTotal, 2),
+            'usd_to_ledger_rate' => $board->usdToAfn,
+            'usd_equivalent_amount' => $eq['usd'],
+            'aed_equivalent_amount' => $eq['aed'],
+            'fx_rate_kind' => $board->kind,
+            // ledger amount must already be authoritative AFN
+            'total_afn_check' => Money::round($ledgerAmountAfn, 2),
+        ]);
+    }
+
+    /**
      * Weighted average of applied rates: sum(rate × original_amount) / sum(original_amount).
      * Rows without a positive rate or amount are skipped. Returns null when nothing is usable.
      *
@@ -114,9 +450,9 @@ class CurrencyService
             if ((float) $rate <= 0 || (float) $amount <= 0) {
                 continue;
             }
-            $weight = function_exists('bcadd') ? bcadd($weight, $amount, 8) : (string) ((float) $weight + (float) $amount);
+            $weight = Money::add($weight, $amount, 8);
             $piece = Money::mul($rate, $amount, 12);
-            $sum = function_exists('bcadd') ? bcadd($sum, $piece, 12) : (string) ((float) $sum + (float) $piece);
+            $sum = Money::add($sum, $piece, 12);
         }
 
         if ((float) $weight <= 0) {
@@ -124,6 +460,37 @@ class CurrencyService
         }
 
         return Money::round(Money::div($sum, $weight, 12), 8);
+    }
+
+    /**
+     * Preferred inventory FX average for one original currency:
+     * Sum(historical AFN equivalents) / Sum(original-currency amounts).
+     *
+     * Mathematically equivalent to weightedAverageRate when AFN = rate × original,
+     * but uses stored AFN snapshots so partial rounding differences stay faithful to ledger cost.
+     *
+     * @param  iterable<int, array{original_amount: string|float|null, afn_amount: string|float|null}>  $rows
+     */
+    public function weightedAverageFxFromEquivalents(iterable $rows): ?string
+    {
+        $original = '0';
+        $afn = '0';
+
+        foreach ($rows as $row) {
+            $orig = (string) ($row['original_amount'] ?? '0');
+            $afnPiece = (string) ($row['afn_amount'] ?? '0');
+            if ((float) $orig <= 0 || (float) $afnPiece <= 0) {
+                continue;
+            }
+            $original = Money::add($original, $orig, 8);
+            $afn = Money::add($afn, $afnPiece, 8);
+        }
+
+        if ((float) $original <= 0) {
+            return null;
+        }
+
+        return Money::round(Money::div($afn, $original, 12), 8);
     }
 
     /**
@@ -178,12 +545,28 @@ class CurrencyService
         return $this->hasPositiveRate($from) && $this->hasPositiveRate($to);
     }
 
-    public function toLedger(string $amount, Currency $from): string
-    {
+    public function toLedger(
+        string $amount,
+        Currency $from,
+        CarbonInterface|\DateTimeInterface|string|null $at = null,
+    ): string {
         $ledger = Currency::ledger() ?? $from;
 
         try {
+            if ($at !== null || Schema::hasTable('exchange_rates')) {
+                return $this->convertAt(
+                    $amount,
+                    $from,
+                    $ledger,
+                    $at,
+                    (int) ($ledger->decimal_places ?? 2),
+                    allowCatalogFallback: true,
+                );
+            }
+
             return $this->convert($amount, $from, $ledger, (int) ($ledger->decimal_places ?? 2));
+        } catch (ValidationException $e) {
+            throw $e;
         } catch (\InvalidArgumentException) {
             throw ValidationException::withMessages([
                 'currency_id' => 'Set a positive catalog rate for '.$from->code.' before using it on monetary fields.',
@@ -311,6 +694,168 @@ class CurrencyService
         }
 
         return $converted;
+    }
+
+    /**
+     * Convert an aggregated AFN ledger total into AFN / USD / AED display equivalents
+     * using the reporting-date FxBoard (not per-transaction historical rates).
+     *
+     * Aggregate historical KPIs in AFN first, then call this once for display.
+     * When the board cannot be resolved, AFN remains available and USD/AED are null
+     * (never silently replaced with zero).
+     *
+     * @return array{
+     *     afn: float|null,
+     *     usd: float|null,
+     *     aed: float|null,
+     *     available: bool,
+     *     basis: 'reporting_date_fx_board'|'ledger_only',
+     *     board: array<string, mixed>|null
+     * }
+     */
+    public function threeCurrencyFromLedger(
+        float|string|null $ledgerAmountAfn,
+        CarbonInterface|\DateTimeInterface|string|null $at = null,
+    ): array {
+        $afn = Money::round((string) ($ledgerAmountAfn ?? 0), 2);
+
+        try {
+            $board = $this->boardAt($at, [], allowCatalogFallback: true);
+            $eq = $board->equivalents($afn, 'AFN', 2);
+
+            return [
+                'afn' => (float) $eq['afn'],
+                'usd' => (float) $eq['usd'],
+                'aed' => (float) $eq['aed'],
+                'available' => true,
+                'basis' => 'reporting_date_fx_board',
+                'board' => [
+                    'usd_to_afn' => $board->usdToAfn,
+                    'aed_to_afn' => $board->aedToAfn,
+                    'usd_to_aed' => $board->usdToAed,
+                    'effective_at' => $board->effectiveAt,
+                    'source' => $board->source,
+                    'kind' => $board->kind,
+                ],
+            ];
+        } catch (\Throwable) {
+            return [
+                'afn' => (float) $afn,
+                'usd' => null,
+                'aed' => null,
+                'available' => false,
+                'basis' => 'ledger_only',
+                'board' => null,
+            ];
+        }
+    }
+
+    /**
+     * Shared FX board metadata for dashboard charts / notes.
+     *
+     * @return array{
+     *     available: bool,
+     *     basis: 'reporting_date_fx_board'|'unavailable',
+     *     usd_to_afn: string|null,
+     *     aed_to_afn: string|null,
+     *     usd_to_aed: string|null,
+     *     effective_at: string|null,
+     *     source: string|null,
+     *     kind: string|null
+     * }
+     */
+    public function dashboardFxBoard(CarbonInterface|\DateTimeInterface|string|null $at = null): array
+    {
+        try {
+            $board = $this->boardAt($at, [], allowCatalogFallback: true);
+
+            return [
+                'available' => true,
+                'basis' => 'reporting_date_fx_board',
+                'usd_to_afn' => $board->usdToAfn,
+                'aed_to_afn' => $board->aedToAfn,
+                'usd_to_aed' => $board->usdToAed,
+                'effective_at' => $board->effectiveAt,
+                'source' => $board->source,
+                'kind' => $board->kind,
+            ];
+        } catch (\Throwable) {
+            return [
+                'available' => false,
+                'basis' => 'unavailable',
+                'usd_to_afn' => null,
+                'aed_to_afn' => null,
+                'usd_to_aed' => null,
+                'effective_at' => null,
+                'source' => null,
+                'kind' => null,
+            ];
+        }
+    }
+
+    /**
+     * Map many ledger AFN amounts to three-currency payloads (one board resolution).
+     *
+     * @param  array<string, float|string|null>  $ledgerAmounts
+     * @return array<string, array{
+     *     afn: float|null,
+     *     usd: float|null,
+     *     aed: float|null,
+     *     available: bool,
+     *     basis: string,
+     *     board: array<string, mixed>|null
+     * }>
+     */
+    public function mapThreeCurrency(
+        array $ledgerAmounts,
+        CarbonInterface|\DateTimeInterface|string|null $at = null,
+    ): array {
+        $boardPayload = null;
+        $board = null;
+
+        try {
+            $board = $this->boardAt($at, [], allowCatalogFallback: true);
+            $boardPayload = [
+                'usd_to_afn' => $board->usdToAfn,
+                'aed_to_afn' => $board->aedToAfn,
+                'usd_to_aed' => $board->usdToAed,
+                'effective_at' => $board->effectiveAt,
+                'source' => $board->source,
+                'kind' => $board->kind,
+            ];
+        } catch (\Throwable) {
+            $board = null;
+        }
+
+        $out = [];
+        foreach ($ledgerAmounts as $key => $amount) {
+            $afn = Money::round((string) ($amount ?? 0), 2);
+
+            if ($board === null) {
+                $out[$key] = [
+                    'afn' => (float) $afn,
+                    'usd' => null,
+                    'aed' => null,
+                    'available' => false,
+                    'basis' => 'ledger_only',
+                    'board' => null,
+                ];
+
+                continue;
+            }
+
+            $eq = $board->equivalents($afn, 'AFN', 2);
+            $out[$key] = [
+                'afn' => (float) $eq['afn'],
+                'usd' => (float) $eq['usd'],
+                'aed' => (float) $eq['aed'],
+                'available' => true,
+                'basis' => 'reporting_date_fx_board',
+                'board' => $boardPayload,
+            ];
+        }
+
+        return $out;
     }
 
     public function makeDefault(Currency $currency): Currency

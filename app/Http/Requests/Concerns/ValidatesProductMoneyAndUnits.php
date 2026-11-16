@@ -11,18 +11,6 @@ use Illuminate\Validation\Validator;
 trait ValidatesProductMoneyAndUnits
 {
     /**
-     * @return array<string, mixed>
-     */
-    protected function productUnitRules(): array
-    {
-        return [
-            'base_unit_name' => ['nullable', 'string', 'max:50', 'required_with:pack_unit_name,units_per_pack'],
-            'pack_unit_name' => ['nullable', 'string', 'max:50', 'required_with:base_unit_name,units_per_pack'],
-            'units_per_pack' => ['nullable', 'numeric', 'gt:0', 'max:1000000', 'required_with:base_unit_name,pack_unit_name'],
-        ];
-    }
-
-    /**
      * Product-level pair rates: how many units of the target equal 1 USD.
      * Nullable so older products without rates remain valid.
      *
@@ -66,25 +54,12 @@ trait ValidatesProductMoneyAndUnits
             'variants.*.purchase_currency_id' => ['nullable', 'integer', $activeCurrency],
             'variants.*.sale_currency_id' => ['nullable', 'integer', $activeCurrency],
             'variants.*.wholesale_currency_id' => ['nullable', 'integer', $activeCurrency],
-            'purchases.*.quantity_unit' => ['nullable', Rule::in(['base', 'pack'])],
             'purchases.*.profit_currency_id' => ['nullable', 'integer', $activeCurrency],
         ];
     }
 
     protected function validateProductMoneyAndUnits(Validator $validator): void
     {
-        $base = trim((string) $this->input('base_unit_name', ''));
-        $pack = trim((string) $this->input('pack_unit_name', ''));
-        $factor = $this->input('units_per_pack');
-
-        if (($base !== '' || $pack !== '' || $factor !== null && $factor !== '') && ((float) $factor <= 0)) {
-            $validator->errors()->add('units_per_pack', 'Conversion factor must be greater than zero.');
-        }
-
-        if ($base !== '' && $pack !== '' && strcasecmp($base, $pack) === 0) {
-            $validator->errors()->add('pack_unit_name', 'Pack unit must be different from the base unit.');
-        }
-
         $service = app(CurrencyService::class);
         $ledger = Currency::ledger();
 
@@ -117,12 +92,6 @@ trait ValidatesProductMoneyAndUnits
         foreach ($this->input('purchases', []) as $index => $purchase) {
             if (! is_array($purchase)) {
                 continue;
-            }
-
-            if (($purchase['quantity_unit'] ?? 'base') === 'pack') {
-                if ($base === '' || $pack === '' || (float) $factor <= 0) {
-                    $validator->errors()->add("purchases.{$index}.quantity_unit", 'Define unit conversion on the product before entering pack quantities.');
-                }
             }
 
             if (! empty($purchase['profit_currency_id']) && $ledger) {

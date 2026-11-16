@@ -159,12 +159,7 @@ const investmentNavItems: NavItem[] = [
         icon: Users,
         module: 'investors',
     },
-    {
-        title: 'Investments',
-        url: '/investments',
-        icon: HandCoins,
-        module: 'investments',
-    },
+   
     {
         title: 'Withdrawals',
         url: '/investor-withdrawals',

@@ -14,6 +14,7 @@ use App\Models\SalePayment;
 use App\Models\Supplier;
 use App\Models\User;
 use App\Services\CurrencyService;
+use App\Services\StoreAssetsService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -47,12 +48,13 @@ class DashboardController extends Controller
         }
 
         $reporting = $this->currencies->reportingContext();
+        $fxBoard = $this->currencies->dashboardFxBoard();
         $money = fn (float|string|null $amount): float => $this->currencies->reportAmount((float) ($amount ?? 0));
 
         /* =========================================================
          |  TOP-LEVEL KPIs
          |  Sum ledger (*_afn) amounts that were fixed at write time,
-         |  then convert once for reporting display.
+         |  then convert once for reporting display + three-currency board.
          ========================================================= */
 
         $completedSales = Sale::notTrashed()
@@ -99,6 +101,8 @@ class DashboardController extends Controller
 
         $outstandingDueLedger = (float) Customer::notTrashed()->sum('current_due_afn');
 
+        $monthNetLedger = $monthProfitLedger - $monthExpensesLedger;
+
         $kpis = [
             'today_sales' => $money($todaySalesLedger),
             'today_collected' => $money($todayCollectedLedger),
@@ -107,10 +111,21 @@ class DashboardController extends Controller
             'month_sales' => $money($monthSalesLedger),
             'month_profit' => $money($monthProfitLedger),
             'month_expenses' => $money($monthExpensesLedger),
-            'month_net' => $money($monthProfitLedger - $monthExpensesLedger),
+            'month_net' => $money($monthNetLedger),
             'sales_growth' => $salesGrowth,
             'outstanding_due' => $money($outstandingDueLedger),
         ];
+
+        $kpis3c = $this->currencies->mapThreeCurrency([
+            'today_sales' => $todaySalesLedger,
+            'today_collected' => $todayCollectedLedger,
+            'today_profit' => $todayProfitLedger,
+            'month_sales' => $monthSalesLedger,
+            'month_profit' => $monthProfitLedger,
+            'month_expenses' => $monthExpensesLedger,
+            'month_net' => $monthNetLedger,
+            'outstanding_due' => $outstandingDueLedger,
+        ]);
 
         /* =========================================================
          |  CHARTS DATA
@@ -135,16 +150,34 @@ class DashboardController extends Controller
         $cursor = $startDate->copy();
         $end = now()->startOfDay();
 
+        $trendLedgerPairs = [];
         while ($cursor->lte($end)) {
             $row = $trendRows->get($cursor->toDateString());
+            $salesAfn = $row ? (float) $row->sales : 0.0;
+            $profitAfn = $row ? (float) $row->profit : 0.0;
+            $key = $cursor->toDateString();
+            $trendLedgerPairs["{$key}|sales"] = $salesAfn;
+            $trendLedgerPairs["{$key}|profit"] = $profitAfn;
             $salesTrend[] = [
                 'date' => $cursor->format('M d'),
-                'sales' => $row ? $money((float) $row->sales) : 0.0,
-                'profit' => $row ? $money((float) $row->profit) : 0.0,
+                'date_key' => $key,
+                'sales' => $money($salesAfn),
+                'profit' => $money($profitAfn),
+                'sales_afn' => round($salesAfn, 2),
+                'profit_afn' => round($profitAfn, 2),
                 'count' => $row ? (int) $row->count : 0,
             ];
             $cursor->addDay();
         }
+
+        $trend3c = $this->currencies->mapThreeCurrency($trendLedgerPairs);
+        $salesTrend = array_map(function (array $point) use ($trend3c) {
+            $point['sales_3c'] = $trend3c[$point['date_key'].'|sales'] ?? null;
+            $point['profit_3c'] = $trend3c[$point['date_key'].'|profit'] ?? null;
+            unset($point['date_key']);
+
+            return $point;
+        }, $salesTrend);
 
         $brandSales = DB::table('sale_items')
             ->join('sales', 'sale_items.sale_id', '=', 'sales.id')
@@ -163,11 +196,17 @@ class DashboardController extends Controller
             ->groupBy('brands.name')
             ->orderByDesc('total')
             ->limit(8)
-            ->get()
-            ->map(fn ($row) => [
-                'name' => $row->brand,
-                'value' => $money((float) $row->total),
-            ]);
+            ->get();
+
+        $brand3c = $this->currencies->mapThreeCurrency(
+            $brandSales->mapWithKeys(fn ($row, $i) => ["b{$i}" => (float) $row->total])->all()
+        );
+        $brandSales = $brandSales->values()->map(fn ($row, $i) => [
+            'name' => $row->brand,
+            'value' => $money((float) $row->total),
+            'value_afn' => round((float) $row->total, 2),
+            'value_3c' => $brand3c["b{$i}"] ?? null,
+        ]);
 
         $topProducts = DB::table('sale_items')
             ->join('sales', 'sale_items.sale_id', '=', 'sales.id')
@@ -200,25 +239,35 @@ class DashboardController extends Controller
             )
             ->orderByDesc('total_sales')
             ->limit(10)
-            ->get()
-            ->map(function ($row) use ($money) {
-                $displayName = trim(implode(' · ', array_filter([
-                    $row->product_name,
-                    $row->volume_ml ? "{$row->volume_ml}ml" : null,
-                    $row->concentration ? strtoupper($row->concentration) : null,
-                ])));
+            ->get();
 
-                return [
-                    'id' => $row->variant_id,
-                    'name' => $displayName,
-                    'brand' => $row->brand_name,
-                    'total_qty' => (int) $row->total_qty,
-                    'total_sales' => $money((float) $row->total_sales),
-                    'total_profit' => $money((float) $row->total_profit),
-                    'total_sales_ledger' => round((float) $row->total_sales, 2),
-                    'total_profit_ledger' => round((float) $row->total_profit, 2),
-                ];
-            });
+        $topProduct3c = $this->currencies->mapThreeCurrency(
+            $topProducts->flatMap(fn ($row, $i) => [
+                "s{$i}" => (float) $row->total_sales,
+                "p{$i}" => (float) $row->total_profit,
+            ])->all()
+        );
+
+        $topProducts = $topProducts->values()->map(function ($row, $i) use ($money, $topProduct3c) {
+            $displayName = trim(implode(' · ', array_filter([
+                $row->product_name,
+                $row->volume_ml ? "{$row->volume_ml}ml" : null,
+                $row->concentration ? strtoupper($row->concentration) : null,
+            ])));
+
+            return [
+                'id' => $row->variant_id,
+                'name' => $displayName,
+                'brand' => $row->brand_name,
+                'total_qty' => (int) $row->total_qty,
+                'total_sales' => $money((float) $row->total_sales),
+                'total_profit' => $money((float) $row->total_profit),
+                'total_sales_ledger' => round((float) $row->total_sales, 2),
+                'total_profit_ledger' => round((float) $row->total_profit, 2),
+                'total_sales_3c' => $topProduct3c["s{$i}"] ?? null,
+                'total_profit_3c' => $topProduct3c["p{$i}"] ?? null,
+            ];
+        });
 
         $branchStats = DB::table('sales')
             ->join('branches', 'sales.branch_id', '=', 'branches.id')
@@ -237,15 +286,27 @@ class DashboardController extends Controller
             )
             ->groupBy('branches.id', 'branches.name', 'branches.code')
             ->orderByDesc('total_sales')
-            ->get()
-            ->map(fn ($row) => [
-                'id' => $row->id,
-                'name' => $row->name,
-                'code' => $row->code,
-                'sales' => $money((float) $row->total_sales),
-                'profit' => $money((float) $row->total_profit),
-                'orders' => (int) $row->orders,
-            ]);
+            ->get();
+
+        $branch3c = $this->currencies->mapThreeCurrency(
+            $branchStats->flatMap(fn ($row, $i) => [
+                "s{$i}" => (float) $row->total_sales,
+                "p{$i}" => (float) $row->total_profit,
+            ])->all()
+        );
+
+        $branchStats = $branchStats->values()->map(fn ($row, $i) => [
+            'id' => $row->id,
+            'name' => $row->name,
+            'code' => $row->code,
+            'sales' => $money((float) $row->total_sales),
+            'profit' => $money((float) $row->total_profit),
+            'sales_afn' => round((float) $row->total_sales, 2),
+            'profit_afn' => round((float) $row->total_profit, 2),
+            'sales_3c' => $branch3c["s{$i}"] ?? null,
+            'profit_3c' => $branch3c["p{$i}"] ?? null,
+            'orders' => (int) $row->orders,
+        ]);
 
         $paymentMethods = DB::table('sale_payments')
             ->join('sales', 'sale_payments.sale_id', '=', 'sales.id')
@@ -259,20 +320,33 @@ class DashboardController extends Controller
                 DB::raw('SUM(sale_payments.amount_afn) as total')
             )
             ->groupBy('sale_payments.payment_method')
-            ->get()
-            ->map(fn ($row) => [
-                'name' => ucfirst((string) $row->payment_method),
-                'value' => $money((float) $row->total),
-            ]);
+            ->get();
 
         $periodDueLedger = (float) (clone $completedSales)
             ->whereDate('sale_date', '>=', $startDate->toDateString())
             ->sum('remaining_due_afn');
 
+        $paymentLedger = $paymentMethods->mapWithKeys(
+            fn ($row, $i) => ["pm{$i}" => (float) $row->total]
+        )->all();
+        if ($periodDueLedger > 0) {
+            $paymentLedger['due'] = $periodDueLedger;
+        }
+        $payment3c = $this->currencies->mapThreeCurrency($paymentLedger);
+
+        $paymentMethods = $paymentMethods->values()->map(fn ($row, $i) => [
+            'name' => ucfirst((string) $row->payment_method),
+            'value' => $money((float) $row->total),
+            'value_afn' => round((float) $row->total, 2),
+            'value_3c' => $payment3c["pm{$i}"] ?? null,
+        ]);
+
         if ($periodDueLedger > 0) {
             $paymentMethods->push([
                 'name' => 'Due',
                 'value' => $money($periodDueLedger),
+                'value_afn' => round($periodDueLedger, 2),
+                'value_3c' => $payment3c['due'] ?? null,
             ]);
         }
 
@@ -300,29 +374,37 @@ class DashboardController extends Controller
 
         $ledgerCode = $reporting['ledger']['code'] ?? (string) config('business.default_currency', 'AFN');
 
-        $recentSales = Sale::query()
+        $recentSalesModels = Sale::query()
             ->with(['branch:id,name,code', 'customer:id,name'])
             ->notTrashed()
             ->when($branchId, fn ($q) => $q->where('branch_id', $branchId))
             ->orderByDesc('id')
             ->limit(8)
-            ->get()
-            ->map(function ($s) use ($money, $ledgerCode) {
-                $ledgerTotal = (float) $s->total_afn;
+            ->get();
 
-                return [
-                    'id' => $s->id,
-                    'invoice_number' => $s->invoice_number,
-                    'total_afn' => $money($ledgerTotal),
-                    'total_ledger' => round($ledgerTotal, 2),
-                    'ledger_currency_code' => $s->ledger_currency_code ?: $ledgerCode,
-                    'payment_status' => $s->payment_status,
-                    'status' => $s->status,
-                    'sale_date' => optional($s->sale_date)->toDateString(),
-                    'branch' => $s->branch?->name,
-                    'customer' => $s->customer_name_snapshot ?: ($s->customer?->name ?? 'Walk-in'),
-                ];
-            });
+        $recentSales3c = $this->currencies->mapThreeCurrency(
+            $recentSalesModels->mapWithKeys(fn ($s) => ["sale{$s->id}" => (float) $s->total_afn])->all()
+        );
+
+        $recentSales = $recentSalesModels->map(function ($s) use ($money, $ledgerCode, $recentSales3c) {
+            $ledgerTotal = (float) $s->total_afn;
+
+            return [
+                'id' => $s->id,
+                'invoice_number' => $s->invoice_number,
+                'total_afn' => $money($ledgerTotal),
+                'total_ledger' => round($ledgerTotal, 2),
+                'total_3c' => $recentSales3c["sale{$s->id}"] ?? null,
+                'original_amount' => $s->sale_amount_currency !== null ? (float) $s->sale_amount_currency : round($ledgerTotal, 2),
+                'original_currency' => $s->sale_currency_code ?: ($s->ledger_currency_code ?: $ledgerCode),
+                'ledger_currency_code' => $s->ledger_currency_code ?: $ledgerCode,
+                'payment_status' => $s->payment_status,
+                'status' => $s->status,
+                'sale_date' => optional($s->sale_date)->toDateString(),
+                'branch' => $s->branch?->name,
+                'customer' => $s->customer_name_snapshot ?: ($s->customer?->name ?? 'Walk-in'),
+            ];
+        });
 
         /* =========================================================
          |  LOW STOCK ITEMS
@@ -376,7 +458,11 @@ class DashboardController extends Controller
                 ->groupBy('customer_id')
                 ->pluck('due_date', 'customer_id');
 
-        $dueCustomers = $dueCustomers->map(function (Customer $customer) use ($dueDates, $money) {
+        $due3c = $this->currencies->mapThreeCurrency(
+            $dueCustomers->mapWithKeys(fn (Customer $c) => ["due{$c->id}" => (float) $c->current_due_afn])->all()
+        );
+
+        $dueCustomers = $dueCustomers->map(function (Customer $customer) use ($dueDates, $money, $due3c) {
             $dueDate = $dueDates->get($customer->id);
             $ledgerDue = (float) $customer->current_due_afn;
 
@@ -386,9 +472,34 @@ class DashboardController extends Controller
                 'phone' => $customer->phone,
                 'current_due_afn' => $money($ledgerDue),
                 'current_due_ledger' => round($ledgerDue, 2),
+                'current_due_3c' => $due3c["due{$customer->id}"] ?? null,
                 'due_date' => $dueDate ? Carbon::parse($dueDate)->toDateString() : null,
             ];
         });
+
+        $storeAssetsRaw = StoreAssetsService::summarize($branchId);
+        $storeAssets3c = $this->currencies->mapThreeCurrency([
+            'remaining_cost' => (float) ($storeAssetsRaw['summary']['remaining_cost_afn'] ?? 0),
+            'total_cost' => (float) ($storeAssetsRaw['summary']['total_cost_afn'] ?? 0),
+            'expected_profit' => (float) ($storeAssetsRaw['summary']['expected_profit_afn'] ?? 0),
+            'realized_sales' => (float) ($storeAssetsRaw['summary']['realized_sales_afn'] ?? 0),
+            'realized_profit' => (float) ($storeAssetsRaw['summary']['realized_profit_afn'] ?? 0),
+        ]);
+        $storeAssets = [
+            'summary' => array_merge($storeAssetsRaw['summary'], [
+                'remaining_cost' => $money((float) ($storeAssetsRaw['summary']['remaining_cost_afn'] ?? 0)),
+                'total_cost' => $money((float) ($storeAssetsRaw['summary']['total_cost_afn'] ?? 0)),
+                'expected_profit' => $money((float) ($storeAssetsRaw['summary']['expected_profit_afn'] ?? 0)),
+                'realized_sales' => $money((float) ($storeAssetsRaw['summary']['realized_sales_afn'] ?? 0)),
+                'realized_profit' => $money((float) ($storeAssetsRaw['summary']['realized_profit_afn'] ?? 0)),
+                'remaining_cost_3c' => $storeAssets3c['remaining_cost'] ?? null,
+                'total_cost_3c' => $storeAssets3c['total_cost'] ?? null,
+                'expected_profit_3c' => $storeAssets3c['expected_profit'] ?? null,
+                'realized_sales_3c' => $storeAssets3c['realized_sales'] ?? null,
+                'realized_profit_3c' => $storeAssets3c['realized_profit'] ?? null,
+            ]),
+            'items' => $storeAssetsRaw['items'],
+        ];
 
         $recentActivity = ActivityNotification::query()
             ->when($request->user(), fn ($q, $actor) => $q->where('user_id', $actor->id))
@@ -408,6 +519,7 @@ class DashboardController extends Controller
             'dueCustomers' => $dueCustomers,
             'days' => $days,
             'kpis' => $kpis,
+            'kpis3c' => $kpis3c,
             'salesTrend' => $salesTrend,
             'brandSales' => $brandSales,
             'topProducts' => $topProducts,
@@ -418,7 +530,9 @@ class DashboardController extends Controller
             'recentSales' => $recentSales,
             'recentActivity' => $recentActivity,
             'lowStockItems' => $lowStockItems,
+            'storeAssets' => $storeAssets,
             'reporting' => $reporting,
+            'fxBoard' => $fxBoard,
         ]);
     }
 

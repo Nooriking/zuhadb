@@ -2,6 +2,11 @@ import { BackButton } from '@/components/form-page';
 // resources/js/pages/sales/create.tsx
 
 import { CustomerCombobox } from '@/components/customer-combobox';
+import {
+    TransactionExchangeRateSection,
+    threeCurrencyEquivalents,
+    type FxBoardContext,
+} from '@/components/transaction-exchange-rate-section';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -73,12 +78,19 @@ interface Variant {
     } | null;
 }
 
+interface CurrencyOption {
+    id: number;
+    code: string;
+    name: string;
+    symbol: string | null;
+}
+
 interface LineItem {
     _key: string;
     variant_id: string;
     quantity: string;
-    sale_price_afn: string;
-    discount_afn: string;
+    sale_unit_amount: string;
+    discount_amount: string;
 }
 
 interface StockError {
@@ -95,6 +107,9 @@ interface Props {
     customers: Customer[];
     variants: Variant[];
     nextNumber: string;
+    currencies?: CurrencyOption[];
+    fxBoard?: FxBoardContext;
+    canManageRates?: boolean;
     supplierCredits?: {
         total: number;
         suppliers: { supplier: string; amount: number; count: number }[];
@@ -111,8 +126,8 @@ const newLine = (): LineItem => ({
     _key: Math.random().toString(36).slice(2),
     variant_id: '',
     quantity: '1',
-    sale_price_afn: '',
-    discount_afn: '0',
+    sale_unit_amount: '',
+    discount_amount: '0',
 });
 
 const breadcrumbs: BreadcrumbItem[] = [
@@ -145,17 +160,32 @@ const round2 = (value: number): number => {
  |  Main Component
  ═══════════════════════════════════════════════════════ */
 
-export default function SalesCreate({ branches, customers: initialCustomers, variants, nextNumber, supplierCredits, errors: initialErrors }: Props) {
+export default function SalesCreate({
+    branches,
+    customers: initialCustomers,
+    variants,
+    nextNumber,
+    currencies = [],
+    fxBoard,
+    canManageRates = false,
+    supplierCredits,
+    errors: initialErrors,
+}: Props) {
     const { toast } = useToast();
+
+    const ledgerCurrency = useMemo(() => currencies.find((c) => c.code === 'AFN') || currencies[0], [currencies]);
 
     /* ─── Form State ─── */
     const [form, setForm] = useState({
         branch_id: branches?.[0] ? String(branches[0].id) : '',
         customer_id: 'new' as string,
         sale_date: new Date().toISOString().slice(0, 10),
+        sale_currency_id: ledgerCurrency ? String(ledgerCurrency.id) : '',
+        usd_to_afn_rate: fxBoard?.board?.usd_to_afn_rate ? String(fxBoard.board.usd_to_afn_rate) : '',
+        aed_to_afn_rate: fxBoard?.board?.aed_to_afn_rate ? String(fxBoard.board.aed_to_afn_rate) : '',
         payment_method: 'cash' as 'cash' | 'card' | 'bank' | 'mobile' | 'credit' | 'other',
         notes: '',
-        discount_afn: '0',
+        discount_amount: '0',
     });
 
     /* ─── Customer Fields ─── */
@@ -309,25 +339,40 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
      |  ⭐ Computed Totals — با round2 دقیق
      ═══════════════════════════════════════════════════════ */
 
+    const saleCurrency = useMemo(
+        () => currencies.find((c) => String(c.id) === form.sale_currency_id) || ledgerCurrency,
+        [currencies, form.sale_currency_id, ledgerCurrency],
+    );
+    const usdRate = parseFloat(form.usd_to_afn_rate) || 0;
+    const aedRate = parseFloat(form.aed_to_afn_rate) || 0;
+
     const totals = useMemo(() => {
         let subtotalAfn = 0;
+        let subtotalOriginal = 0;
         let itemCount = 0;
         let totalQty = 0;
+        const code = saleCurrency?.code || 'AFN';
 
         items.forEach((item) => {
             if (!item.variant_id) return;
             const qty = parseFloat(item.quantity) || 0;
-            const price = parseFloat(item.sale_price_afn) || 0;
-            const disc = parseFloat(item.discount_afn) || 0;
-            subtotalAfn = round2(subtotalAfn + round2(qty * price - disc));
+            const price = parseFloat(item.sale_unit_amount) || 0;
+            const disc = parseFloat(item.discount_amount) || 0;
+            const lineOriginal = round2(qty * price - disc);
+            const lineAfn = threeCurrencyEquivalents(lineOriginal, code, usdRate, aedRate).afn;
+            subtotalOriginal = round2(subtotalOriginal + lineOriginal);
+            subtotalAfn = round2(subtotalAfn + lineAfn);
             itemCount++;
             totalQty += qty;
         });
 
         subtotalAfn = round2(subtotalAfn);
 
-        const discount = round2(parseFloat(form.discount_afn) || 0);
+        const discountOriginal = round2(parseFloat(form.discount_amount) || 0);
+        const discount = threeCurrencyEquivalents(discountOriginal, code, usdRate, aedRate).afn;
         const totalAfn = round2(Math.max(0, subtotalAfn - discount));
+        const totalOriginal = round2(Math.max(0, subtotalOriginal - discountOriginal));
+        const totalEq = threeCurrencyEquivalents(totalOriginal, code, usdRate, aedRate);
 
         /* ⭐ Grand Total = Previous Due + New Sale */
         const grandTotalDueAfn = round2(previousDueAfn + totalAfn);
@@ -340,10 +385,24 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
 
         const exceedsCreditLimit = creditLimitAfn > 0 && newCustomerDueAfterSale > creditLimitAfn;
 
+        // Preview only — authoritative FIFO + investor PPU are calculated on the server.
+        let estimatedCostAfn = 0;
+        items.forEach((item) => {
+            if (!item.variant_id) return;
+            const variant = variants.find((v) => String(v.id) === item.variant_id);
+            const qty = parseFloat(item.quantity) || 0;
+            const unitCost = parseFloat(variant?.purchase_price_afn || '0') || 0;
+            estimatedCostAfn = round2(estimatedCostAfn + unitCost * qty);
+        });
+        const estimatedGrossProfitAfn = round2(totalAfn - estimatedCostAfn);
+
         return {
             subtotalAfn,
             discount,
             totalAfn,
+            totalOriginal,
+            totalEq,
+            saleCurrencyCode: code,
             itemCount,
             totalQty,
             previousDueAfn,
@@ -352,8 +411,10 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
             remainingDueAfn,
             newCustomerDueAfterSale,
             exceedsCreditLimit,
+            estimatedCostAfn,
+            estimatedGrossProfitAfn,
         };
-    }, [items, form, paidAmount, previousDueAfn, creditLimitAfn]);
+    }, [items, form, paidAmount, previousDueAfn, creditLimitAfn, saleCurrency, usdRate, aedRate, variants]);
 
     /* ⭐ Auto-fill Paid Amount — با مبلغ فروش فعلی */
     useEffect(() => {
@@ -381,7 +442,12 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
             if (field === 'variant_id' && value) {
                 const variant = variants.find((v) => v.id === parseInt(value));
                 if (variant) {
-                    copy[index].sale_price_afn = variant.sale_price_afn || '0';
+                    const afnPrice = parseFloat(variant.sale_price_afn || '0') || 0;
+                    const code = saleCurrency?.code || 'AFN';
+                    const converted = threeCurrencyEquivalents(afnPrice, 'AFN', usdRate, aedRate);
+                    const unit =
+                        code === 'USD' ? converted.usd : code === 'AED' ? converted.aed : converted.afn;
+                    copy[index].sale_unit_amount = String(round2(unit));
                 }
             }
 
@@ -506,12 +572,16 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
                 setItemQuantity(String(v.id), (parseInt(existingItem.quantity) || 0) + 1);
             } else {
                 setItems((prev) => {
+                    const afnPrice = parseFloat(String(v.sale_price_afn || 0)) || 0;
+                    const code = saleCurrency?.code || 'AFN';
+                    const converted = threeCurrencyEquivalents(afnPrice, 'AFN', usdRate, aedRate);
+                    const unit = code === 'USD' ? converted.usd : code === 'AED' ? converted.aed : converted.afn;
                     const newItem: LineItem = {
                         _key: Math.random().toString(36).slice(2),
                         variant_id: String(v.id),
                         quantity: '1',
-                        sale_price_afn: String(v.sale_price_afn || 0),
-                        discount_afn: '0',
+                        sale_unit_amount: String(round2(unit)),
+                        discount_amount: '0',
                     };
                     if (prev.length === 1 && !prev[0].variant_id) return [newItem];
                     return [...prev, newItem];
@@ -638,7 +708,7 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
             finalCustomerId = form.customer_id;
         }
 
-        return {
+        const payload: Record<string, unknown> = {
             ...form,
             customer_id: finalCustomerId,
             items: items
@@ -646,12 +716,20 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
                 .map((item) => ({
                     variant_id: parseInt(item.variant_id),
                     quantity: parseInt(item.quantity) || 1,
-                    sale_price_afn: round2(parseFloat(item.sale_price_afn) || 0), // ⭐ round2
-                    discount_afn: round2(parseFloat(item.discount_afn) || 0), // ⭐ round2
+                    sale_unit_amount: round2(parseFloat(item.sale_unit_amount) || 0),
+                    discount_amount: round2(parseFloat(item.discount_amount) || 0),
                 })),
             payments,
             due_date: totals.remainingDueAfn > 0 ? dueDate || null : null,
         };
+        if (!canManageRates) {
+            delete payload.usd_to_afn_rate;
+            delete payload.aed_to_afn_rate;
+            delete payload.rate_source;
+        } else {
+            payload.rate_source = 'transaction';
+        }
+        return payload;
     };
 
     const submitSale = (customerId?: number | string | null) => {
@@ -738,7 +816,8 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
 
         const underCost = items.find((item) => {
             const variant = variants.find((row) => String(row.id) === item.variant_id);
-            const price = parseFloat(item.sale_price_afn) || 0;
+            const unit = parseFloat(item.sale_unit_amount) || 0;
+            const price = threeCurrencyEquivalents(unit, saleCurrency?.code || 'AFN', usdRate, aedRate).afn;
             const cost = parseFloat(variant?.purchase_price_afn || '0') || 0;
             return item.variant_id && (price < 0 || price < cost);
         });
@@ -880,6 +959,58 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
                         <div>
                             <h1 className="text-2xl font-bold tracking-tight">Create Sale</h1>
                             <p className="text-muted-foreground font-mono text-sm">{nextNumber}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <TransactionExchangeRateSection
+                    usdToAfn={form.usd_to_afn_rate}
+                    aedToAfn={form.aed_to_afn_rate}
+                    onChange={(field, value) => setForm((prev) => ({ ...prev, [field]: value }))}
+                    context={fxBoard}
+                    canManageRates={canManageRates}
+                    errors={errors}
+                />
+
+                <div className="rounded-lg border p-4">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                        <div className="space-y-2">
+                            <Label>Sale date</Label>
+                            <Input
+                                type="date"
+                                value={form.sale_date}
+                                onChange={(e) => setForm((prev) => ({ ...prev, sale_date: e.target.value }))}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Sale currency</Label>
+                            <Select
+                                value={form.sale_currency_id}
+                                onValueChange={(v) => setForm((prev) => ({ ...prev, sale_currency_id: v }))}
+                            >
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Currency" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {currencies
+                                        .filter((c) => ['AFN', 'USD', 'AED'].includes(c.code))
+                                        .map((c) => (
+                                            <SelectItem key={c.id} value={String(c.id)}>
+                                                {c.code} {c.symbol ? `(${c.symbol})` : ''}
+                                            </SelectItem>
+                                        ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div className="rounded-lg border p-3 text-sm">
+                            <p className="text-muted-foreground text-xs">Sale total equivalents</p>
+                            <p className="font-semibold">
+                                {formatPrice(totals.totalOriginal)} {totals.saleCurrencyCode}
+                            </p>
+                            <p>
+                                {formatPrice(totals.totalEq?.afn || 0)} AFN · {formatPrice(totals.totalEq?.usd || 0)} USD ·{' '}
+                                {formatPrice(totals.totalEq?.aed || 0)} AED
+                            </p>
                         </div>
                     </div>
                 </div>
@@ -1158,9 +1289,10 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
 
                         {items.map((item, index) => {
                             const qty = parseFloat(item.quantity) || 0;
-                            const price = parseFloat(item.sale_price_afn) || 0;
-                            const discount = parseFloat(item.discount_afn) || 0;
-                            const lineTotal = round2(qty * price - discount); // ⭐ round2
+                            const price = parseFloat(item.sale_unit_amount) || 0;
+                            const discount = parseFloat(item.discount_amount) || 0;
+                            const lineTotal = round2(qty * price - discount);
+                            const lineEq = threeCurrencyEquivalents(lineTotal, saleCurrency?.code || 'AFN', usdRate, aedRate);
 
                             const variantInfo = item.variant_id ? variants.find((v) => String(v.id) === item.variant_id) : null;
 
@@ -1216,10 +1348,10 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
 
                                         <div className="space-y-1.5 md:col-span-2">
                                             <Label className="text-xs">
-                                                Price (AFN){' '}
+                                                Price ({saleCurrency?.code || 'AFN'}){' '}
                                                 {variantInfo && (
                                                     <span className="text-muted-foreground font-mono">
-                                                        ({formatPrice(parseFloat(variantInfo.sale_price_afn))})
+                                                        (catalog {formatPrice(parseFloat(variantInfo.sale_price_afn))} AFN)
                                                     </span>
                                                 )}
                                             </Label>
@@ -1227,27 +1359,30 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
                                                 type="number"
                                                 step="0.01"
                                                 min="0"
-                                                value={item.sale_price_afn}
-                                                onChange={(e) => updateItem(index, 'sale_price_afn', e.target.value)}
+                                                value={item.sale_unit_amount}
+                                                onChange={(e) => updateItem(index, 'sale_unit_amount', e.target.value)}
                                                 className="font-mono"
                                             />
                                         </div>
 
                                         <div className="space-y-1.5 md:col-span-2">
-                                            <Label className="text-xs">Discount (AFN)</Label>
+                                            <Label className="text-xs">Discount ({saleCurrency?.code || 'AFN'})</Label>
                                             <Input
                                                 type="number"
                                                 step="0.01"
                                                 min="0"
-                                                value={item.discount_afn}
-                                                onChange={(e) => updateItem(index, 'discount_afn', e.target.value)}
+                                                value={item.discount_amount}
+                                                onChange={(e) => updateItem(index, 'discount_amount', e.target.value)}
                                                 className="font-mono"
                                             />
                                         </div>
 
                                         <div className="flex items-end justify-end gap-1 md:col-span-2">
                                             <div className="flex-1 rounded border bg-gray-50 px-2 py-1.5 text-center font-mono text-xs font-semibold">
-                                                {formatPrice(lineTotal)}
+                                                {formatPrice(lineTotal)} {saleCurrency?.code || 'AFN'}
+                                                <div className="text-muted-foreground text-[10px] font-normal">
+                                                    {formatPrice(lineEq.afn)} AFN
+                                                </div>
                                             </div>
                                             <Button
                                                 type="button"
@@ -1463,7 +1598,9 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
                                 <DollarSign className="h-5 w-5" />
                                 Summary
                             </CardTitle>
-                            <CardDescription>Order totals in AFN.</CardDescription>
+                            <CardDescription>
+                                Original {totals.saleCurrencyCode}; ledger profit uses AFN.
+                            </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
                             <div className="grid grid-cols-3 gap-3">
@@ -1477,20 +1614,38 @@ export default function SalesCreate({ branches, customers: initialCustomers, var
                                 </div>
                                 <div className="bg-muted/30 rounded-lg border p-3 text-center">
                                     <p className="text-muted-foreground text-xs font-medium uppercase">Curr</p>
-                                    <p className="font-mono text-sm font-bold">AFN</p>
+                                    <p className="font-mono text-sm font-bold">{totals.saleCurrencyCode}</p>
                                 </div>
                             </div>
 
                             <div className="space-y-2">
-                                <Label>Header Discount (AFN)</Label>
+                                <Label>Header Discount ({totals.saleCurrencyCode})</Label>
                                 <Input
                                     type="number"
                                     step="0.01"
                                     min="0"
-                                    value={form.discount_afn}
-                                    onChange={(e) => setForm({ ...form, discount_afn: e.target.value })}
+                                    value={form.discount_amount}
+                                    onChange={(e) => setForm({ ...form, discount_amount: e.target.value })}
                                     className="font-mono"
                                 />
+                            </div>
+
+                            <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-4">
+                                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-800">
+                                    Profit preview (indicative)
+                                </p>
+                                <div className="grid grid-cols-2 gap-y-2 text-sm">
+                                    <span className="text-amber-900/70">Est. FIFO cost:</span>
+                                    <span className="text-right font-mono">{formatPrice(totals.estimatedCostAfn)} AFN</span>
+                                    <span className="text-amber-900/70">Est. gross profit:</span>
+                                    <span className="text-right font-mono font-semibold text-amber-900">
+                                        {formatPrice(totals.estimatedGrossProfitAfn)} AFN
+                                    </span>
+                                </div>
+                                <p className="text-muted-foreground mt-2 text-[11px]">
+                                    Investor and company profit are finalized per batch on submit. Fixed investor profit per unit is never a
+                                    percentage.
+                                </p>
                             </div>
 
                             <div className="bg-muted/30 rounded-lg border p-4">

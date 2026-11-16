@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { ExpenseBearerToggle, type ExpenseBearer } from '@/components/expense-bearer-toggle';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
+import { formatOriginalAmount } from '@/lib/original-currency';
 import { type BreadcrumbItem } from '@/types';
 import { Head, router } from '@inertiajs/react';
 import { AlertCircle, AlertTriangle, FileSearch, Package, RotateCcw, Save, Search } from 'lucide-react';
@@ -29,6 +30,10 @@ interface SaleOption {
     branch_id: number;
     customer_name?: string | null;
     customer_phone?: string | null;
+    currency_code?: string | null;
+    currency_label?: string;
+    currency_known?: boolean;
+    display_amount?: number | null;
 }
 
 interface SaleItemInfo {
@@ -53,6 +58,10 @@ interface SelectedSaleInfo {
     invoice_number: string;
     total_afn: string;
     remaining_due_afn: string;
+    sale_currency_code?: string | null;
+    sale_currency_label?: string;
+    sale_currency_known?: boolean;
+    sale_amount_currency?: number | null;
     customer: { id: number; name: string; phone: string | null; current_due_afn: string } | null;
     branch: { id: number; name: string; code: string } | null;
 }
@@ -358,8 +367,12 @@ export default function SaleReturnsCreate({
                                                     <div className="flex flex-col items-start py-0.5">
                                                         <span className="font-mono text-sm">{sale.invoice_number}</span>
                                                         <span className="text-muted-foreground text-xs">
-                                                            {sale.customer_name || 'Walk-in'} · {formatPrice(sale.total_afn)} AFN ·{' '}
-                                                            {new Date(sale.sale_date).toLocaleDateString('en-US')}
+                                                            {sale.customer_name || 'Walk-in'} ·{' '}
+                                                            {formatOriginalAmount(
+                                                                sale.display_amount,
+                                                                sale.currency_known === false ? null : sale.currency_code,
+                                                            )}{' '}
+                                                            · {new Date(sale.sale_date).toLocaleDateString('en-US')}
                                                         </span>
                                                     </div>
                                                 </SelectItem>
@@ -390,9 +403,15 @@ export default function SaleReturnsCreate({
                                     <p className="font-medium">{selectedSale.branch?.name || '—'}</p>
                                 </div>
                                 <div>
-                                    <p className="text-muted-foreground text-xs">Current Due</p>
-                                    <p className="font-mono font-bold text-amber-700">
-                                        {formatPrice(selectedSale.customer?.current_due_afn || 0)} AFN
+                                    <p className="text-muted-foreground text-xs">Sale / Current Due</p>
+                                    <p className="font-mono text-sm font-bold">
+                                        {formatOriginalAmount(
+                                            selectedSale.sale_amount_currency,
+                                            selectedSale.sale_currency_known === false ? null : selectedSale.sale_currency_code,
+                                        )}
+                                    </p>
+                                    <p className="font-mono text-xs text-amber-700">
+                                        Due {formatPrice(selectedSale.customer?.current_due_afn || 0)} AFN
                                     </p>
                                 </div>
                             </div>

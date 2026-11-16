@@ -35,18 +35,29 @@ class InventoryService
         );
 
         $oldQty  = $inventory->quantity;
-        $oldCost = (float) $inventory->average_cost_afn;
-
-        // ✅ محاسبه weighted average cost
+        $oldCost = (string) $inventory->average_cost_afn;
         $newQty    = $oldQty + $quantity;
+
+        // Reporting average cost in AFN (ledger). Sales costing remains FIFO via batches.
         $newAvgCost = $newQty > 0
-            ? (($oldQty * $oldCost) + ($quantity * $unitCostAfn)) / $newQty
-            : $unitCostAfn;
+            ? \App\Support\Money::round(
+                \App\Support\Money::div(
+                    \App\Support\Money::add(
+                        \App\Support\Money::mul((string) $oldQty, $oldCost, 8),
+                        \App\Support\Money::mul((string) $quantity, (string) $unitCostAfn, 8),
+                        8
+                    ),
+                    (string) $newQty,
+                    12
+                ),
+                2
+            )
+            : \App\Support\Money::round((string) $unitCostAfn, 2);
 
         $inventory->update([
             'quantity'            => $newQty,
             'available_quantity'  => $newQty - $inventory->reserved_quantity,
-            'average_cost_afn'    => round($newAvgCost, 2),
+            'average_cost_afn'    => $newAvgCost,
             'last_movement_at'    => now(),
             'user_id'             => Auth::id(),
         ]);

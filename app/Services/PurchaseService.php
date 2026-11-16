@@ -12,8 +12,12 @@ use App\Models\ProductPriceHistory;
 use App\Models\ProductVariant;
 use App\Models\Currency;
 use App\Models\User;
+use App\Services\ActivityLogger;
+use App\Support\FxBoard;
+use App\Support\Money;
 use App\Support\PurchaseValuation;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class PurchaseService
@@ -30,27 +34,70 @@ class PurchaseService
         return DB::transaction(function () use ($data, $actor, $branchId) {
             $variant = ProductVariant::with(['product', 'purchaseCurrency'])->findOrFail($data['variant_id']);
             $product = $variant->product;
-            $qty = $product?->quantityToBaseUnits((int) $data['quantity'], (string) ($data['quantity_unit'] ?? 'base'))
-                ?? (int) $data['quantity'];
+            $qty = (int) $data['quantity'];
             $salePrice = (float) $data['sale_price_afn'];
+            $profitOriginal = (float) ($data['profit_per_unit'] ?? 0);
+
+            $ledger = Currency::ledger();
+            $purchaseCurrency = ! empty($data['purchase_currency_id'])
+                ? Currency::query()->notTrashed()->findOrFail((int) $data['purchase_currency_id'])
+                : ($variant->purchaseCurrency
+                    ?? ($variant->purchase_currency_id ? Currency::query()->find($variant->purchase_currency_id) : $ledger));
+            $profitCurrency = ! empty($data['profit_currency_id'])
+                ? Currency::query()->notTrashed()->find((int) $data['profit_currency_id'])
+                : $ledger;
+
             $exchangeRate = (float) ($data['exchange_rate'] ?? 0);
-            $profitAfn = (float) ($data['profit_per_unit'] ?? 0);
-            $enteredAfn = (string) $data['purchase_price_afn'];
-            $purchaseCurrency = $variant->purchaseCurrency
-                ?? ($variant->purchase_currency_id ? Currency::query()->find($variant->purchase_currency_id) : Currency::ledger());
-            $originalUnit = $enteredAfn;
-            if ($purchaseCurrency && Currency::ledger() && $purchaseCurrency->id !== Currency::ledger()->id && $exchangeRate > 0) {
-                $originalUnit = number_format(((float) $enteredAfn) / $exchangeRate, 2, '.', '');
+            if ($exchangeRate < 0) {
+                throw ValidationException::withMessages([
+                    'exchange_rate' => 'Exchange rate cannot be negative.',
+                ]);
+            }
+
+            // Prefer original unit amount in the selected purchase currency.
+            if (isset($data['purchase_unit_amount']) && $data['purchase_unit_amount'] !== '' && $data['purchase_unit_amount'] !== null) {
+                $originalUnit = (string) $data['purchase_unit_amount'];
+            } elseif (
+                isset($data['purchase_price_afn'])
+                && $data['purchase_price_afn'] !== ''
+                && $data['purchase_price_afn'] !== null
+                && $purchaseCurrency
+                && $ledger
+                && $purchaseCurrency->id !== $ledger->id
+                && $exchangeRate > 0
+            ) {
+                // Legacy clients send AFN unit + exchange_rate for a non-AFN purchase currency.
+                $originalUnit = number_format(((float) $data['purchase_price_afn']) / $exchangeRate, 2, '.', '');
+            } elseif (isset($data['purchase_price_afn']) && $data['purchase_price_afn'] !== '' && $data['purchase_price_afn'] !== null) {
+                $originalUnit = (string) $data['purchase_price_afn'];
+                $purchaseCurrency = $ledger ?? $purchaseCurrency;
             } elseif ($variant->purchase_amount !== null && $variant->purchase_currency_id) {
                 $originalUnit = (string) $variant->purchase_amount;
                 $purchaseCurrency = $variant->purchaseCurrency ?? $purchaseCurrency;
+            } else {
+                $originalUnit = (string) ($variant->purchase_price_afn ?? '0');
+                $purchaseCurrency = $ledger ?? $purchaseCurrency;
             }
 
+            $rateOverrides = [];
+            if (! empty($data['usd_to_afn_rate']) && (float) $data['usd_to_afn_rate'] > 0) {
+                $rateOverrides['usd_to_afn'] = (string) $data['usd_to_afn_rate'];
+            }
+            if (! empty($data['aed_to_afn_rate']) && (float) $data['aed_to_afn_rate'] > 0) {
+                $rateOverrides['aed_to_afn'] = (string) $data['aed_to_afn_rate'];
+            }
+            if ($rateOverrides !== []) {
+                $rateOverrides['source'] = (string) ($data['rate_source'] ?? 'transaction');
+            }
+
+            $effectiveAt = $data['purchase_date'] ?? now();
             $money = $this->valuation->snapshot(
                 $originalUnit,
                 $qty,
                 $purchaseCurrency,
                 $exchangeRate > 0 ? (string) $exchangeRate : null,
+                $effectiveAt,
+                $rateOverrides,
             );
             $purchasePrice = (float) $money['unit_cost_afn'];
 
@@ -61,22 +108,10 @@ class PurchaseService
             if ($fundingSource === 'office' || empty($investorId) || $investorId === 'store' || $investorId === 'none') {
                 $investorId = null;
                 $investmentId = null;
-                $profitAfn = 0;
+                $profitOriginal = 0;
             }
 
-            if ($investorId && ! $investmentId) {
-                throw ValidationException::withMessages([
-                    'investment_id' => 'Select which investment capital pays for this stock.',
-                ]);
-            }
-
-            if ($investorId && $exchangeRate < 0) {
-                throw ValidationException::withMessages([
-                    'exchange_rate' => 'Exchange rate cannot be negative.',
-                ]);
-            }
-
-            if ($investorId && $profitAfn < 0) {
+            if ($investorId && $profitOriginal < 0) {
                 throw ValidationException::withMessages([
                     'profit_per_unit' => 'Investor profit cannot be negative.',
                 ]);
@@ -88,15 +123,80 @@ class PurchaseService
                 ]);
             }
 
+            // Compare receive-time sale AFN (request) vs this receive's PurchaseValuation AFN —
+            // never revalue the purchase with a later catalog/product-reference rate.
+            // Catalog variant.sale_price_afn must not silently substitute for either side.
             if ($salePrice < $purchasePrice) {
                 throw ValidationException::withMessages([
-                    'sale_price_afn' => 'Sale price cannot be less than the purchase price.',
+                    'sale_price_afn' => 'Sale price (AFN at receive) cannot be less than this purchase\'s historical AFN cost. '
+                        .'Catalog estimate rates are not used for this check.',
                 ]);
             }
 
-            $totalCostAfn = round($purchasePrice * $qty, 2);
+            $board = FxBoard::fromArray([
+                'usd_to_afn' => (string) ($money['usd_to_afn_rate'] ?? 0),
+                'aed_to_afn' => (string) ($money['aed_to_afn_rate'] ?? 0),
+                'usd_to_aed' => $money['usd_to_aed_rate'] ?? null,
+                'effective_at' => isset($money['rate_effective_at']) ? (string) $money['rate_effective_at'] : null,
+                'source' => (string) ($money['rate_source'] ?? 'operational'),
+                'kind' => (string) ($money['rate_kind'] ?? 'operational'),
+            ]);
+
+            $profitCode = strtoupper((string) ($profitCurrency?->code ?? $ledger?->code ?? 'AFN'));
+            if ($investorId && $profitOriginal > 0) {
+                $profitEq = $board->equivalents(Money::round((string) $profitOriginal, 4), $profitCode, 4);
+                $profitAfn = (float) Money::round($profitEq['afn'], 2);
+                $profitUsd = (float) $profitEq['usd'];
+                $profitAed = (float) $profitEq['aed'];
+            } else {
+                $profitOriginal = 0;
+                $profitAfn = 0.0;
+                $profitUsd = 0.0;
+                $profitAed = 0.0;
+                $profitCurrency = $ledger;
+                $profitCode = strtoupper((string) ($ledger?->code ?? 'AFN'));
+            }
+
+            // Preview-only company PPU at receive time (sale-time residual is authoritative).
+            // Do not silently clamp — insufficient coverage is enforced at sale time.
+            $storeProfitPerUnit = round($salePrice - $purchasePrice - $profitAfn, 2);
+
+            $totalCostAfn = (float) $money['line_cost_afn'];
 
             $investment = null;
+            if ($investorId && ! $investmentId) {
+                // Receiving investor goods is itself the contribution event.
+                // Do NOT increase the investor cash wallet — goods are in-kind capital.
+                $investment = Investment::create([
+                    'investor_id' => (int) $investorId,
+                    'source_type' => 'goods',
+                    'investment_number' => Investment::generateInvestmentNumber(),
+                    'currency_id' => $money['purchase_currency_id'],
+                    'currency_code' => $money['purchase_currency_code'],
+                    'currency_symbol' => $money['purchase_currency_symbol'],
+                    'exchange_rate' => $money['rate_to_ledger'],
+                    'usd_to_afn_rate' => $money['usd_to_afn_rate'] ?? null,
+                    'aed_to_afn_rate' => $money['aed_to_afn_rate'] ?? null,
+                    'usd_to_aed_rate' => $money['usd_to_aed_rate'] ?? null,
+                    'rate_effective_at' => $money['rate_effective_at'] ?? null,
+                    'rate_source' => $money['rate_source'] ?? null,
+                    'capital_amount_currency' => $money['purchase_line_amount'],
+                    'capital_amount_afn' => $totalCostAfn,
+                    'capital_amount_usd' => $money['line_amount_usd'] ?? null,
+                    'capital_amount_aed' => $money['line_amount_aed'] ?? null,
+                    'available_amount_currency' => $money['purchase_line_amount'],
+                    'available_amount_afn' => $totalCostAfn,
+                    'allocated_amount_afn' => 0,
+                    'profit_amount_afn' => 0,
+                    'withdrawn_amount_afn' => 0,
+                    'investment_date' => $data['purchase_date'],
+                    'status' => 'active',
+                    'notes' => 'Goods contribution created by product receiving.',
+                    'created_by' => $actor->id,
+                ]);
+                $investmentId = $investment->id;
+            }
+
             if ($investmentId) {
                 $investment = Investment::query()->lockForUpdate()->findOrFail($investmentId);
 
@@ -112,7 +212,10 @@ class PurchaseService
                     ]);
                 }
 
-                $available = (float) $investment->available_amount_afn;
+                $available = $investment->isGoodsInvestment()
+                    ? $investment->remainingGoodsCapitalAfn()
+                    : (float) $investment->available_amount_afn;
+
                 if ($totalCostAfn > $available + 0.01) {
                     throw ValidationException::withMessages([
                         'investment_id' => "Available capital is {$available} AFN, but this stock costs {$totalCostAfn} AFN.",
@@ -129,7 +232,7 @@ class PurchaseService
                 'user_id' => $actor->id,
             ]);
 
-            $purchaseRow = Product::create(array_merge([
+            $purchaseRowPayload = [
                 'name' => $product->name,
                 'brand_id' => $product->brand_id,
                 'gender' => $product->gender,
@@ -148,9 +251,20 @@ class PurchaseService
                 'profit_per_unit' => $profitAfn,
                 'line_total' => $totalCostAfn,
                 'line_profit' => $profitAfn * $qty,
+                'store_profit_per_unit' => $storeProfitPerUnit,
+                'line_store_profit' => round($storeProfitPerUnit * $qty, 2),
                 'notes' => $data['notes'] ?? null,
                 'payment_status' => ! empty($data['supplier_id']) ? 'unpaid' : 'paid',
-            ], [
+            ];
+
+            if (Schema::hasColumn('products', 'profit_currency_id')) {
+                $purchaseRowPayload['profit_currency_id'] = $profitCurrency?->id ?? $ledger?->id;
+            }
+            if (Schema::hasColumn('products', 'profit_currency_code')) {
+                $purchaseRowPayload['profit_currency_code'] = $profitCode;
+            }
+
+            $purchaseRow = Product::create(array_merge($purchaseRowPayload, [
                 'exchange_rate' => $money['exchange_rate'],
                 'purchase_currency_id' => $money['purchase_currency_id'],
                 'purchase_currency_code' => $money['purchase_currency_code'],
@@ -159,10 +273,21 @@ class PurchaseService
                 'purchase_line_amount' => $money['purchase_line_amount'],
                 'rate_to_ledger' => $money['rate_to_ledger'],
                 'rate_kind' => $money['rate_kind'],
-                'purchase_price_usd' => $money['purchase_price_usd'],
+                'usd_to_afn_rate' => $money['usd_to_afn_rate'] ?? null,
+                'aed_to_afn_rate' => $money['aed_to_afn_rate'] ?? null,
+                'usd_to_aed_rate' => $money['usd_to_aed_rate'] ?? null,
+                'rate_effective_at' => $money['rate_effective_at'] ?? null,
+                'rate_source' => $money['rate_source'] ?? null,
+                'unit_amount_usd' => $money['unit_amount_usd'] ?? null,
+                'unit_amount_aed' => $money['unit_amount_aed'] ?? null,
+                'line_amount_usd' => $money['line_amount_usd'] ?? null,
+                'line_amount_aed' => $money['line_amount_aed'] ?? null,
             ]));
 
-            $this->applyPaidNow($purchaseRow, (float) ($data['paid_now'] ?? 0), $actor->id);
+            // Goods contributions are in-kind — never invent a supplier cash payment.
+            if (! ($investment && $investment->isGoodsInvestment())) {
+                $this->applyPaidNow($purchaseRow, (float) ($data['paid_now'] ?? 0), $actor->id);
+            }
 
             $batch = $this->createProductBatch(
                 branchId: $branchId,
@@ -171,7 +296,16 @@ class PurchaseService
                 investorId: $investorId ? (int) $investorId : null,
                 qty: $qty,
                 unitCostAfn: $purchasePrice,
-                profitPerUnit: $profitAfn,
+                unitCostCurrency: (float) $money['purchase_unit_amount'],
+                exchangeRate: (float) $money['rate_to_ledger'],
+                profitPerUnitAfn: $profitAfn,
+                profitPerUnitOriginal: $profitOriginal,
+                profitCurrencyId: $profitCurrency?->id,
+                profitCurrencyCode: $profitCode,
+                profitPerUnitUsd: $profitUsd,
+                profitPerUnitAed: $profitAed,
+                storeProfitPerUnit: $storeProfitPerUnit,
+                salePriceAfn: $salePrice,
                 receivedDate: $data['purchase_date'],
                 userId: $actor->id,
             );
@@ -185,6 +319,7 @@ class PurchaseService
 
                 InvestmentProductAllocation::create([
                     'investment_id' => $investment->id,
+                    'investment_purchase_allocation_id' => $purchaseAllocation->id,
                     'batch_id' => $batch->id,
                     'variant_id' => $variant->id,
                     'funded_quantity' => $qty,
@@ -196,8 +331,6 @@ class PurchaseService
                     'profit_earned_afn' => 0,
                     'status' => 'active',
                 ]);
-
-                unset($purchaseAllocation);
             }
 
             $this->recordPriceChange(
@@ -251,11 +384,20 @@ class PurchaseService
         ?int $investorId,
         int $qty,
         float $unitCostAfn,
-        float $profitPerUnit,
+        float $unitCostCurrency,
+        float $exchangeRate,
+        float $profitPerUnitAfn,
+        float $profitPerUnitOriginal,
+        ?int $profitCurrencyId,
+        string $profitCurrencyCode,
+        float $profitPerUnitUsd,
+        float $profitPerUnitAed,
+        float $storeProfitPerUnit,
+        float $salePriceAfn,
         string $receivedDate,
         int $userId,
     ): ProductBatch {
-        return ProductBatch::create([
+        $payload = [
             'branch_id' => $branchId,
             'variant_id' => $variantId,
             'purchase_item_id' => $purchaseRowId,
@@ -265,12 +407,42 @@ class PurchaseService
             'remaining_quantity' => $qty,
             'unit_cost_afn' => $unitCostAfn,
             'total_cost_afn' => $unitCostAfn * $qty,
-            'profit_per_unit_afn' => $profitPerUnit,
+            'profit_per_unit_afn' => $profitPerUnitAfn,
             'received_date' => $receivedDate,
             'status' => 'active',
             'user_id' => $userId,
             'trash' => false,
-        ]);
+        ];
+
+        if (Schema::hasColumn('product_batches', 'unit_cost_currency')) {
+            $payload['unit_cost_currency'] = $unitCostCurrency;
+        }
+        if (Schema::hasColumn('product_batches', 'exchange_rate')) {
+            $payload['exchange_rate'] = $exchangeRate;
+        }
+        if (Schema::hasColumn('product_batches', 'profit_per_unit_currency')) {
+            $payload['profit_per_unit_currency'] = $profitPerUnitOriginal;
+        }
+        if (Schema::hasColumn('product_batches', 'store_profit_per_unit_afn')) {
+            $payload['store_profit_per_unit_afn'] = $storeProfitPerUnit;
+        }
+        if (Schema::hasColumn('product_batches', 'sale_price_afn')) {
+            $payload['sale_price_afn'] = $salePriceAfn;
+        }
+        if (Schema::hasColumn('product_batches', 'profit_currency_id')) {
+            $payload['profit_currency_id'] = $profitCurrencyId;
+        }
+        if (Schema::hasColumn('product_batches', 'profit_currency_code')) {
+            $payload['profit_currency_code'] = $profitCurrencyCode;
+        }
+        if (Schema::hasColumn('product_batches', 'profit_per_unit_usd')) {
+            $payload['profit_per_unit_usd'] = $profitPerUnitUsd;
+        }
+        if (Schema::hasColumn('product_batches', 'profit_per_unit_aed')) {
+            $payload['profit_per_unit_aed'] = $profitPerUnitAed;
+        }
+
+        return ProductBatch::create($payload);
     }
 
     private function recordPriceDropLoss(
@@ -362,7 +534,8 @@ class PurchaseService
     private function refreshVariantStock(Product $product): void
     {
         $product->variants()->get()->each(function (ProductVariant $variant) {
-            $totalStock = Product::where('variant_id', $variant->id)
+            $totalStock = ProductBatch::query()
+                ->where('variant_id', $variant->id)
                 ->where('trash', false)
                 ->sum('remaining_quantity');
 

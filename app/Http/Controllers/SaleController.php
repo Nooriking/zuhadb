@@ -15,9 +15,12 @@ use App\Models\ProductVariant;
 use App\Models\Receipt;
 use App\Models\Sale;
 use App\Models\SaleItem;
+use App\Models\SalePayment;
 use App\Models\SaleReturn;
 use App\Models\User;
+use App\Services\CurrencyService;
 use App\Services\SaleService;
+use App\Support\OriginalCurrencyMoney;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -33,6 +36,7 @@ class SaleController extends Controller
 {
     public function __construct(
         private readonly SaleService $sales,
+        private readonly CurrencyService $currency,
     ) {}
 
     /* =========================================================
@@ -101,11 +105,72 @@ class SaleController extends Controller
             )
             ->first();
 
+        $todaySales = (clone $statsQuery)->whereDate('sale_date', $today)->get([
+            'id', 'total_afn', 'total_profit_afn', 'remaining_due_afn',
+            'sale_currency_code', 'sale_currency_symbol', 'sale_amount_currency',
+            'usd_to_afn_rate', 'aed_to_afn_rate', 'usd_to_ledger_rate',
+        ]);
+        $dueSales = (clone $statsQuery)->where('remaining_due_afn', '>', 0)->get([
+            'id', 'total_afn', 'remaining_due_afn',
+            'sale_currency_code', 'sale_currency_symbol', 'sale_amount_currency',
+            'usd_to_afn_rate', 'aed_to_afn_rate', 'usd_to_ledger_rate',
+        ]);
+
+        $todaySalesByCurrency = OriginalCurrencyMoney::sumByCurrency(
+            $todaySales->map(function (Sale $sale) {
+                $money = OriginalCurrencyMoney::forSale($sale);
+
+                return [
+                    'code' => $money['code'],
+                    'symbol' => $money['symbol'],
+                    'amount' => $money['amount'],
+                    'ledger_afn' => $money['ledger_afn'],
+                ];
+            })
+        );
+        $todayProfitByCurrency = OriginalCurrencyMoney::sumByCurrency(
+            $todaySales->map(function (Sale $sale) {
+                $money = OriginalCurrencyMoney::forSale($sale);
+                $profitOriginal = OriginalCurrencyMoney::fromLedgerAfn(
+                    (float) $sale->total_profit_afn,
+                    $money['code'],
+                    $sale
+                );
+
+                return [
+                    'code' => $money['code'],
+                    'symbol' => $money['symbol'],
+                    'amount' => $profitOriginal,
+                    'ledger_afn' => round((float) $sale->total_profit_afn, 2),
+                ];
+            })
+        );
+        $dueByCurrency = OriginalCurrencyMoney::sumByCurrency(
+            $dueSales->map(function (Sale $sale) {
+                $money = OriginalCurrencyMoney::forSale($sale);
+                $dueOriginal = OriginalCurrencyMoney::fromLedgerAfn(
+                    (float) $sale->remaining_due_afn,
+                    $money['code'],
+                    $sale
+                );
+
+                return [
+                    'code' => $money['code'],
+                    'symbol' => $money['symbol'],
+                    'amount' => $dueOriginal,
+                    'ledger_afn' => round((float) $sale->remaining_due_afn, 2),
+                ];
+            })
+        );
+
         $stats = [
             'today_sales'  => (float) $statsRow->today_sales,
             'today_count'  => (int) $statsRow->today_count,
             'today_profit' => (float) $statsRow->today_profit,
             'total_due'    => (float) $statsRow->total_due,
+            'today_sales_by_currency' => $todaySalesByCurrency['list'],
+            'today_profit_by_currency' => $todayProfitByCurrency['list'],
+            'total_due_by_currency' => $dueByCurrency['list'],
             'avg_usd_rate' => round(ExchangeRateHistory::averageThisMonth(), 2),
             'latest_usd_rate' => (float) (ExchangeRateHistory::latestRate()?->usd_to_afn ?? 0),
         ];
@@ -132,9 +197,38 @@ class SaleController extends Controller
         }
 
         $sales->getCollection()->each(function (Sale $sale) use ($ratesByDate) {
+            $money = OriginalCurrencyMoney::forSale($sale);
+            $displayLedger = (float) ($sale->new_sale_amount_afn ?: $sale->total_afn);
+            $displayOriginal = $money['amount'];
+            if ($money['known'] && abs($displayLedger - (float) $sale->total_afn) > 0.009) {
+                $displayOriginal = OriginalCurrencyMoney::fromLedgerAfn($displayLedger, $money['code'], $sale);
+            }
+
+            $sale->setAttribute('sale_currency_code', $money['code']);
+            $sale->setAttribute('sale_currency_symbol', $money['symbol']);
+            $sale->setAttribute('sale_currency_known', $money['known']);
+            $sale->setAttribute('sale_currency_label', $money['label']);
+            $sale->setAttribute('display_amount', $displayOriginal);
+            $sale->setAttribute('display_amount_ledger_afn', round($displayLedger, 2));
+            $sale->setAttribute(
+                'display_paid',
+                OriginalCurrencyMoney::fromLedgerAfn((float) $sale->paid_afn, $money['code'], $sale)
+            );
+            $sale->setAttribute(
+                'display_remaining',
+                OriginalCurrencyMoney::fromLedgerAfn((float) $sale->remaining_due_afn, $money['code'], $sale)
+            );
+
             if ($sale->usd_to_ledger_rate !== null && (float) $sale->usd_to_ledger_rate > 0) {
                 $sale->setAttribute('exchange_rate', round((float) $sale->usd_to_ledger_rate, 4));
                 $sale->setAttribute('exchange_rate_kind', $sale->fx_rate_kind ?: 'catalog');
+
+                return;
+            }
+
+            if ($sale->usd_to_afn_rate !== null && (float) $sale->usd_to_afn_rate > 0) {
+                $sale->setAttribute('exchange_rate', round((float) $sale->usd_to_afn_rate, 4));
+                $sale->setAttribute('exchange_rate_kind', $sale->fx_rate_kind ?: 'board');
 
                 return;
             }
@@ -189,7 +283,7 @@ class SaleController extends Controller
             'variants'   => ProductVariant::query()
                 ->notTrashed()
                 ->with([
-                    'product:id,name,brand_id,base_unit_name,pack_unit_name,units_per_pack',
+                    'product:id,name,brand_id',
                     'product.brand:id,name',
                 ])
                 ->select(
@@ -200,6 +294,8 @@ class SaleController extends Controller
             'nextNumber' => Sale::generateInvoiceNumber(),
             'supplierCredits' => \App\Models\Product::supplierCredits(),
             'currencies' => Currency::formOptions(),
+            'fxBoard' => $this->currency->formBoardContext(now()),
+            'canManageRates' => (bool) $user?->canManageExchangeRates(),
         ]);
     }
 
@@ -210,17 +306,6 @@ class SaleController extends Controller
     public function store(StoreSaleRequest $request): RedirectResponse
     {
         $data = $request->validated();
-        foreach ($data['items'] as $index => $item) {
-            $variant = ProductVariant::query()->with('product')->find($item['variant_id']);
-            $product = $variant?->product;
-            if ($product) {
-                $data['items'][$index]['quantity'] = $product->quantityToBaseUnits(
-                    (int) $item['quantity'],
-                    (string) ($item['quantity_unit'] ?? 'base')
-                );
-            }
-            unset($data['items'][$index]['quantity_unit']);
-        }
 
         $sale = $this->sales->createSale($data, $request->user());
 
@@ -244,13 +329,91 @@ class SaleController extends Controller
             'items.variant.product:id,name',
             'items.variant.product.brand:id,name',
             'items.batch:id,batch_code,investor_id',
-            'items.batch.investor:id,full_name',
+            'items.batch.investor:id,name',
             'payments.receiver:id,name',
             'payments.customer:id,name,phone',
             'receipts',
         ]);
 
         $user = Auth::user();
+
+        $money = OriginalCurrencyMoney::forSale($sale);
+        $sale->setAttribute('sale_currency_known', $money['known']);
+        $sale->setAttribute('sale_currency_label', $money['label']);
+        $sale->setAttribute('display_total', $money['amount']);
+        $sale->setAttribute(
+            'display_subtotal',
+            OriginalCurrencyMoney::fromLedgerAfn((float) $sale->subtotal_afn, $money['code'], $sale)
+        );
+        $sale->setAttribute(
+            'display_discount',
+            OriginalCurrencyMoney::fromLedgerAfn((float) $sale->discount_afn, $money['code'], $sale)
+        );
+        $sale->setAttribute(
+            'display_paid',
+            OriginalCurrencyMoney::fromLedgerAfn((float) $sale->paid_afn, $money['code'], $sale)
+        );
+        $sale->setAttribute(
+            'display_remaining',
+            OriginalCurrencyMoney::fromLedgerAfn((float) $sale->remaining_due_afn, $money['code'], $sale)
+        );
+        $sale->setAttribute(
+            'display_previous_due',
+            OriginalCurrencyMoney::fromLedgerAfn((float) $sale->previous_due_afn, $money['code'], $sale)
+        );
+        $sale->setAttribute(
+            'display_new_sale_amount',
+            OriginalCurrencyMoney::fromLedgerAfn((float) ($sale->new_sale_amount_afn ?: $sale->total_afn), $money['code'], $sale)
+        );
+        $sale->setAttribute(
+            'display_grand_total_due',
+            OriginalCurrencyMoney::fromLedgerAfn((float) $sale->grand_total_due_afn, $money['code'], $sale)
+        );
+        $sale->setAttribute(
+            'display_profit',
+            OriginalCurrencyMoney::fromLedgerAfn((float) $sale->total_profit_afn, $money['code'], $sale)
+        );
+        $sale->setAttribute(
+            'display_cost',
+            OriginalCurrencyMoney::fromLedgerAfn((float) $sale->total_cost_afn, $money['code'], $sale)
+        );
+        $sale->setAttribute(
+            'display_store_profit',
+            OriginalCurrencyMoney::fromLedgerAfn((float) $sale->store_profit_afn, $money['code'], $sale)
+        );
+        $sale->setAttribute(
+            'display_investor_profit',
+            OriginalCurrencyMoney::fromLedgerAfn((float) $sale->total_investor_profit_afn, $money['code'], $sale)
+        );
+
+        $sale->items->each(function (SaleItem $item) use ($money, $sale) {
+            $item->setAttribute(
+                'display_line_total',
+                $item->sale_line_amount !== null
+                    ? round((float) $item->sale_line_amount, 2)
+                    : OriginalCurrencyMoney::fromLedgerAfn((float) $item->line_total_afn, $money['code'], $sale)
+            );
+            $item->setAttribute(
+                'display_unit_price',
+                $item->sale_unit_amount !== null
+                    ? round((float) $item->sale_unit_amount, 4)
+                    : OriginalCurrencyMoney::fromLedgerAfn((float) $item->sale_price_afn, $money['code'], $sale)
+            );
+            $item->setAttribute('display_currency_code', $item->sale_currency_code ?: $money['code']);
+        });
+
+        $sale->payments->each(function (SalePayment $payment) use ($money, $sale) {
+            $payCode = $payment->currency_code ?: $money['code'];
+            $payAmount = $payment->amount_currency !== null
+                ? round((float) $payment->amount_currency, 2)
+                : OriginalCurrencyMoney::fromLedgerAfn((float) $payment->amount_afn, $payCode, $sale);
+            $payment->setAttribute('display_amount', $payAmount);
+            $payment->setAttribute('display_currency_code', $payCode);
+            $payment->setAttribute(
+                'display_remaining_due',
+                OriginalCurrencyMoney::fromLedgerAfn((float) $payment->remaining_due_afn, $money['code'], $sale)
+            );
+        });
 
         return Inertia::render('sales/show', [
             'sale' => $sale,
@@ -330,7 +493,7 @@ class SaleController extends Controller
 
     /* =========================================================
      |  UPDATE
-     |  âœ… Ù†Ø§Ù… ÙÛŒÙ„Ø¯ ØµØ­ÛŒØ­: remaining_quantity
+     |  ✅ نام فیلد صحیح: remaining_quantity
      ========================================================= */
 
     public function update(UpdateSaleRequest $request, Sale $sale): RedirectResponse
@@ -350,9 +513,9 @@ class SaleController extends Controller
             $items = $data['items'];
             unset($data['items'], $data['payments']);
 
-            // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-            //  âœ… 1. REVERT: Ø¨Ø±Ú¯Ø±Ø¯Ø§Ù†Ø¯Ù† Ø§Ø«Ø± ÙØ±ÙˆØ´ Ù‚Ø¨Ù„ÛŒ
-            // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+            // ═══════════════════════════════════════════════════
+            //  ✅ 1. REVERT: برگرداندن اثر فروش قبلی
+            // ═══════════════════════════════════════════════════
 
             $sale->loadMissing(['items.batch']);
 
@@ -372,10 +535,10 @@ class SaleController extends Controller
                     }
                 }
             } else {
-                Log::warning('SaleController@update: Ø³ØªÙˆÙ† Ù…ÙˆØ¬ÙˆØ¯ÛŒ Ø¯Ø± product_batches Ù¾ÛŒØ¯Ø§ Ù†Ø´Ø¯.');
+                Log::warning('SaleController@update: ستون موجودی در product_batches پیدا نشد.');
             }
 
-            // Ø¨Ø±Ú¯Ø±Ø¯Ø§Ù†Ø¯Ù† Ù‚Ø±Ø¶ Ù…Ø´ØªØ±ÛŒ Ù‚Ø¨Ù„ÛŒ
+            // برگرداندن قرض مشتری قبلی
             if ($sale->customer_id && (float) $sale->remaining_due_afn > 0) {
                 $oldCustomer = Customer::lockForUpdate()->find($sale->customer_id);
                 if ($oldCustomer) {
@@ -383,12 +546,12 @@ class SaleController extends Controller
                 }
             }
 
-            // Ø­Ø°Ù SaleItem Ù‡Ø§ÛŒ Ù‚Ø¨Ù„ÛŒ
+            // حذف SaleItem های قبلی
             SaleItem::where('sale_id', $sale->id)->delete();
 
-            // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-            //  âœ… 2. RE-APPLY
-            // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+            // ═══════════════════════════════════════════════════
+            //  ✅ 2. RE-APPLY
+            // ═══════════════════════════════════════════════════
 
             if (! empty($data['customer_id']) && is_numeric($data['customer_id'])) {
                 $customer = Customer::find((int) $data['customer_id']);
@@ -434,7 +597,7 @@ class SaleController extends Controller
                 SaleItem::create($line);
             }
 
-            // Ø§Ø¹Ù…Ø§Ù„ Ù‚Ø±Ø¶ Ø¬Ø¯ÛŒØ¯ Ù…Ø´ØªØ±ÛŒ
+            // اعمال قرض جدید مشتری
             if ($sale->customer_id && (float) $sale->remaining_due_afn > 0) {
                 $newCustomer = Customer::lockForUpdate()->find($sale->customer_id);
                 if ($newCustomer) {
@@ -449,18 +612,18 @@ class SaleController extends Controller
     }
 
     /* =========================================================
-     |  ðŸ†˜ ØªØ´Ø®ÛŒØµ Ø®ÙˆØ¯Ú©Ø§Ø± Ù†Ø§Ù… ÙÛŒÙ„Ø¯ Ù…ÙˆØ¬ÙˆØ¯ÛŒ
-     |  âœ… Ù†Ø§Ù… ØµØ­ÛŒØ­: remaining_quantity
+     |  🆘 تشخیص خودکار نام فیلد موجودی
+     |  ✅ نام صحیح: remaining_quantity
      ========================================================= */
 
     private static ?string $batchQtyColumnCache = null;
     private static bool $batchQtyColumnChecked = false;
 
     /**
-     * Ù†Ø§Ù… ÙÛŒÙ„Ø¯ Ù…ÙˆØ¬ÙˆØ¯ÛŒ Ø¯Ø± product_batches Ø±Ø§ Ø¨Ø±Ù…ÛŒâ€ŒÚ¯Ø±Ø¯Ø§Ù†Ø¯.
+     * نام فیلد موجودی در product_batches را برمی‌گرداند.
      *
-     * âš ï¸ Ù†Ú©ØªÙ‡ Ù…Ù‡Ù…: 'quantity' Ø±Ø§ Ø¯Ø± Ù„ÛŒØ³Øª Ù†Ù…ÛŒâ€ŒÚ¯Ø°Ø§Ø±ÛŒÙ… Ú†ÙˆÙ† Ù…Ù‚Ø¯Ø§Ø± Ø§ÙˆÙ„ÛŒÙ‡ Ø§Ø³ØªØŒ
-     * Ù†Ù‡ Ù…ÙˆØ¬ÙˆØ¯ÛŒ ÙØ¹Ù„ÛŒ. Ù…ÙˆØ¬ÙˆØ¯ÛŒ ÙØ¹Ù„ÛŒ 'remaining_quantity' Ø§Ø³Øª.
+     * ⚠️ نکته مهم: 'quantity' را در لیست نمی‌گذاریم چون مقدار اولیه است،
+     * نه موجودی فعلی. موجودی فعلی 'remaining_quantity' است.
      */
     private static function detectBatchQtyColumn(): ?string
     {
@@ -473,8 +636,8 @@ class SaleController extends Controller
         try {
             $columns = Schema::getColumnListing('product_batches');
 
-            // âœ… 'remaining_quantity' Ø§ÙˆÙ„ÙˆÛŒØª Ø§ÙˆÙ„ â€” Ù†Ø§Ù… ÙˆØ§Ù‚Ø¹ÛŒ Ø¯Ø± Ù¾Ø±ÙˆÚ˜Ù‡
-            // âš ï¸ 'quantity' Ø­Ø°Ù Ø´Ø¯ Ú†ÙˆÙ† Ù…Ù‚Ø¯Ø§Ø± Ø§ÙˆÙ„ÛŒÙ‡ Ø§Ø³Øª
+            // ✅ 'remaining_quantity' اولویت اول — نام واقعی در پروژه
+            // ⚠️ 'quantity' حذف شد چون مقدار اولیه است
             $candidates = [
                 'remaining_quantity',
                 'remaining_qty',
@@ -492,13 +655,13 @@ class SaleController extends Controller
             foreach ($candidates as $col) {
                 if (in_array($col, $columns, true)) {
                     self::$batchQtyColumnCache = $col;
-                    Log::info("SaleController: Ø§Ø² Ø³ØªÙˆÙ† '{$col}' Ø¨Ø±Ø§ÛŒ Ù…ÙˆØ¬ÙˆØ¯ÛŒ product_batches Ø§Ø³ØªÙØ§Ø¯Ù‡ Ù…ÛŒâ€ŒØ´ÙˆØ¯.");
+                    Log::info("SaleController: از ستون '{$col}' برای موجودی product_batches استفاده می‌شود.");
                     return $col;
                 }
             }
 
             Log::error(
-                'SaleController: Ù‡ÛŒÚ† Ø³ØªÙˆÙ† Ù…ÙˆØ¬ÙˆØ¯ÛŒ Ø¯Ø± product_batches Ù¾ÛŒØ¯Ø§ Ù†Ø´Ø¯. Ø³ØªÙˆÙ†â€ŒÙ‡Ø§ÛŒ Ù…ÙˆØ¬ÙˆØ¯: '
+                'SaleController: هیچ ستون موجودی در product_batches پیدا نشد. ستون‌های موجود: '
                 . implode(', ', $columns)
             );
         } catch (\Throwable $e) {
@@ -779,6 +942,13 @@ class SaleController extends Controller
                     ->unique()
                     ->values();
 
+                $money = OriginalCurrencyMoney::forSale($sale);
+                $netOriginal = $money['amount'];
+                $returnOriginal = OriginalCurrencyMoney::fromLedgerAfn($returnAmount, $money['code'], $sale);
+                $grossOriginal = ($netOriginal !== null && $returnOriginal !== null)
+                    ? round($netOriginal + $returnOriginal, 2)
+                    : null;
+
                 return [
                     'id'                => $sale->id,
                     'invoice_number'    => $sale->invoice_number,
@@ -787,6 +957,12 @@ class SaleController extends Controller
                     'amount_afn'        => round($gross, 2),
                     'return_amount_afn' => round($returnAmount, 2),
                     'net_afn'           => round($net, 2),
+                    'currency_code'     => $money['code'],
+                    'currency_label'    => $money['label'],
+                    'currency_known'    => $money['known'],
+                    'amount_original'   => $grossOriginal,
+                    'return_amount_original' => $returnOriginal,
+                    'net_original'      => $netOriginal,
                     'return_type'       => $types->count() > 1 ? 'mixed' : ($types->first() ?: null),
                     'payment_status'    => $sale->payment_status,
                     'status'            => $sale->status,
@@ -813,6 +989,53 @@ class SaleController extends Controller
         $totalReturns = (float) $returnsBase()->sum('total_afn');
         $netSales = (float) $summaryRow->net_sales;
         $grossSales = $netSales + $totalReturns;
+
+        $salesForCurrency = $buildBase()->get([
+            'sales.id', 'sales.total_afn', 'sales.paid_afn', 'sales.remaining_due_afn',
+            'sales.sale_currency_code', 'sales.sale_currency_symbol', 'sales.sale_amount_currency',
+            'sales.usd_to_afn_rate', 'sales.aed_to_afn_rate', 'sales.usd_to_ledger_rate',
+        ]);
+        $returnsForCurrency = $returnsBase()
+            ->with(['sale:id,sale_currency_code,sale_currency_symbol,sale_amount_currency,usd_to_afn_rate,aed_to_afn_rate,usd_to_ledger_rate,total_afn'])
+            ->get(['id', 'sale_id', 'total_afn']);
+
+        $salesByCurrency = OriginalCurrencyMoney::sumByCurrency(
+            $salesForCurrency->map(function (Sale $sale) {
+                $money = OriginalCurrencyMoney::forSale($sale);
+
+                return [
+                    'code' => $money['code'],
+                    'symbol' => $money['symbol'],
+                    'amount' => $money['amount'],
+                    'ledger_afn' => $money['ledger_afn'],
+                ];
+            })
+        );
+        $returnsByCurrency = OriginalCurrencyMoney::sumByCurrency(
+            $returnsForCurrency->map(function (SaleReturn $saleReturn) {
+                $money = OriginalCurrencyMoney::forSaleReturn($saleReturn);
+
+                return [
+                    'code' => $money['code'],
+                    'symbol' => $money['symbol'],
+                    'amount' => $money['amount'],
+                    'ledger_afn' => $money['ledger_afn'],
+                ];
+            })
+        );
+        $grossByCurrencyBuckets = OriginalCurrencyMoney::emptyBuckets(true);
+        foreach ($grossByCurrencyBuckets as $code => $bucket) {
+            $grossByCurrencyBuckets[$code]['total'] = round(
+                (float) ($salesByCurrency['buckets'][$code]['total'] ?? 0)
+                + (float) ($returnsByCurrency['buckets'][$code]['total'] ?? 0),
+                2
+            );
+        }
+        $netByCurrency = OriginalCurrencyMoney::netBuckets(
+            $salesByCurrency['buckets'],
+            $returnsByCurrency['buckets'],
+            true
+        );
 
         $totalItems = DB::table('sale_items')
             ->join('sales', 'sale_items.sale_id', '=', 'sales.id')
@@ -845,6 +1068,10 @@ class SaleController extends Controller
             'avg_sale'        => $summaryRow->count > 0
                 ? round($netSales / (int) $summaryRow->count, 2)
                 : 0,
+            'gross_sales_by_currency' => OriginalCurrencyMoney::presentBuckets($grossByCurrencyBuckets, true),
+            'total_returns_by_currency' => $returnsByCurrency['list'],
+            'net_sales_by_currency' => $netByCurrency,
+            'total_sales_by_currency' => $salesByCurrency['list'],
         ];
 
         $byBranch = $buildBase()
@@ -944,8 +1171,8 @@ class SaleController extends Controller
                 product_variants.name as variant_name,
                 COALESCE(SUM(sale_items.quantity), 0) as total_quantity,
                 COALESCE(SUM(sale_items.line_total_afn), 0) as total_sales,
-                COALESCE(SUM(sale_items.store_profit_afn), 0) as total_profit,
-                COALESCE(SUM(sale_items.store_profit_afn - sale_items.investor_profit_afn), 0) as store_profit,
+                COALESCE(SUM(COALESCE(sale_items.gross_profit_afn, sale_items.store_profit_afn + sale_items.investor_profit_afn)), 0) as total_profit,
+                COALESCE(SUM(sale_items.store_profit_afn), 0) as store_profit,
                 COALESCE(SUM(sale_items.investor_profit_afn), 0) as investor_profit
             ')
             ->groupBy('sale_items.variant_id', 'products.name', 'product_variants.name')

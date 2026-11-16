@@ -1,6 +1,7 @@
 // resources/js/pages/sale-returns/index.tsx
 
 import { FilterField, IndexFilters } from '@/components/index-filters';
+import ByCurrencyAmounts from '@/components/money/by-currency-amounts';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -8,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
+import { formatOriginalAmount, type OriginalCurrencyTotal } from '@/lib/original-currency';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
 import { AlertTriangle, Calendar, DollarSign, Eye, Plus, RotateCcw, Trash2, TrendingDown } from 'lucide-react';
@@ -28,6 +30,13 @@ interface SaleReturn {
     status: 'draft' | 'completed' | 'cancelled';
     items_count: number;
     reason: string | null;
+    currency_code?: string | null;
+    currency_label?: string;
+    currency_known?: boolean;
+    display_amount?: number | null;
+    display_refund?: number | null;
+    display_previous_due?: number | null;
+    display_new_due?: number | null;
     sale: { id: number; invoice_number: string } | null;
     branch: { id: number; name: string; code: string } | null;
     customer: { id: number; name: string; phone: string | null } | null;
@@ -39,6 +48,8 @@ interface Stats {
     today_returns: number;
     total_amount: number;
     today_amount: number;
+    total_amount_by_currency?: OriginalCurrencyTotal[];
+    today_amount_by_currency?: OriginalCurrencyTotal[];
 }
 
 interface Props {
@@ -70,11 +81,6 @@ const breadcrumbs: BreadcrumbItem[] = [
 /* ═══════════════════════════════════════════════════════
  |  Helpers
  ═══════════════════════════════════════════════════════ */
-
-const formatPrice = (value: string | number, digits: number = 0) => {
-    const num = typeof value === 'string' ? parseFloat(value) : value;
-    return new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(num || 0);
-};
 
 const getStatusBadge = (status: string) => {
     const map: Record<string, { variant: 'outline' | 'success' | 'destructive'; label: string }> = {
@@ -194,7 +200,12 @@ export default function SaleReturnsIndex({ saleReturns, branches, filters, stats
                                 <p className="text-muted-foreground text-xs">Total Amount</p>
                                 <DollarSign className="h-4 w-4 text-green-500" />
                             </div>
-                            <p className="mt-1 text-xl font-bold text-green-600">{formatPrice(stats.total_amount)} AFN</p>
+                            <ByCurrencyAmounts
+                                amounts={stats.total_amount_by_currency}
+                                titlePrefix="برگشت"
+                                valueClassName="font-mono text-sm font-bold text-green-600"
+                                digits={2}
+                            />
                         </CardContent>
                     </Card>
                     <Card>
@@ -203,7 +214,12 @@ export default function SaleReturnsIndex({ saleReturns, branches, filters, stats
                                 <p className="text-muted-foreground text-xs">Today Amount</p>
                                 <TrendingDown className="h-4 w-4 text-red-500" />
                             </div>
-                            <p className="mt-1 text-xl font-bold text-red-600">{formatPrice(stats.today_amount)} AFN</p>
+                            <ByCurrencyAmounts
+                                amounts={stats.today_amount_by_currency}
+                                titlePrefix="برگشت"
+                                valueClassName="font-mono text-sm font-bold text-red-600"
+                                digits={2}
+                            />
                         </CardContent>
                     </Card>
                 </div>
@@ -263,7 +279,8 @@ export default function SaleReturnsIndex({ saleReturns, branches, filters, stats
                                 <TableHead>Original Sale</TableHead>
                                 <TableHead>Customer</TableHead>
                                 <TableHead>Date</TableHead>
-                                <TableHead className="text-right">Total AFN</TableHead>
+                                <TableHead>Currency</TableHead>
+                                <TableHead className="text-right">Total</TableHead>
                                 <TableHead className="text-right">Prev Due</TableHead>
                                 <TableHead className="text-right">New Due</TableHead>
                                 <TableHead className="text-right">Refund</TableHead>
@@ -274,15 +291,16 @@ export default function SaleReturnsIndex({ saleReturns, branches, filters, stats
                         <TableBody>
                             {saleReturns.data.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={11} className="text-muted-foreground h-24 text-center">
+                                    <TableCell colSpan={12} className="text-muted-foreground h-24 text-center">
                                         No sale returns found.
                                     </TableCell>
                                 </TableRow>
                             ) : (
                                 saleReturns.data.map((sr, index) => {
-                                    const prevDue = parseFloat(sr.previous_due_afn || '0');
-                                    const newDue = parseFloat(sr.new_due_afn || '0');
-                                    const refund = parseFloat(sr.refund_amount_afn || '0');
+                                    const code = sr.currency_known === false ? null : sr.currency_code;
+                                    const prevDue = sr.display_previous_due;
+                                    const newDue = sr.display_new_due;
+                                    const refund = sr.display_refund;
 
                                     return (
                                         <TableRow key={sr.id}>
@@ -309,19 +327,24 @@ export default function SaleReturnsIndex({ saleReturns, branches, filters, stats
                                                 )}
                                             </TableCell>
                                             <TableCell className="text-xs">{new Date(sr.return_date).toLocaleDateString('en-US')}</TableCell>
+                                            <TableCell className="text-xs font-semibold">
+                                                {sr.currency_label || (code ? code : 'Unknown')}
+                                            </TableCell>
                                             <TableCell className="text-right font-mono text-sm font-semibold text-green-600">
-                                                {formatPrice(sr.total_afn)} AFN
+                                                {formatOriginalAmount(sr.display_amount, code)}
                                             </TableCell>
                                             <TableCell className="text-right font-mono text-xs text-amber-600">
-                                                {prevDue > 0 ? formatPrice(prevDue) : '—'}
+                                                {prevDue != null && prevDue > 0 ? formatOriginalAmount(prevDue, code) : '—'}
                                             </TableCell>
                                             <TableCell className="text-right font-mono text-xs">
-                                                <span className={newDue > 0 ? 'text-red-600' : 'text-green-600'}>{formatPrice(newDue)}</span>
+                                                <span className={(newDue ?? 0) > 0 ? 'text-red-600' : 'text-green-600'}>
+                                                    {formatOriginalAmount(newDue, code)}
+                                                </span>
                                             </TableCell>
                                             <TableCell className="text-right font-mono text-xs">
-                                                {refund > 0 ? (
+                                                {refund != null && refund > 0 ? (
                                                     <Badge variant="destructive" className="text-[10px]">
-                                                        {formatPrice(refund)} AFN
+                                                        {formatOriginalAmount(refund, code)}
                                                     </Badge>
                                                 ) : (
                                                     '—'

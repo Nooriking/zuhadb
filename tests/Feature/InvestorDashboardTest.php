@@ -101,18 +101,22 @@ test('admin investor dashboard capital matches investor wallets and respects the
     $this->get('/investors')->assertOk()->assertInertia(fn ($page) => $page
         ->component('investors/index')
         ->where('stats.total_capital', fn ($value) => (float) $value === 1900.0)
-        ->where('stats.total_profit_paid', fn ($value) => (float) $value === 130.0)
+        ->where('stats.current_balance', fn ($value) => (float) $value === 1990.0)
+        ->where('stats.total_withdrawals', fn ($value) => (float) $value === 40.0)
+        ->where('stats.paid_profit', fn ($value) => (float) $value === 30.0)
+        ->where('stats.pending_profit', fn ($value) => (float) $value === 90.0)
+        ->has('kpi_sources.cash_capital')
+        ->has('kpi_sources.current_balance')
     );
 });
 
 test('investor users only see their own dashboard figures', function () {
     [$owner] = seedInvestorBooks();
-    $user = User::factory()->create(['role' => User::ROLE_INVESTOR]);
-    $owner->update(['user_id' => $user->id]);
 
     $money = app(CurrencyService::class);
 
-    $this->actingAs($user)
+    // Investor identity is the user row itself — act as the investor user.
+    $this->actingAs($owner)
         ->get('/dashboard')
         ->assertOk()
         ->assertInertia(fn ($page) => $page

@@ -6,12 +6,21 @@ import { Head, Link, router } from '@inertiajs/react';
 import { AlertTriangle, Boxes, DollarSign, Package, ShoppingBag, ShoppingCart, Store, TrendingUp, UserCircle, Users, Wallet } from 'lucide-react';
 import { lazy, Suspense, useState } from 'react';
 
+import ChartCurrencySelector from '@/components/dashboard/chart-currency-selector';
 import CurrencyNote, { type DashboardReporting } from '@/components/dashboard/currency-note';
 import KpiCard from '@/components/dashboard/kpi-card';
 import LowStock from '@/components/dashboard/low-stock';
 import RecentSales from '@/components/dashboard/recent-sales';
+import ThreeCurrencyAmountView from '@/components/dashboard/three-currency-amount';
 import { LazyInView } from '@/components/lazy-in-view';
 import { formatMoney } from '@/lib/money';
+import {
+    chartSeriesFromTri,
+    pickChartAmount,
+    type ChartCurrency,
+    type DashboardFxBoard,
+    type ThreeCurrencyAmount,
+} from '@/lib/three-currency';
 
 const SalesChart = lazy(() => import('@/components/dashboard/sales-chart'));
 const BrandPie = lazy(() => import('@/components/dashboard/brand-pie'));
@@ -52,11 +61,14 @@ interface SalesTrendPoint {
     sales: number;
     profit: number;
     count: number;
+    sales_3c?: ThreeCurrencyAmount | null;
+    profit_3c?: ThreeCurrencyAmount | null;
 }
 
 interface BrandSale {
     name: string;
     value: number;
+    value_3c?: ThreeCurrencyAmount | null;
 }
 
 interface TopProduct {
@@ -68,6 +80,8 @@ interface TopProduct {
     total_profit: number;
     total_sales_ledger?: number;
     total_profit_ledger?: number;
+    total_sales_3c?: ThreeCurrencyAmount | null;
+    total_profit_3c?: ThreeCurrencyAmount | null;
 }
 
 interface BranchStat {
@@ -77,11 +91,14 @@ interface BranchStat {
     sales: number;
     profit: number;
     orders: number;
+    sales_3c?: ThreeCurrencyAmount | null;
+    profit_3c?: ThreeCurrencyAmount | null;
 }
 
 interface PaymentMethod {
     name: string;
     value: number;
+    value_3c?: ThreeCurrencyAmount | null;
 }
 
 interface PaymentCurrencyTotal {
@@ -104,6 +121,7 @@ interface RecentSale {
     invoice_number: string;
     total_afn: number;
     total_ledger?: number;
+    total_3c?: ThreeCurrencyAmount | null;
     ledger_currency_code?: string | null;
     payment_status: string;
     status: string;
@@ -133,6 +151,11 @@ interface StoreAssetsSummary {
     realized_qty: number;
     realized_profit_afn: number;
     total_profit_afn: number;
+    remaining_cost_3c?: ThreeCurrencyAmount | null;
+    total_cost_3c?: ThreeCurrencyAmount | null;
+    expected_profit_3c?: ThreeCurrencyAmount | null;
+    realized_sales_3c?: ThreeCurrencyAmount | null;
+    realized_profit_3c?: ThreeCurrencyAmount | null;
 }
 
 interface StoreAssetItem {
@@ -160,6 +183,7 @@ interface StoreAssets {
 interface Props {
     days: number;
     kpis: Kpis;
+    kpis3c?: Partial<Record<keyof Omit<Kpis, 'today_orders' | 'sales_growth'>, ThreeCurrencyAmount | null>> | null;
     salesTrend: SalesTrendPoint[];
     brandSales: BrandSale[];
     topProducts: TopProduct[];
@@ -176,10 +200,12 @@ interface Props {
         phone: string | null;
         current_due_afn: number;
         current_due_ledger?: number;
+        current_due_3c?: ThreeCurrencyAmount | null;
         due_date: string | null;
     }[];
     storeAssets?: StoreAssets;
     reporting: DashboardReporting;
+    fxBoard?: DashboardFxBoard | null;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -202,6 +228,7 @@ const FALLBACK_REPORTING: DashboardReporting = {
 export default function Dashboard({
     days,
     kpis,
+    kpis3c = null,
     salesTrend,
     brandSales,
     topProducts,
@@ -215,12 +242,31 @@ export default function Dashboard({
     dueCustomers = [],
     storeAssets,
     reporting = FALLBACK_REPORTING,
+    fxBoard = null,
 }: Props) {
     const [range, setRange] = useState(days);
+    const [chartCurrency, setChartCurrency] = useState<ChartCurrency>('AFN');
     const currency = reporting.currency;
     const currencyCode = currency.code;
     const money = (value: number) => formatMoney(value, currency);
     const showPaymentBuckets = paymentCurrencyTotals.length > 1 || (!reporting.conversion_available && paymentCurrencyTotals.length > 0);
+    const chartFxAvailable = Boolean(fxBoard?.available);
+    const chartLabel =
+        chartCurrency === 'AFN' ? chartCurrency : `${chartCurrency} · reporting-date FX board`;
+    const salesTrendChart = chartSeriesFromTri(salesTrend, chartCurrency);
+    const brandChartData = brandSales.map((row) => ({
+        name: row.name,
+        value: pickChartAmount(row.value_3c, chartCurrency) ?? (chartCurrency === 'AFN' ? Number(row.value) : 0),
+    }));
+    const paymentChartData = paymentMethods.map((row) => ({
+        name: row.name,
+        value: pickChartAmount(row.value_3c, chartCurrency) ?? (chartCurrency === 'AFN' ? Number(row.value) : 0),
+    }));
+    const branchChartData = branchStats.map((row) => ({
+        ...row,
+        sales: pickChartAmount(row.sales_3c, chartCurrency) ?? (chartCurrency === 'AFN' ? Number(row.sales) : 0),
+        profit: pickChartAmount(row.profit_3c, chartCurrency) ?? (chartCurrency === 'AFN' ? Number(row.profit) : 0),
+    }));
 
     const changeRange = (newDays: number) => {
         setRange(newDays);
@@ -238,24 +284,31 @@ export default function Dashboard({
                         <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
                         <p className="text-muted-foreground text-sm">Overview of your perfume business</p>
                         <div className="mt-2">
-                            <CurrencyNote reporting={reporting} originalCurrencyTotals={paymentCurrencyTotals} />
+                            <CurrencyNote reporting={reporting} originalCurrencyTotals={paymentCurrencyTotals} fxBoard={fxBoard} />
                         </div>
                     </div>
 
-                    <div className="bg-card flex gap-1 rounded-md border p-1">
-                        {[7, 30, 90].map((d) => (
-                            <button
-                                key={d}
-                                onClick={() => changeRange(d)}
-                                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                                    range === d
-                                        ? 'bg-primary text-primary-foreground'
-                                        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-                                }`}
-                            >
-                                {d} Days
-                            </button>
-                        ))}
+                    <div className="flex flex-wrap items-center gap-2">
+                        <ChartCurrencySelector
+                            value={chartCurrency}
+                            onChange={setChartCurrency}
+                            available={chartFxAvailable}
+                        />
+                        <div className="bg-card flex gap-1 rounded-md border p-1">
+                            {[7, 30, 90].map((d) => (
+                                <button
+                                    key={d}
+                                    onClick={() => changeRange(d)}
+                                    className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                                        range === d
+                                            ? 'bg-primary text-primary-foreground'
+                                            : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                                    }`}
+                                >
+                                    {d} Days
+                                </button>
+                            ))}
+                        </div>
                     </div>
                 </div>
 
@@ -264,6 +317,7 @@ export default function Dashboard({
                     <KpiCard
                         title="Today Sales"
                         value={money(kpis.today_sales)}
+                        threeCurrency={kpis3c?.today_sales}
                         subtitle={`${kpis.today_orders} completed orders`}
                         icon={ShoppingBag}
                         color="blue"
@@ -271,6 +325,7 @@ export default function Dashboard({
                     <KpiCard
                         title="Collected Today"
                         value={money(kpis.today_collected)}
+                        threeCurrency={kpis3c?.today_collected}
                         subtitle="Payments received today"
                         icon={Wallet}
                         color="green"
@@ -278,6 +333,7 @@ export default function Dashboard({
                     <KpiCard
                         title="Today Profit"
                         value={money(kpis.today_profit)}
+                        threeCurrency={kpis3c?.today_profit}
                         subtitle="Store profit after investor share"
                         icon={TrendingUp}
                         color="green"
@@ -285,6 +341,7 @@ export default function Dashboard({
                     <KpiCard
                         title="Customer Due"
                         value={money(kpis.outstanding_due)}
+                        threeCurrency={kpis3c?.outstanding_due}
                         subtitle="Money customers still owe"
                         icon={AlertTriangle}
                         color={kpis.outstanding_due > 0 ? 'red' : 'green'}
@@ -295,6 +352,7 @@ export default function Dashboard({
                     <KpiCard
                         title="Month Sales"
                         value={money(kpis.month_sales)}
+                        threeCurrency={kpis3c?.month_sales}
                         subtitle="Completed sales this month"
                         icon={DollarSign}
                         color="purple"
@@ -310,6 +368,7 @@ export default function Dashboard({
                     <KpiCard
                         title="Month Profit"
                         value={money(kpis.month_profit)}
+                        threeCurrency={kpis3c?.month_profit}
                         subtitle="Store profit this month"
                         icon={TrendingUp}
                         color="green"
@@ -317,6 +376,7 @@ export default function Dashboard({
                     <KpiCard
                         title="Month Expenses"
                         value={money(kpis.month_expenses)}
+                        threeCurrency={kpis3c?.month_expenses}
                         subtitle="Recorded expenses"
                         icon={ShoppingCart}
                         color="orange"
@@ -324,6 +384,7 @@ export default function Dashboard({
                     <KpiCard
                         title="Month Net"
                         value={money(kpis.month_net)}
+                        threeCurrency={kpis3c?.month_net}
                         subtitle="Store profit − expenses"
                         icon={Wallet}
                         color={kpis.month_net >= 0 ? 'green' : 'red'}
@@ -437,9 +498,13 @@ export default function Dashboard({
                                     <div className="flex items-center gap-2 text-xs font-medium text-slate-700 uppercase dark:text-slate-400">
                                         <DollarSign className="h-3.5 w-3.5" /> Stock Value
                                     </div>
-                                    <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-300">
-                                        {money(storeAssets.summary.remaining_cost_afn)}
-                                    </p>
+                                    {storeAssets.summary.remaining_cost_3c ? (
+                                        <ThreeCurrencyAmountView amounts={storeAssets.summary.remaining_cost_3c} />
+                                    ) : (
+                                        <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-300">
+                                            {money(storeAssets.summary.remaining_cost_afn)}
+                                        </p>
+                                    )}
                                     <p className="text-xs text-slate-600 dark:text-slate-500">At cost</p>
                                 </div>
 
@@ -447,9 +512,13 @@ export default function Dashboard({
                                     <div className="flex items-center gap-2 text-xs font-medium text-emerald-800 uppercase dark:text-emerald-400">
                                         <TrendingUp className="h-3.5 w-3.5" /> Expected
                                     </div>
-                                    <p className="mt-2 text-2xl font-bold text-emerald-900 dark:text-emerald-300">
-                                        {money(storeAssets.summary.expected_profit_afn)}
-                                    </p>
+                                    {storeAssets.summary.expected_profit_3c ? (
+                                        <ThreeCurrencyAmountView amounts={storeAssets.summary.expected_profit_3c} />
+                                    ) : (
+                                        <p className="mt-2 text-2xl font-bold text-emerald-900 dark:text-emerald-300">
+                                            {money(storeAssets.summary.expected_profit_afn)}
+                                        </p>
+                                    )}
                                     <p className="text-xs text-emerald-700 dark:text-emerald-500">If all stock sells</p>
                                 </div>
 
@@ -457,9 +526,13 @@ export default function Dashboard({
                                     <div className="flex items-center gap-2 text-xs font-medium text-amber-800 uppercase dark:text-amber-400">
                                         <ShoppingCart className="h-3.5 w-3.5" /> Realized
                                     </div>
-                                    <p className="mt-2 text-2xl font-bold text-amber-900 dark:text-amber-300">
-                                        {money(storeAssets.summary.realized_profit_afn)}
-                                    </p>
+                                    {storeAssets.summary.realized_profit_3c ? (
+                                        <ThreeCurrencyAmountView amounts={storeAssets.summary.realized_profit_3c} />
+                                    ) : (
+                                        <p className="mt-2 text-2xl font-bold text-amber-900 dark:text-amber-300">
+                                            {money(storeAssets.summary.realized_profit_afn)}
+                                        </p>
+                                    )}
                                     <p className="text-xs text-amber-700 dark:text-amber-500">{storeAssets.summary.realized_qty} pcs sold</p>
                                 </div>
 
@@ -569,14 +642,20 @@ export default function Dashboard({
                                                 {customer.phone && <div className="text-muted-foreground text-xs">{customer.phone}</div>}
                                             </td>
                                             <td className="py-2 text-right font-mono">
-                                                <div>{money(customer.current_due_afn)}</div>
-                                                {customer.current_due_ledger !== undefined &&
-                                                    reporting.converts_from_ledger &&
-                                                    reporting.conversion_available && (
-                                                        <div className="text-muted-foreground text-xs">
-                                                            {formatMoney(customer.current_due_ledger, reporting.ledger)}
-                                                        </div>
-                                                    )}
+                                                {customer.current_due_3c ? (
+                                                    <ThreeCurrencyAmountView amounts={customer.current_due_3c} layout="compact" />
+                                                ) : (
+                                                    <>
+                                                        <div>{money(customer.current_due_afn)}</div>
+                                                        {customer.current_due_ledger !== undefined &&
+                                                            reporting.converts_from_ledger &&
+                                                            reporting.conversion_available && (
+                                                                <div className="text-muted-foreground text-xs">
+                                                                    {formatMoney(customer.current_due_ledger, reporting.ledger)}
+                                                                </div>
+                                                            )}
+                                                    </>
+                                                )}
                                             </td>
                                             <td className="py-2">{customer.due_date || '—'}</td>
                                         </tr>
@@ -593,13 +672,13 @@ export default function Dashboard({
                         <div>
                             <h3 className="text-lg font-semibold">Sales & Profit Trend</h3>
                             <p className="text-muted-foreground text-sm">
-                                Completed sales and store profit for the last {days} days ({currencyCode})
+                                Completed sales and store profit for the last {days} days ({chartLabel})
                             </p>
                         </div>
                     </div>
                     <LazyInView minHeight={280}>
                         <Suspense fallback={<div className="bg-muted/40 h-[280px] animate-pulse rounded-xl" />}>
-                            <SalesChart data={salesTrend} currencyCode={currencyCode} />
+                            <SalesChart data={salesTrendChart} currencyCode={chartCurrency} />
                         </Suspense>
                     </LazyInView>
                 </div>
@@ -608,21 +687,21 @@ export default function Dashboard({
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                     <div className="bg-card rounded-lg border p-6 shadow-sm">
                         <h3 className="mb-1 text-lg font-semibold">Sales by Brand</h3>
-                        <p className="text-muted-foreground mb-4 text-sm">Reporting currency: {currencyCode}</p>
+                        <p className="text-muted-foreground mb-4 text-sm">Chart currency: {chartLabel}</p>
                         <LazyInView minHeight={280}>
                             <Suspense fallback={<div className="bg-muted/40 h-[280px] animate-pulse rounded-xl" />}>
-                                <BrandPie data={brandSales} currencyCode={currencyCode} />
+                                <BrandPie data={brandChartData} currencyCode={chartCurrency} />
                             </Suspense>
                         </LazyInView>
                     </div>
                     <div className="bg-card rounded-lg border p-6 shadow-sm">
                         <h3 className="text-lg font-semibold">Payments & Due</h3>
                         <p className="text-muted-foreground mb-4 text-sm">
-                            Collected by method, plus remaining due ({currencyCode})
+                            Collected by method, plus remaining due ({chartLabel})
                         </p>
                         <LazyInView minHeight={280}>
                             <Suspense fallback={<div className="bg-muted/40 h-[280px] animate-pulse rounded-xl" />}>
-                                <PaymentPie data={paymentMethods} currencyCode={currencyCode} />
+                                <PaymentPie data={paymentChartData} currencyCode={chartCurrency} />
                             </Suspense>
                         </LazyInView>
                     </div>
@@ -631,10 +710,10 @@ export default function Dashboard({
                 {/* ═══════════ Branch Bar Chart ═══════════ */}
                 <div className="bg-card rounded-lg border p-6 shadow-sm">
                     <h3 className="mb-1 text-lg font-semibold">Branch Performance</h3>
-                    <p className="text-muted-foreground mb-4 text-sm">Reporting currency: {currencyCode}</p>
+                    <p className="text-muted-foreground mb-4 text-sm">Chart currency: {chartLabel}</p>
                     <LazyInView minHeight={280}>
                         <Suspense fallback={<div className="bg-muted/40 h-[280px] animate-pulse rounded-xl" />}>
-                            <BranchBar data={branchStats} currencyCode={currencyCode} />
+                            <BranchBar data={branchChartData} currencyCode={chartCurrency} />
                         </Suspense>
                     </LazyInView>
                 </div>

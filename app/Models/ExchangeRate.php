@@ -17,12 +17,13 @@ class ExchangeRate extends Model
         'to_currency_id',
         'rate',
         'effective_at',
+        'source',
         'created_by',
         'trash',
     ];
 
     protected $casts = [
-        'rate'         => 'decimal:6',
+        'rate'         => 'decimal:8',
         'effective_at' => 'datetime',
         'trash'        => 'boolean',
         'created_at'   => 'datetime',

@@ -2,8 +2,8 @@
 
 import { MoneyField } from '@/components/money-field';
 import { ProductExchangeRateFields, type ExchangeRateContext } from '@/components/product-exchange-rate-fields';
-import { UnitConversionFields } from '@/components/unit-conversion-fields';
-import { defaultCurrencyId, type CatalogCurrency } from '@/lib/currencies';
+import { defaultCurrencyId, findCurrency, type CatalogCurrency } from '@/lib/currencies';
+import { calcProfits, estimateToAfn, formatEstimate as fmt } from '@/lib/product-estimate';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -26,9 +26,11 @@ import {
     Save,
     Scan,
     Star,
+    Store,
     Trash2,
     TrendingUp,
     User,
+    Wallet,
     X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -90,7 +92,6 @@ interface Purchase {
     investor_id: string;
     supplier_id: string;
     quantity: string;
-    quantity_unit: 'base' | 'pack';
     profit_per_unit: string;
     profit_currency_id: string;
     line_total: string;
@@ -99,7 +100,6 @@ interface Purchase {
     purchase_date: string;
     payment_status: string;
     paid_now: string;
-    exchange_rate: string;
     notes: string;
     billImage?: File | null;
     bill_image_url?: string | null;
@@ -112,9 +112,6 @@ interface ProductData {
     gender: 'male' | 'female' | 'unisex';
     status: 'active' | 'inactive';
     description: string | null;
-    base_unit_name?: string | null;
-    pack_unit_name?: string | null;
-    units_per_pack?: string | number | null;
     variants: {
         id: number;
         volume_ml: number | null;
@@ -152,6 +149,8 @@ interface PurchaseData {
     payment_status: string | null;
     exchange_rate: string | null;
     profit_per_unit: string;
+    profit_currency_id?: number | null;
+    profit_currency_code?: string | null;
     line_total: string;
     line_profit: string;
     notes: string | null;
@@ -238,7 +237,6 @@ const newPurchase = (variantIndex: number): Purchase => ({
     investor_id: 'store',
     supplier_id: 'none',
     quantity: '1',
-    quantity_unit: 'base',
     profit_per_unit: '0',
     profit_currency_id: '',
     line_total: '0',
@@ -247,7 +245,6 @@ const newPurchase = (variantIndex: number): Purchase => ({
     purchase_date: today(),
     payment_status: 'paid',
     paid_now: '',
-    exchange_rate: '',
     notes: '',
     billImage: null,
 });
@@ -274,23 +271,21 @@ const toVariant = (v: any): Variant => ({
     })),
 });
 
-const toPurchase = (p: any, variantIndex: number): Purchase => ({
+const toPurchase = (p: any, variantIndex: number, ledgerCurrencyId: string): Purchase => ({
     _key: Math.random().toString(36).slice(2),
     id: p.id,
     variant_index: variantIndex,
     investor_id: p.investor_id ? String(p.investor_id) : 'store',
     supplier_id: p.supplier_id ? String(p.supplier_id) : 'none',
     quantity: String(p.quantity || 1),
-    quantity_unit: 'base',
     profit_per_unit: String(p.profit_per_unit || 0),
-    profit_currency_id: '',
+    profit_currency_id: p.profit_currency_id ? String(p.profit_currency_id) : ledgerCurrencyId,
     line_total: String(p.line_total || 0),
     line_profit: String(p.line_profit || 0),
     invoice_number: p.invoice_number || '',
     purchase_date: p.purchase_date || today(),
     payment_status: p.payment_status || 'paid',
     paid_now: '',
-    exchange_rate: p.exchange_rate ? String(p.exchange_rate) : '',
     notes: p.notes || '',
     billImage: null,
     bill_image_url: p.bill_image || null,
@@ -354,9 +349,6 @@ export default function ProductsEdit({
         gender: product.gender || 'unisex',
         status: product.status || 'active',
         description: product.description || '',
-        base_unit_name: product.base_unit_name || '',
-        pack_unit_name: product.pack_unit_name || '',
-        units_per_pack: product.units_per_pack != null ? String(product.units_per_pack) : '',
         usd_to_afn_rate: usd_to_afn_rate ? String(usd_to_afn_rate) : '',
         usd_to_aed_rate: usd_to_aed_rate ? String(usd_to_aed_rate) : '',
     });
@@ -369,13 +361,13 @@ export default function ProductsEdit({
     /* ─── Purchases ─── */
     const [purchases, setPurchases] = useState<Purchase[]>(() => {
         if (initialPurchases.length === 0) {
-            return [newPurchase(0)];
+            return [{ ...newPurchase(0), profit_currency_id: ledgerCurrencyId }];
         }
 
         // Map variant_id → index
         return initialPurchases.map((p) => {
             const idx = product.variants.findIndex((v) => v.id === p.variant_id);
-            return toPurchase(p, idx >= 0 ? idx : 0);
+            return toPurchase(p, idx >= 0 ? idx : 0, ledgerCurrencyId);
         });
     });
 
@@ -645,15 +637,33 @@ export default function ProductsEdit({
             const copy = [...prev];
             const p = copy[index];
             const variant = variants[p.variant_index];
+            const ledgerCur = findCurrency(currencies, ledgerCurrencyId);
+            const refUsdToAfn = toNum(form.usd_to_afn_rate);
+            const refUsdToAed = toNum(form.usd_to_aed_rate);
 
             const qty = toNum(p.quantity);
-            const unitPrice = toNum(variant?.purchase_price_afn);
-            const profit = toNum(p.profit_per_unit);
+            // Line totals shown as AFN estimates — original purchase currency stays on the MoneyField.
+            const unitAfn =
+                estimateToAfn(
+                    toNum(variant?.purchase_price_afn),
+                    findCurrency(currencies, variant?.purchase_currency_id || ledgerCurrencyId),
+                    ledgerCur,
+                    refUsdToAfn,
+                    refUsdToAed,
+                ) ?? toNum(variant?.purchase_price_afn);
+            const profitAfn =
+                estimateToAfn(
+                    toNum(p.profit_per_unit),
+                    findCurrency(currencies, p.profit_currency_id || ledgerCurrencyId),
+                    ledgerCur,
+                    refUsdToAfn,
+                    refUsdToAed,
+                ) ?? toNum(p.profit_per_unit);
 
-            p.line_total = (unitPrice * qty).toFixed(2);
+            p.line_total = (unitAfn * qty).toFixed(2);
 
             if (isInvestorPurchase(p.investor_id)) {
-                p.line_profit = (qty * profit).toFixed(2);
+                p.line_profit = (qty * profitAfn).toFixed(2);
             } else {
                 p.line_profit = '0';
             }
@@ -772,11 +782,34 @@ export default function ProductsEdit({
             }
         });
 
+        const refUsdToAfn = toNum(form.usd_to_afn_rate);
+        const refUsdToAed = toNum(form.usd_to_aed_rate);
+        const ledgerCur = findCurrency(currencies, ledgerCurrencyId);
+
         variants.forEach((v, i) => {
             if (!v.sale_price_afn || toNum(v.sale_price_afn) < 0 || toNum(v.purchase_price_afn) < 0) {
                 clientErrors[`variants.${i}.sale_price_afn`] = 'Prices cannot be negative.';
-            } else if (toNum(v.sale_price_afn) < toNum(v.purchase_price_afn)) {
-                clientErrors[`variants.${i}.sale_price_afn`] = 'Sale price cannot be less than the purchase price.';
+                return;
+            }
+
+            const costAfn = estimateToAfn(
+                toNum(v.purchase_price_afn),
+                findCurrency(currencies, v.purchase_currency_id || ledgerCurrencyId),
+                ledgerCur,
+                refUsdToAfn,
+                refUsdToAed,
+            );
+            const saleAfn = estimateToAfn(
+                toNum(v.sale_price_afn),
+                findCurrency(currencies, v.sale_currency_id || ledgerCurrencyId),
+                ledgerCur,
+                refUsdToAfn,
+                refUsdToAed,
+            );
+
+            if (costAfn !== null && saleAfn !== null && saleAfn < costAfn) {
+                clientErrors[`variants.${i}.sale_price_afn`] =
+                    'Estimated selling price (AFN) cannot be less than estimated purchase cost (AFN). Currencies are converted before comparison.';
             }
         });
 
@@ -784,8 +817,42 @@ export default function ProductsEdit({
             if (toNum(p.quantity) <= 0) {
                 clientErrors[`purchases.${i}.quantity`] = 'Quantity must be greater than 0';
             }
-            if (isInvestorPurchase(p.investor_id) && toNum(p.profit_per_unit) <= 0) {
-                clientErrors[`purchases.${i}.profit_per_unit`] = 'Profit per unit is required for investor purchases';
+
+            if (!p.investor_id || p.investor_id === '' || p.investor_id === 'none') {
+                clientErrors[`purchases.${i}.investor_id`] = 'Please select an owner (Shop or an investor)';
+            }
+
+            if (isInvestorPurchase(p.investor_id)) {
+                const variant = variants[p.variant_index];
+                const costAfn = estimateToAfn(
+                    toNum(variant?.purchase_price_afn),
+                    findCurrency(currencies, variant?.purchase_currency_id || ledgerCurrencyId),
+                    ledgerCur,
+                    refUsdToAfn,
+                    refUsdToAed,
+                );
+                const saleAfn = estimateToAfn(
+                    toNum(variant?.sale_price_afn),
+                    findCurrency(currencies, variant?.sale_currency_id || ledgerCurrencyId),
+                    ledgerCur,
+                    refUsdToAfn,
+                    refUsdToAed,
+                );
+                const investorAfn = estimateToAfn(
+                    toNum(p.profit_per_unit),
+                    findCurrency(currencies, p.profit_currency_id || ledgerCurrencyId),
+                    ledgerCur,
+                    refUsdToAfn,
+                    refUsdToAed,
+                );
+                const totalProfit = costAfn !== null && saleAfn !== null ? saleAfn - costAfn : null;
+
+                if (toNum(p.profit_per_unit) <= 0) {
+                    clientErrors[`purchases.${i}.profit_per_unit`] = 'Investor profit per unit is required';
+                } else if (investorAfn !== null && totalProfit !== null && investorAfn > totalProfit + 0.0001) {
+                    clientErrors[`purchases.${i}.profit_per_unit`] =
+                        `Investor profit estimate (${fmt(investorAfn)} AFN) exceeds estimated gross profit (${fmt(totalProfit)} AFN). Sale will be blocked unless gross covers fixed investor profit.`;
+                }
             }
         });
 
@@ -815,9 +882,6 @@ export default function ProductsEdit({
         if (form.description.trim()) {
             formData.append('description', form.description.trim());
         }
-        if (form.base_unit_name.trim()) formData.append('base_unit_name', form.base_unit_name.trim());
-        if (form.pack_unit_name.trim()) formData.append('pack_unit_name', form.pack_unit_name.trim());
-        if (form.units_per_pack.trim()) formData.append('units_per_pack', form.units_per_pack.trim());
         if (form.usd_to_afn_rate.trim()) formData.append('usd_to_afn_rate', form.usd_to_afn_rate.trim());
         if (form.usd_to_aed_rate.trim()) formData.append('usd_to_aed_rate', form.usd_to_aed_rate.trim());
 
@@ -866,13 +930,12 @@ export default function ProductsEdit({
             }
 
             formData.append(`purchases[${i}][quantity]`, p.quantity || '1');
-            formData.append(`purchases[${i}][quantity_unit]`, p.quantity_unit || 'base');
 
             if (isInvestorPurchase(p.investor_id)) {
                 formData.append(`purchases[${i}][profit_per_unit]`, p.profit_per_unit || '0');
                 formData.append(
                     `purchases[${i}][profit_currency_id]`,
-                    p.profit_currency_id || variants[p.variant_index]?.sale_currency_id || ledgerCurrencyId,
+                    p.profit_currency_id || ledgerCurrencyId,
                 );
             }
 
@@ -880,7 +943,6 @@ export default function ProductsEdit({
                 formData.append(`purchases[${i}][invoice_number]`, p.invoice_number);
             }
             formData.append(`purchases[${i}][purchase_date]`, p.purchase_date || today());
-            if (p.exchange_rate) formData.append(`purchases[${i}][exchange_rate]`, p.exchange_rate);
             if (p.paid_now) formData.append(`purchases[${i}][paid_now]`, p.paid_now);
             if (p.notes) {
                 formData.append(`purchases[${i}][notes]`, p.notes);
@@ -1044,14 +1106,6 @@ export default function ProductsEdit({
                                 placeholder="Optional general description for the product"
                             />
                         </div>
-
-                        <UnitConversionFields
-                            baseUnit={form.base_unit_name}
-                            packUnit={form.pack_unit_name}
-                            unitsPerPack={form.units_per_pack}
-                            onChange={(field, value) => setForm({ ...form, [field]: value })}
-                            errors={errors}
-                        />
 
                         <ProductExchangeRateFields
                             usdToAfn={form.usd_to_afn_rate}
@@ -1277,7 +1331,7 @@ export default function ProductsEdit({
                                 {/* Prices */}
                                 <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
                                     <MoneyField
-                                        label="Purchase cost"
+                                        label="Purchase cost (catalog / default)"
                                         amount={v.purchase_price_afn}
                                         currencyId={v.purchase_currency_id || ledgerCurrencyId}
                                         currencies={currencies}
@@ -1286,7 +1340,7 @@ export default function ProductsEdit({
                                         error={errors[`variants.${vIndex}.purchase_price_afn`] || errors[`variants.${vIndex}.purchase_currency_id`]}
                                     />
                                     <MoneyField
-                                        label="Selling price"
+                                        label="Selling price (own currency)"
                                         required
                                         amount={v.sale_price_afn}
                                         currencyId={v.sale_currency_id || ledgerCurrencyId}
@@ -1347,7 +1401,41 @@ export default function ProductsEdit({
                         {purchases.map((p, pIndex) => {
                             const isInvestor = isInvestorPurchase(p.investor_id);
                             const variant = variants[p.variant_index];
-                            const unitPrice = toNum(variant?.purchase_price_afn);
+                            const defaultCur = findCurrency(currencies, ledgerCurrencyId);
+                            const refUsdToAfn = toNum(form.usd_to_afn_rate);
+                            const refUsdToAed = toNum(form.usd_to_aed_rate);
+                            const purchaseCur = findCurrency(currencies, variant?.purchase_currency_id || ledgerCurrencyId);
+                            const saleCur = findCurrency(currencies, variant?.sale_currency_id || ledgerCurrencyId);
+                            const profitCur = findCurrency(currencies, p.profit_currency_id || ledgerCurrencyId);
+                            const costLedger = estimateToAfn(
+                                toNum(variant?.purchase_price_afn),
+                                purchaseCur,
+                                defaultCur,
+                                refUsdToAfn,
+                                refUsdToAed,
+                            );
+                            const saleLedger = estimateToAfn(
+                                toNum(variant?.sale_price_afn),
+                                saleCur,
+                                defaultCur,
+                                refUsdToAfn,
+                                refUsdToAed,
+                            );
+                            const investorLedger = estimateToAfn(
+                                isInvestor ? toNum(p.profit_per_unit) : 0,
+                                profitCur,
+                                defaultCur,
+                                refUsdToAfn,
+                                refUsdToAed,
+                            );
+                            const canCompare = costLedger !== null && saleLedger !== null && investorLedger !== null;
+                            const unitPrice = costLedger ?? toNum(variant?.purchase_price_afn);
+                            const profits = calcProfits(
+                                costLedger ?? 0,
+                                saleLedger ?? 0,
+                                investorLedger ?? 0,
+                                toNum(p.quantity),
+                            );
 
                             return (
                                 <div
@@ -1399,12 +1487,7 @@ export default function ProductsEdit({
                                             </div>
 
                                             <div className="space-y-2">
-                                                <Label>
-                                                    Quantity
-                                                    {form.base_unit_name
-                                                        ? ` (${p.quantity_unit === 'pack' ? form.pack_unit_name || 'pack' : form.base_unit_name})`
-                                                        : ''}
-                                                </Label>
+                                                <Label>Quantity</Label>
                                                 <Input
                                                     type="number"
                                                     min="1"
@@ -1417,22 +1500,6 @@ export default function ProductsEdit({
                                                     }}
                                                     className={errors[`purchases.${pIndex}.quantity`] ? 'border-destructive' : ''}
                                                 />
-                                                {form.base_unit_name && form.pack_unit_name && Number(form.units_per_pack) > 0 ? (
-                                                    <Select
-                                                        value={p.quantity_unit}
-                                                        onValueChange={(val) => updatePurchase(pIndex, 'quantity_unit', val as 'base' | 'pack')}
-                                                    >
-                                                        <SelectTrigger>
-                                                            <SelectValue />
-                                                        </SelectTrigger>
-                                                        <SelectContent>
-                                                            <SelectItem value="base">{form.base_unit_name} (base)</SelectItem>
-                                                            <SelectItem value="pack">
-                                                                {form.pack_unit_name} (1 = {form.units_per_pack} {form.base_unit_name})
-                                                            </SelectItem>
-                                                        </SelectContent>
-                                                    </Select>
-                                                ) : null}
                                                 {errors[`purchases.${pIndex}.quantity`] && (
                                                     <p className="text-destructive text-xs">{errors[`purchases.${pIndex}.quantity`]}</p>
                                                 )}
@@ -1440,75 +1507,141 @@ export default function ProductsEdit({
                                         </div>
                                     </div>
 
-                                    {/* Profit & Summary */}
-                                    <div className="mb-4">
-                                        <h4 className="mb-2 flex items-center gap-1 text-sm font-semibold text-gray-700">
+                                    {isInvestor && (
+                                        <div className="mb-4">
+                                            <MoneyField
+                                                label="Investor profit / unit (own currency — independent of purchase/sale currency)"
+                                                required
+                                                amount={p.profit_per_unit}
+                                                currencyId={p.profit_currency_id || ledgerCurrencyId}
+                                                currencies={currencies}
+                                                onAmountChange={(val) => {
+                                                    if (toNum(val) < 0) return;
+                                                    updatePurchase(pIndex, 'profit_per_unit', val);
+                                                    recalcPurchase(pIndex);
+                                                }}
+                                                onCurrencyChange={(val) => {
+                                                    updatePurchase(pIndex, 'profit_currency_id', val);
+                                                    recalcPurchase(pIndex);
+                                                }}
+                                                error={
+                                                    errors[`purchases.${pIndex}.profit_per_unit`] ||
+                                                    errors[`purchases.${pIndex}.profit_currency_id`]
+                                                }
+                                            />
+                                        </div>
+                                    )}
+
+                                    {/* Estimate-only profit preview — sale-time FIFO is authoritative */}
+                                    <div className="mb-4 rounded-lg border p-4">
+                                        <h4 className="mb-3 flex items-center gap-1 text-sm font-semibold">
                                             <TrendingUp className="h-3 w-3" />
-                                            Profit &amp; Summary
+                                            Totals &amp; Profit Split (estimate)
                                         </h4>
 
-                                        {isInvestor ? (
-                                            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                                                <div className="space-y-2">
-                                                    <MoneyField
-                                                        label="Investor profit / unit"
-                                                        required
-                                                        amount={p.profit_per_unit}
-                                                        currencyId={p.profit_currency_id || ledgerCurrencyId}
-                                                        currencies={currencies}
-                                                        onAmountChange={(val) => {
-                                                            if (toNum(val) < 0) return;
-                                                            updatePurchase(pIndex, 'profit_per_unit', val);
-                                                            recalcPurchase(pIndex);
-                                                        }}
-                                                        onCurrencyChange={(val) => updatePurchase(pIndex, 'profit_currency_id', val)}
-                                                        error={
-                                                            errors[`purchases.${pIndex}.profit_per_unit`] ||
-                                                            errors[`purchases.${pIndex}.profit_currency_id`]
-                                                        }
-                                                    />
-                                                </div>
+                                        <div className="mb-3 rounded-lg border border-dashed bg-slate-50/60 p-3 dark:bg-slate-900/20">
+                                            <p className="text-xs text-slate-700 dark:text-slate-300">
+                                                Estimates only until the backend purchase/sale completes. Product reference rates never overwrite
+                                                historical purchase or sale FX snapshots. Original amounts stay in their own currencies.
+                                            </p>
+                                            <p className="mt-2 text-xs text-slate-700 dark:text-slate-300">
+                                                Purchase: {fmt(toNum(variant?.purchase_price_afn))} {purchaseCur?.code || '—'} · Selling:{' '}
+                                                {fmt(toNum(variant?.sale_price_afn))} {saleCur?.code || '—'}
+                                                {isInvestor ? (
+                                                    <>
+                                                        {' '}
+                                                        · Investor / unit: {fmt(toNum(p.profit_per_unit))} {profitCur?.code || '—'}
+                                                    </>
+                                                ) : null}
+                                            </p>
+                                            {!canCompare ? (
+                                                <p className="mt-2 text-xs text-amber-700">
+                                                    AFN preview unavailable until currencies can be converted. Amounts in different currencies are
+                                                    never added together.
+                                                </p>
+                                            ) : (
+                                                <p className="mt-2 text-xs text-slate-700 dark:text-slate-300">
+                                                    <strong>AFN estimate / unit:</strong> Sale {fmt(saleLedger ?? 0)} − Cost {fmt(costLedger ?? 0)} ={' '}
+                                                    <strong>{fmt(profits.totalPerUnit)} AFN gross</strong>
+                                                    {isInvestor ? (
+                                                        <>
+                                                            {' '}
+                                                            → Investor <strong className="text-blue-700">{fmt(profits.investorPerUnit)} AFN</strong> +
+                                                            Store <strong className="text-emerald-700">{fmt(profits.storePerUnit)} AFN</strong>
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            {' '}
+                                                            → Store <strong className="text-emerald-700">{fmt(profits.storePerUnit)} AFN</strong> (no
+                                                            investor)
+                                                        </>
+                                                    )}
+                                                </p>
+                                            )}
+                                        </div>
 
-                                                <div className="space-y-2">
-                                                    <Label>Line Total (auto)</Label>
-                                                    <div className="bg-muted/30 flex h-10 items-center rounded-md border border-dashed px-3 font-mono text-sm">
-                                                        {p.line_total} <span className="text-muted-foreground ml-1 text-xs">AFN</span>
-                                                    </div>
-                                                    <p className="text-muted-foreground text-xs">
-                                                        = {unitPrice.toLocaleString()} × {p.quantity}
-                                                    </p>
+                                        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                                            <div className="space-y-2">
+                                                <Label className="flex items-center gap-1 text-xs">
+                                                    <Receipt className="h-3 w-3" /> Purchase line (AFN estimate)
+                                                </Label>
+                                                <div className="bg-muted/30 flex h-10 items-center rounded-md border border-dashed px-3 font-mono text-sm">
+                                                    {fmt(unitPrice * toNum(p.quantity))}{' '}
+                                                    <span className="text-muted-foreground ml-1 text-xs">AFN</span>
                                                 </div>
-
-                                                <div className="space-y-2">
-                                                    <Label>Line Profit (auto)</Label>
-                                                    <div className="flex h-10 items-center rounded-md border border-dashed bg-emerald-50 px-3 font-mono text-sm text-emerald-700">
-                                                        {p.line_profit} <span className="ml-1 text-xs">AFN</span>
-                                                    </div>
-                                                    <p className="text-muted-foreground text-xs">
-                                                        = {p.profit_per_unit} × {p.quantity}
-                                                    </p>
-                                                </div>
+                                                <p className="text-muted-foreground text-xs">
+                                                    = {fmt(toNum(variant?.purchase_price_afn))} {purchaseCur?.code || ''} × {p.quantity}
+                                                </p>
                                             </div>
-                                        ) : (
-                                            <div className="space-y-3">
-                                                <div className="rounded-lg border border-dashed border-emerald-300 bg-emerald-50/40 p-3">
-                                                    <p className="text-xs text-emerald-900">
-                                                        <strong>Store-owned purchase:</strong> The store's profit will be automatically calculated
-                                                        from <em>sale price − purchase price</em> on the variant.
+
+                                            {isInvestor ? (
+                                                <div className="space-y-2">
+                                                    <Label className="flex items-center gap-1 text-xs text-blue-700">
+                                                        <Wallet className="h-3 w-3" /> Investor profit (estimate)
+                                                    </Label>
+                                                    <div className="flex h-10 items-center rounded-md border border-dashed bg-blue-50 px-3 font-mono text-sm font-semibold text-blue-700 dark:bg-blue-950/30">
+                                                        {fmt(toNum(p.profit_per_unit))} {profitCur?.code || ''}
+                                                        <span className="ml-2 text-xs font-normal text-blue-600/80">
+                                                            ≈ {fmt(profits.investorLine)} AFN
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-muted-foreground text-xs">
+                                                        Fixed {fmt(toNum(p.profit_per_unit))} {profitCur?.code || ''} × {p.quantity}
                                                     </p>
                                                 </div>
-
-                                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                                    <div className="space-y-2">
-                                                        <Label>Line Total (auto)</Label>
-                                                        <div className="bg-muted/30 flex h-10 items-center rounded-md border border-dashed px-3 font-mono text-sm">
-                                                            {p.line_total} <span className="text-muted-foreground ml-1 text-xs">AFN</span>
-                                                        </div>
-                                                        <p className="text-muted-foreground text-xs">
-                                                            = {unitPrice.toLocaleString()} × {p.quantity}
-                                                        </p>
+                                            ) : (
+                                                <div className="space-y-2 opacity-50">
+                                                    <Label className="flex items-center gap-1 text-xs">
+                                                        <Wallet className="h-3 w-3" /> Investor Profit
+                                                    </Label>
+                                                    <div className="bg-muted/30 flex h-10 items-center rounded-md border border-dashed px-3 font-mono text-sm">
+                                                        0 <span className="text-muted-foreground ml-1 text-xs">AFN</span>
                                                     </div>
+                                                    <p className="text-muted-foreground text-xs">Not applicable — store-owned</p>
                                                 </div>
+                                            )}
+
+                                            <div className="space-y-2">
+                                                <Label className="flex items-center gap-1 text-xs text-emerald-700">
+                                                    <Store className="h-3 w-3" /> Store profit (AFN estimate)
+                                                </Label>
+                                                <div className="flex h-10 items-center rounded-md border border-dashed bg-emerald-50 px-3 font-mono text-sm font-semibold text-emerald-700 dark:bg-emerald-950/30">
+                                                    {fmt(profits.storeLine)} <span className="ml-1 text-xs">AFN</span>
+                                                </div>
+                                                <p className="text-muted-foreground text-xs">
+                                                    Gross − investor (sale-time FIFO may differ)
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        {isInvestor && canCompare && profits.investorPerUnit > profits.totalPerUnit + 0.0001 && (
+                                            <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-3 text-xs text-red-800">
+                                                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                                <span>
+                                                    Investor profit estimate ({fmt(toNum(p.profit_per_unit))} {profitCur?.code || ''} ≈{' '}
+                                                    {fmt(profits.investorPerUnit)} AFN) exceeds estimated gross ({fmt(profits.totalPerUnit)} AFN).
+                                                    The sale will be blocked by default — investor profit is not silently reduced.
+                                                </span>
                                             </div>
                                         )}
                                     </div>
@@ -1550,18 +1683,6 @@ export default function ProductsEdit({
                                                     ))}
                                                 </SelectContent>
                                             </Select>
-                                        </div>
-                                        <div className="space-y-2">
-                                            <Label>USD to AFN</Label>
-                                            <Input
-                                                type="number"
-                                                min="0.01"
-                                                step="0.01"
-                                                value={p.exchange_rate}
-                                                onChange={(e) => updatePurchase(pIndex, 'exchange_rate', e.target.value)}
-                                                placeholder="e.g. 64"
-                                            />
-                                            <p className="text-muted-foreground text-xs">Dollar rate on this purchase date</p>
                                         </div>
                                         <div className="space-y-2">
                                             <Label>Paid now (AFN)</Label>

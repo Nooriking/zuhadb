@@ -104,18 +104,35 @@ Route::middleware(['auth', 'verified', 'lock.records'])->group(function () {
 
     /* ═══════════════════════════════════════════════════════
      |  BRANCHES
+     |  Super Admin + Admin manage all branches.
+     |  Activate/deactivate remain Super Admin-only in the controller.
      ═══════════════════════════════════════════════════════ */
-    Route::middleware(['role:super_admin', 'module:branches'])
+    Route::middleware(['role:super_admin,admin', 'module:branches'])
         ->prefix('branches')->name('branches.')->group(function () {
 
-        Route::get('/', [BranchController::class, 'index'])->name('index');
-        Route::get('/create', [BranchController::class, 'create'])->name('create');
-        Route::post('/', [BranchController::class, 'store'])->name('store');
-        Route::post('/{branch}/deactivate', [BranchController::class, 'deactivate'])->name('deactivate');
-        Route::post('/{branch}/activate', [BranchController::class, 'activate'])->name('activate');
-        Route::get('/{branch}', [BranchController::class, 'show'])->name('show');
-        Route::get('/{branch}/edit', [BranchController::class, 'edit'])->name('edit');
-        Route::put('/{branch}', [BranchController::class, 'update'])->name('update');
+        Route::get('/', [BranchController::class, 'index'])
+            ->middleware('permission:branches.view')->name('index');
+
+        Route::get('/create', [BranchController::class, 'create'])
+            ->middleware('permission:branches.create')->name('create');
+
+        Route::post('/', [BranchController::class, 'store'])
+            ->middleware('permission:branches.create')->name('store');
+
+        Route::get('/{branch}', [BranchController::class, 'show'])
+            ->middleware('permission:branches.view')->name('show');
+
+        Route::get('/{branch}/edit', [BranchController::class, 'edit'])
+            ->middleware('permission:branches.update')->name('edit');
+
+        Route::put('/{branch}', [BranchController::class, 'update'])
+            ->middleware('permission:branches.update')->name('update');
+
+        Route::post('/{branch}/deactivate', [BranchController::class, 'deactivate'])
+            ->name('deactivate');
+
+        Route::post('/{branch}/activate', [BranchController::class, 'activate'])
+            ->name('activate');
     });
 
     /* ═══════════════════════════════════════════════════════
@@ -197,6 +214,24 @@ Route::middleware(['auth', 'verified', 'lock.records'])->group(function () {
     /* ═══════════════════════════════════════════════════════
      |  CURRENCIES
      ═══════════════════════════════════════════════════════ */
+    Route::middleware(['role:super_admin,admin,accountant', 'module:currencies'])
+        ->prefix('exchange-rates')->name('exchange-rates.')->group(function () {
+            Route::get('/', [\App\Http\Controllers\ExchangeRateController::class, 'index'])
+                ->middleware('permission:currencies.view')->name('index');
+            Route::get('/create', [\App\Http\Controllers\ExchangeRateController::class, 'create'])
+                ->middleware('permission:currencies.create')->name('create');
+            Route::post('/', [\App\Http\Controllers\ExchangeRateController::class, 'store'])
+                ->middleware('permission:currencies.create')->name('store');
+            Route::get('/{exchangeRate}', [\App\Http\Controllers\ExchangeRateController::class, 'show'])
+                ->middleware('permission:currencies.view')->name('show');
+            Route::get('/{exchangeRate}/edit', [\App\Http\Controllers\ExchangeRateController::class, 'edit'])
+                ->middleware('permission:currencies.update')->name('edit');
+            Route::put('/{exchangeRate}', [\App\Http\Controllers\ExchangeRateController::class, 'update'])
+                ->middleware('permission:currencies.update')->name('update');
+            Route::delete('/{exchangeRate}', [\App\Http\Controllers\ExchangeRateController::class, 'destroy'])
+                ->middleware('permission:currencies.update')->name('destroy');
+        });
+
     Route::middleware(['role:super_admin,admin,accountant', 'module:currencies'])
         ->prefix('currencies')->name('currencies.')->group(function () {
 
@@ -553,6 +588,7 @@ Route::get('/report', [SaleController::class, 'report'])->name('sales.report');
         Route::post('/{id}/restore', [InvestorController::class, 'restore'])->whereNumber('id')->name('restore');
         Route::delete('/{id}/force-delete', [InvestorController::class, 'forceDelete'])->whereNumber('id')->name('forceDelete');
         Route::post('/{investor}/settle', [InvestorWithdrawalController::class, 'settle'])->name('settle');
+        Route::post('/{investor}/capital', [InvestorController::class, 'storeCapital'])->name('capital.store');
         Route::post('/{investor}/toggle-status', [InvestorController::class, 'toggleStatus'])->name('toggleStatus');
         Route::get('/{investor}', [InvestorController::class, 'show'])
             ->middleware('permission:investors.view')

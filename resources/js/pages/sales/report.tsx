@@ -1,5 +1,6 @@
 // resources/js/pages/sales/report.tsx
 
+import ByCurrencyAmounts from '@/components/money/by-currency-amounts';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,6 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import AppLayout from '@/layouts/app-layout';
+import { formatOriginalAmount, type OriginalCurrencyTotal } from '@/lib/original-currency';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
 import {
@@ -36,6 +38,12 @@ interface SaleRow {
     amount_afn: number;
     return_amount_afn: number;
     net_afn: number;
+    currency_code?: string | null;
+    currency_label?: string;
+    currency_known?: boolean;
+    amount_original?: number | null;
+    return_amount_original?: number | null;
+    net_original?: number | null;
     return_type: 'shop' | 'customer' | 'mixed' | null;
     payment_status: string;
     status: string;
@@ -68,6 +76,10 @@ interface Summary {
     customer_count: number;
     total_items: number;
     avg_sale: number;
+    gross_sales_by_currency?: OriginalCurrencyTotal[];
+    total_returns_by_currency?: OriginalCurrencyTotal[];
+    net_sales_by_currency?: OriginalCurrencyTotal[];
+    total_sales_by_currency?: OriginalCurrencyTotal[];
 }
 
 interface DailySummary {
@@ -347,7 +359,12 @@ export default function SalesReport({
                                 <p className="text-muted-foreground text-xs">Total Gross Sales</p>
                                 <DollarSign className="text-muted-foreground h-4 w-4" />
                             </div>
-                            <p className="mt-1 text-2xl font-bold">{fmt(summary.gross_sales)} AFN</p>
+                            <ByCurrencyAmounts
+                                amounts={summary.gross_sales_by_currency}
+                                titlePrefix="فروش"
+                                valueClassName="font-mono text-sm font-bold"
+                                digits={2}
+                            />
                             <p className="text-muted-foreground mt-0.5 text-xs">{summary.count} invoices</p>
                         </CardContent>
                     </Card>
@@ -357,7 +374,12 @@ export default function SalesReport({
                                 <p className="text-muted-foreground text-xs">Total Sales Returns</p>
                                 <RotateCcw className="text-muted-foreground h-4 w-4" />
                             </div>
-                            <p className="mt-1 text-2xl font-bold text-amber-700">{fmt(summary.total_returns)} AFN</p>
+                            <ByCurrencyAmounts
+                                amounts={summary.total_returns_by_currency}
+                                titlePrefix="برگشت"
+                                valueClassName="font-mono text-sm font-bold text-amber-700"
+                                digits={2}
+                            />
                             <p className="text-muted-foreground mt-0.5 text-xs">completed returns</p>
                         </CardContent>
                     </Card>
@@ -367,8 +389,13 @@ export default function SalesReport({
                                 <p className="text-muted-foreground text-xs">Net Sales</p>
                                 <TrendingUp className="text-muted-foreground h-4 w-4" />
                             </div>
-                            <p className="mt-1 text-2xl font-bold text-emerald-700">{fmt(summary.net_sales)} AFN</p>
-                            <p className="text-muted-foreground mt-0.5 text-xs">Gross − Returns</p>
+                            <ByCurrencyAmounts
+                                amounts={summary.net_sales_by_currency}
+                                titlePrefix="خالص"
+                                valueClassName="font-mono text-sm font-bold text-emerald-700"
+                                digits={2}
+                            />
+                            <p className="text-muted-foreground mt-0.5 text-xs">Gross − Returns (per currency)</p>
                         </CardContent>
                     </Card>
                     <Card>
@@ -480,6 +507,7 @@ export default function SalesReport({
                                         <TableHead>Invoice #</TableHead>
                                         <TableHead>Customer</TableHead>
                                         <TableHead>Branch</TableHead>
+                                        <TableHead>Currency</TableHead>
                                         <TableHead className="text-center">Items</TableHead>
                                         <TableHead className="text-right">Amount</TableHead>
                                         <TableHead>Return Expense By</TableHead>
@@ -490,12 +518,15 @@ export default function SalesReport({
                                 <TableBody>
                                     {(sales.data || []).length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={9} className="text-muted-foreground h-24 text-center">
+                                            <TableCell colSpan={10} className="text-muted-foreground h-24 text-center">
                                                 No sales found for these filters.
                                             </TableCell>
                                         </TableRow>
                                     ) : (
-                                        sales.data.map((sale) => (
+                                        sales.data.map((sale) => {
+                                            const code = sale.currency_known === false ? null : sale.currency_code;
+
+                                            return (
                                             <TableRow
                                                 key={sale.id}
                                                 className="hover:bg-muted/50 cursor-pointer"
@@ -511,8 +542,13 @@ export default function SalesReport({
                                                 </TableCell>
                                                 <TableCell>{sale.customer?.name || 'Walk-in'}</TableCell>
                                                 <TableCell>{sale.branch?.name || '—'}</TableCell>
+                                                <TableCell className="text-xs font-semibold">
+                                                    {sale.currency_label || (code ? code : 'Unknown')}
+                                                </TableCell>
                                                 <TableCell className="text-center font-mono">{sale.items_count}</TableCell>
-                                                <TableCell className="text-right font-mono">{fmt(sale.amount_afn)}</TableCell>
+                                                <TableCell className="text-right font-mono">
+                                                    {formatOriginalAmount(sale.amount_original, code)}
+                                                </TableCell>
                                                 <TableCell>
                                                     {sale.return_type ? (
                                                         <Badge variant="outline">{returnTypeLabel(sale.return_type)}</Badge>
@@ -521,13 +557,16 @@ export default function SalesReport({
                                                     )}
                                                 </TableCell>
                                                 <TableCell className="text-right font-mono text-amber-700">
-                                                    {sale.return_amount_afn > 0 ? fmt(sale.return_amount_afn) : '—'}
+                                                    {(sale.return_amount_original ?? 0) > 0
+                                                        ? formatOriginalAmount(sale.return_amount_original, code)
+                                                        : '—'}
                                                 </TableCell>
                                                 <TableCell className="text-right font-mono font-semibold text-emerald-700">
-                                                    {fmt(sale.net_afn)}
+                                                    {formatOriginalAmount(sale.net_original, code)}
                                                 </TableCell>
                                             </TableRow>
-                                        ))
+                                            );
+                                        })
                                     )}
                                 </TableBody>
                             </Table>

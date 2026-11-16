@@ -1,6 +1,8 @@
 // resources/js/components/dashboard/recent-sales.tsx
 
+import ThreeCurrencyAmountView from '@/components/dashboard/three-currency-amount';
 import { formatMoney, type SharedCurrency } from '@/lib/money';
+import type { ThreeCurrencyAmount } from '@/lib/three-currency';
 import { Link } from '@inertiajs/react';
 
 interface Sale {
@@ -8,6 +10,7 @@ interface Sale {
     invoice_number: string;
     total_afn: number;
     total_ledger?: number;
+    total_3c?: ThreeCurrencyAmount | null;
     ledger_currency_code?: string | null;
     payment_status: string;
     status: string;
@@ -57,19 +60,25 @@ export default function RecentSales({ sales, embedded = false, currency }: Props
                             </div>
                         </div>
                         <div className="text-right">
-                            <div className="font-mono text-sm font-semibold">{formatMoney(sale.total_afn, currency)}</div>
-                            {sale.total_ledger !== undefined &&
-                                currency &&
-                                sale.ledger_currency_code &&
-                                currency.code !== sale.ledger_currency_code && (
-                                    <div className="text-muted-foreground text-xs">
-                                        {formatMoney(sale.total_ledger, {
-                                            code: sale.ledger_currency_code,
-                                            symbol: null,
-                                            decimal_places: 2,
-                                        })}
-                                    </div>
-                                )}
+                            {sale.total_3c ? (
+                                <ThreeCurrencyAmountView amounts={sale.total_3c} layout="compact" />
+                            ) : (
+                                <>
+                                    <div className="font-mono text-sm font-semibold">{formatMoney(sale.total_afn, currency)}</div>
+                                    {sale.total_ledger !== undefined &&
+                                        currency &&
+                                        sale.ledger_currency_code &&
+                                        currency.code !== sale.ledger_currency_code && (
+                                            <div className="text-muted-foreground text-xs">
+                                                {formatMoney(sale.total_ledger, {
+                                                    code: sale.ledger_currency_code,
+                                                    symbol: null,
+                                                    decimal_places: 2,
+                                                })}
+                                            </div>
+                                        )}
+                                </>
+                            )}
                         </div>
                     </Link>
                 ))

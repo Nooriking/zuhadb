@@ -123,14 +123,14 @@ export default function InvestmentsIndex({ investments, investors, filters, stat
                         <span className="rounded-full border px-2.5 py-0.5 text-xs font-semibold">{investments.total} Investments</span>
                     </div>
                     <div className="flex gap-2">
+                        <Link href="/investors">
+                            <button className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium hover:bg-gray-50">
+                                Investors
+                            </button>
+                        </Link>
                         <Link href="/investments/trash">
                             <button className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium hover:bg-gray-50">
                                 Trash
-                            </button>
-                        </Link>
-                        <Link href="/investments/create">
-                            <button className="inline-flex items-center gap-2 rounded-md bg-black px-4 py-2 text-sm font-medium text-white hover:bg-gray-800">
-                                + New Investment
                             </button>
                         </Link>
                     </div>

@@ -27,9 +27,16 @@ class ProductBatch extends Model
         'batch_code',
         'quantity',
         'remaining_quantity',
+        'unit_cost_currency',
+        'exchange_rate',
         'unit_cost_afn',
         'total_cost_afn',
+        'profit_per_unit_currency',
         'profit_per_unit_afn',
+        'profit_currency_id',
+        'profit_currency_code',
+        'profit_per_unit_usd',
+        'profit_per_unit_aed',
 
         // ✅ جدید
         'sale_price_afn',
@@ -48,9 +55,14 @@ class ProductBatch extends Model
     protected $casts = [
         'quantity'                    => 'integer',
         'remaining_quantity'          => 'integer',
+        'unit_cost_currency'          => 'decimal:4',
+        'exchange_rate'               => 'decimal:8',
         'unit_cost_afn'               => 'decimal:2',
         'total_cost_afn'              => 'decimal:2',
+        'profit_per_unit_currency'    => 'decimal:4',
         'profit_per_unit_afn'         => 'decimal:2',
+        'profit_per_unit_usd'         => 'decimal:4',
+        'profit_per_unit_aed'         => 'decimal:4',
 
         // ✅ جدید
         'sale_price_afn'              => 'decimal:2',
@@ -255,6 +267,8 @@ class ProductBatch extends Model
             'remaining_quantity' => $newRemaining,
             'status'             => $newRemaining === 0 ? 'depleted' : 'active',
         ]);
+
+        $this->syncPurchaseRowRemaining();
     }
 
     /**
@@ -268,6 +282,24 @@ class ProductBatch extends Model
             'remaining_quantity' => $newRemaining,
             'status'             => $newRemaining > 0 ? 'active' : $this->status,
         ]);
+
+        $this->syncPurchaseRowRemaining();
+    }
+
+    /**
+     * Keep dual-purpose purchase-row remaining_quantity aligned with this batch.
+     */
+    public function syncPurchaseRowRemaining(): void
+    {
+        if (! $this->purchase_item_id) {
+            return;
+        }
+
+        Product::query()
+            ->whereKey($this->purchase_item_id)
+            ->update([
+                'remaining_quantity' => max(0, (int) $this->remaining_quantity),
+            ]);
     }
 
     /* =========================================================

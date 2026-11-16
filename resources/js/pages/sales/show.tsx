@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Separator } from '@/components/ui/separator';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import AppLayout from '@/layouts/app-layout';
+import { formatOriginalAmount } from '@/lib/original-currency';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link } from '@inertiajs/react';
 import { ArrowLeft, FileText, Package, Printer, TrendingUp, User } from 'lucide-react';
@@ -37,6 +38,9 @@ interface Payment {
     received_by: number | null;
     receiver: { id: number; name: string } | null;
     customer: { id: number; name: string; phone: string | null } | null;
+    display_amount?: number | null;
+    display_currency_code?: string | null;
+    display_remaining_due?: number | null;
 }
 
 interface SaleItem {
@@ -51,6 +55,9 @@ interface SaleItem {
     investor_profit_afn: string;
     product_name_snapshot: string | null;
     barcode_snapshot: string | null;
+    display_line_total?: number | null;
+    display_unit_price?: number | null;
+    display_currency_code?: string | null;
     variant?: {
         id: number;
         name: string | null;
@@ -74,6 +81,22 @@ interface Sale {
     subtotal_afn: string;
     discount_afn: string;
     total_afn: string;
+    sale_currency_code?: string | null;
+    sale_currency_symbol?: string | null;
+    sale_currency_known?: boolean;
+    sale_currency_label?: string;
+    display_total?: number | null;
+    display_subtotal?: number | null;
+    display_discount?: number | null;
+    display_paid?: number | null;
+    display_remaining?: number | null;
+    display_previous_due?: number | null;
+    display_new_sale_amount?: number | null;
+    display_grand_total_due?: number | null;
+    display_profit?: number | null;
+    display_cost?: number | null;
+    display_store_profit?: number | null;
+    display_investor_profit?: number | null;
 
     previous_due_afn: string;
     new_sale_amount_afn: string;
@@ -159,11 +182,14 @@ export default function SalesShow({ sale }: Props) {
         { title: sale.invoice_number, href: `/sales/${sale.id}` },
     ];
 
-    const previousDue = parseFloat(sale.previous_due_afn || '0');
-    const newSale = parseFloat(sale.new_sale_amount_afn || sale.total_afn || '0');
-    const grandTotal = parseFloat(sale.grand_total_due_afn || sale.total_afn || '0');
-    const paidAfn = parseFloat(sale.paid_afn || '0');
-    const remaining = parseFloat(sale.remaining_due_afn || '0');
+    const currencyCode = sale.sale_currency_known === false ? null : sale.sale_currency_code || null;
+    const money = (amount: number | string | null | undefined, code: string | null | undefined = currencyCode) =>
+        formatOriginalAmount(amount, code);
+    const previousDue = sale.display_previous_due ?? parseFloat(sale.previous_due_afn || '0');
+    const newSale = sale.display_new_sale_amount ?? parseFloat(sale.new_sale_amount_afn || sale.total_afn || '0');
+    const grandTotal = sale.display_grand_total_due ?? parseFloat(sale.grand_total_due_afn || sale.total_afn || '0');
+    const paidAfn = sale.display_paid ?? parseFloat(sale.paid_afn || '0');
+    const remaining = sale.display_remaining ?? parseFloat(sale.remaining_due_afn || '0');
 
     /* ═══════════════════════════════════════════════════════
      |  Handlers
@@ -219,38 +245,33 @@ export default function SalesShow({ sale }: Props) {
                 {/* ═══════════ Due Flow Hero ═══════════ */}
                 <Card>
                     <CardContent className="p-6">
+                        <div className="mb-3 text-xs font-semibold">
+                            Currency: {sale.sale_currency_label || (currencyCode ? currencyCode : 'Unknown')}
+                        </div>
                         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
                             {previousDue > 0 && (
                                 <div>
                                     <p className="text-muted-foreground text-xs uppercase">Previous Due</p>
-                                    <p className="text-foreground mt-1 font-mono text-2xl font-bold">
-                                        {formatPrice(previousDue)} <span className="text-sm">AFN</span>
-                                    </p>
+                                    <p className="text-foreground mt-1 font-mono text-2xl font-bold">{money(previousDue)}</p>
                                 </div>
                             )}
                             <div>
                                 <p className="text-muted-foreground text-xs uppercase">This Sale</p>
-                                <p className="mt-1 font-mono text-2xl font-bold">
-                                    {formatPrice(newSale)} <span className="text-sm">AFN</span>
-                                </p>
+                                <p className="mt-1 font-mono text-2xl font-bold">{money(newSale)}</p>
                             </div>
                             <div>
                                 <p className="text-muted-foreground text-xs uppercase">Grand Total</p>
-                                <p className="mt-1 font-mono text-2xl font-bold">
-                                    {formatPrice(grandTotal)} <span className="text-sm">AFN</span>
-                                </p>
+                                <p className="mt-1 font-mono text-2xl font-bold">{money(grandTotal)}</p>
                             </div>
                             <div>
                                 <p className="text-muted-foreground text-xs uppercase">Paid</p>
-                                <p className="text-foreground mt-1 font-mono text-2xl font-bold">
-                                    {formatPrice(paidAfn)} <span className="text-sm">AFN</span>
-                                </p>
+                                <p className="text-foreground mt-1 font-mono text-2xl font-bold">{money(paidAfn)}</p>
                             </div>
                             <div className="col-span-2 lg:col-span-4">
                                 <Separator />
                                 <div className="mt-3 flex items-center justify-between">
                                     <span className="text-sm font-semibold">Remaining Due:</span>
-                                    <span className="font-mono text-3xl font-bold">{formatPrice(remaining)} AFN</span>
+                                    <span className="font-mono text-3xl font-bold">{money(remaining)}</span>
                                 </div>
                             </div>
                         </div>
@@ -362,18 +383,18 @@ export default function SalesShow({ sale }: Props) {
                         <CardContent className="space-y-2 text-sm">
                             <div className="grid grid-cols-2 gap-1">
                                 <span className="text-muted-foreground">Total Cost:</span>
-                                <span className="text-right font-mono text-xs">{formatPrice(sale.total_cost_afn)} AFN</span>
+                                <span className="text-right font-mono text-xs">{money(sale.display_cost)}</span>
 
                                 <span className="text-muted-foreground">Total Profit:</span>
-                                <span className="text-foreground text-right font-mono font-semibold">{formatPrice(sale.total_profit_afn)} AFN</span>
+                                <span className="text-foreground text-right font-mono font-semibold">{money(sale.display_profit)}</span>
 
                                 <span className="text-muted-foreground">Investor Share:</span>
                                 <span className="text-muted-foreground text-right font-mono text-xs">
-                                    {formatPrice(sale.total_investor_profit_afn)} AFN
+                                    {money(sale.display_investor_profit)}
                                 </span>
 
                                 <span className="text-muted-foreground">Store Share:</span>
-                                <span className="text-muted-foreground text-right font-mono text-xs">{formatPrice(sale.store_profit_afn)} AFN</span>
+                                <span className="text-muted-foreground text-right font-mono text-xs">{money(sale.display_store_profit)}</span>
                             </div>
                         </CardContent>
                     </Card>
@@ -428,13 +449,15 @@ export default function SalesShow({ sale }: Props) {
                                                 )}
                                             </TableCell>
                                             <TableCell className="text-center font-mono">{item.quantity}</TableCell>
-                                            <TableCell className="text-right font-mono text-xs">{formatPrice(item.cost_price_afn)}</TableCell>
-                                            <TableCell className="text-right font-mono text-xs">{formatPrice(item.sale_price_afn)}</TableCell>
+                                            <TableCell className="text-right font-mono text-xs">{formatPrice(item.cost_price_afn)} AFN</TableCell>
+                                            <TableCell className="text-right font-mono text-xs">
+                                                {money(item.display_unit_price, item.display_currency_code || currencyCode)}
+                                            </TableCell>
                                             <TableCell className="text-foreground text-right font-mono text-xs">
-                                                {parseFloat(item.discount_afn) > 0 ? `-${formatPrice(item.discount_afn)}` : '—'}
+                                                {parseFloat(item.discount_afn) > 0 ? `-${formatPrice(item.discount_afn)} AFN` : '—'}
                                             </TableCell>
                                             <TableCell className="text-right font-mono text-sm font-semibold">
-                                                {formatPrice(item.line_total_afn)}
+                                                {money(item.display_line_total, item.display_currency_code || currencyCode)}
                                             </TableCell>
                                             <TableCell className="text-right">
                                                 <div className="text-foreground font-mono text-xs font-semibold">
@@ -456,15 +479,15 @@ export default function SalesShow({ sale }: Props) {
                         <div className="bg-muted/30 mt-4 ml-auto max-w-sm rounded-lg border p-4">
                             <div className="grid grid-cols-2 gap-y-2 text-sm">
                                 <span className="text-muted-foreground">Subtotal:</span>
-                                <span className="text-right font-mono">{formatPrice(sale.subtotal_afn)} AFN</span>
+                                <span className="text-right font-mono">{money(sale.display_subtotal)}</span>
 
                                 <span className="text-muted-foreground">Discount:</span>
-                                <span className="text-foreground text-right font-mono">-{formatPrice(sale.discount_afn)} AFN</span>
+                                <span className="text-foreground text-right font-mono">-{money(sale.display_discount)}</span>
 
                                 <span className="col-span-2 my-1 border-t" />
 
                                 <span className="font-semibold">Total:</span>
-                                <span className="text-right font-mono font-semibold">{formatPrice(sale.total_afn)} AFN</span>
+                                <span className="text-right font-mono font-semibold">{money(sale.display_total)}</span>
                             </div>
                         </div>
                     </CardContent>
@@ -489,7 +512,7 @@ export default function SalesShow({ sale }: Props) {
                                         <TableHead>Customer</TableHead>
                                         <TableHead>Method</TableHead>
                                         <TableHead>Reference</TableHead>
-                                        <TableHead className="text-right">Amount (AFN)</TableHead>
+                                        <TableHead className="text-right">Amount</TableHead>
                                         <TableHead className="text-right">Remaining Due</TableHead>
                                         <TableHead>Received By</TableHead>
                                     </TableRow>
@@ -503,7 +526,7 @@ export default function SalesShow({ sale }: Props) {
                                         </TableRow>
                                     ) : (
                                         sale.payments.map((p, idx) => {
-                                            const pRemaining = parseFloat(p.remaining_due_afn || '0');
+                                            const pRemaining = p.display_remaining_due ?? parseFloat(p.remaining_due_afn || '0');
                                             return (
                                                 <TableRow key={p.id}>
                                                     <TableCell>{idx + 1}</TableCell>
@@ -531,10 +554,10 @@ export default function SalesShow({ sale }: Props) {
                                                         )}
                                                     </TableCell>
                                                     <TableCell className="text-foreground text-right font-mono text-sm font-semibold">
-                                                        {formatPrice(p.amount_afn)}
+                                                        {money(p.display_amount ?? p.amount_afn, p.display_currency_code || currencyCode)}
                                                     </TableCell>
                                                     <TableCell className="text-right">
-                                                        <span className="font-mono text-sm font-bold">{formatPrice(pRemaining)} AFN</span>
+                                                        <span className="font-mono text-sm font-bold">{money(pRemaining)}</span>
                                                     </TableCell>
                                                     <TableCell className="text-xs">{p.receiver?.name || '—'}</TableCell>
                                                 </TableRow>
@@ -551,25 +574,25 @@ export default function SalesShow({ sale }: Props) {
                                 {previousDue > 0 && (
                                     <>
                                         <span className="text-gray-600">Previous Due:</span>
-                                        <span className="text-foreground text-right font-mono font-semibold">{formatPrice(previousDue)} AFN</span>
+                                        <span className="text-foreground text-right font-mono font-semibold">{money(previousDue)}</span>
 
                                         <span className="text-gray-600">This Sale:</span>
-                                        <span className="text-right font-mono font-semibold">{formatPrice(newSale)} AFN</span>
+                                        <span className="text-right font-mono font-semibold">{money(newSale)}</span>
 
                                         <span className="col-span-2 my-1 border-t border-emerald-300" />
                                     </>
                                 )}
 
                                 <span className="font-bold text-gray-700">Grand Total:</span>
-                                <span className="text-right font-mono font-bold">{formatPrice(grandTotal)} AFN</span>
+                                <span className="text-right font-mono font-bold">{money(grandTotal)}</span>
 
                                 <span className="text-gray-600">Total Paid:</span>
-                                <span className="text-foreground text-right font-mono font-semibold">{formatPrice(paidAfn)} AFN</span>
+                                <span className="text-foreground text-right font-mono font-semibold">{money(paidAfn)}</span>
 
                                 <span className="col-span-2 my-1 border-t border-emerald-300" />
 
                                 <span className="font-bold text-gray-700">Remaining Due:</span>
-                                <span className="text-right font-mono font-bold">{formatPrice(remaining)} AFN</span>
+                                <span className="text-right font-mono font-bold">{money(remaining)}</span>
                             </div>
 
                             {/* ✅ راهنما برای پرداخت */}

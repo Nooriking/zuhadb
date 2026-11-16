@@ -27,7 +27,7 @@ class InvestmentPurchaseAllocationController extends Controller
         $allocations = InvestmentPurchaseAllocation::query()
             ->with([
                 'investment:id,investment_number,investor_id,capital_amount_afn,available_amount_afn',
-                'investment.investor:id,full_name',
+                'investment.investor:id,name',
                 'purchase:id,name,invoice_number,line_total,purchase_date',
                 'creator:id,name',
             ])
@@ -54,7 +54,7 @@ class InvestmentPurchaseAllocationController extends Controller
     {
         // Investments با موجودی قابل استفاده
         $availableInvestments = Investment::query()
-            ->with(['investor:id,full_name'])
+            ->with(['investor:id,name'])
             ->notTrashed()
             ->whereIn('status', ['active', 'partially_used'])
             ->where('available_amount_afn', '>', 0)
@@ -143,7 +143,7 @@ class InvestmentPurchaseAllocationController extends Controller
     public function show(InvestmentPurchaseAllocation $allocation): Response
     {
         $allocation->load([
-            'investment.investor:id,full_name,phone',
+            'investment.investor:id,name,phone',
             'purchase:id,name,invoice_number,line_total,purchase_date,supplier_id',
             'purchase.supplier:id,name',
             'creator:id,name,email',

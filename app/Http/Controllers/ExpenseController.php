@@ -21,12 +21,20 @@ class ExpenseController extends Controller
         $category = $request->query('category');
         $from     = $request->query('from');
         $to       = $request->query('to');
+        $user     = $request->user();
+
+        if ($user?->isBranchScoped()) {
+            $branchId = $user->branch_id;
+        }
+
+        $scoped = fn ($q) => $q
+            ->when($branchId, fn ($query, $v) => $query->where('branch_id', $v));
 
         $expenses = Expense::query()
             ->with(['branch:id,name,code', 'creator:id,name'])
             ->notTrashed()
+            ->tap($scoped)
             ->when($search, fn ($q, $s) => $q->where('title', 'like', "%{$s}%"))
-            ->when($branchId, fn ($q, $v) => $q->where('branch_id', $v))
             ->when($category, fn ($q, $v) => $q->where('category', $v))
             ->when($from, fn ($q, $v) => $q->whereDate('expense_date', '>=', $v))
             ->when($to, fn ($q, $v) => $q->whereDate('expense_date', '<=', $v))
@@ -37,25 +45,25 @@ class ExpenseController extends Controller
 
         // ✅ آمار — شامل مصارف امروز
         $stats = [
-            'total'       => Expense::notTrashed()->count(),
-            'this_month'  => (float) Expense::notTrashed()
+            'total'       => Expense::notTrashed()->tap($scoped)->count(),
+            'this_month'  => (float) Expense::notTrashed()->tap($scoped)
                 ->whereMonth('expense_date', now()->month)
                 ->whereYear('expense_date', now()->year)
                 ->sum('amount_afn'),
-            'total_afn'   => (float) Expense::notTrashed()->sum('amount_afn'),
+            'total_afn'   => (float) Expense::notTrashed()->tap($scoped)->sum('amount_afn'),
 
             // ✅ جدید: مصارف امروز
-            'today_afn'   => (float) Expense::notTrashed()
+            'today_afn'   => (float) Expense::notTrashed()->tap($scoped)
                 ->whereDate('expense_date', today())
                 ->sum('amount_afn'),
-            'today_count' => Expense::notTrashed()
+            'today_count' => Expense::notTrashed()->tap($scoped)
                 ->whereDate('expense_date', today())
                 ->count(),
         ];
 
         return Inertia::render('expenses/index', [
             'expenses'   => $expenses,
-            'branches'   => Branch::notTrashed()->select('id', 'name', 'code')->get(),
+            'branches'   => Branch::notTrashed()->visibleTo($user)->select('id', 'name', 'code')->get(),
             'categories' => Expense::CATEGORIES,
             'filters'    => [
                 'search'    => $search,
@@ -68,10 +76,10 @@ class ExpenseController extends Controller
         ]);
     }
 
-    public function create(): Response
+    public function create(Request $request): Response
     {
         return Inertia::render('expenses/create', [
-            'branches'   => Branch::notTrashed()->active()->select('id', 'name', 'code')->get(),
+            'branches'   => Branch::notTrashed()->active()->visibleTo($request->user())->select('id', 'name', 'code')->get(),
             'categories' => Expense::CATEGORIES,
             'methods'    => Expense::PAYMENT_METHODS,
             'nextNumber' => Expense::generateExpenseNumber(),
@@ -93,10 +101,15 @@ class ExpenseController extends Controller
             ->with('success', "Expense \"{$expense->expense_number}\" created successfully.");
     }
 
-    public function show(Expense $expense): Response
+    public function show(Request $request, Expense $expense): Response
     {
         if ($expense->trash) {
             abort(404);
+        }
+
+        $user = $request->user();
+        if ($user?->isBranchScoped() && (int) $expense->branch_id !== (int) $user->branch_id) {
+            abort(403, 'You are not allowed to view expenses from another branch.');
         }
 
         $expense->load(['branch:id,name,code', 'creator:id,name,email']);
@@ -106,15 +119,20 @@ class ExpenseController extends Controller
         ]);
     }
 
-    public function edit(Expense $expense): Response
+    public function edit(Request $request, Expense $expense): Response
     {
         if ($expense->trash) {
             abort(404);
         }
 
+        $user = $request->user();
+        if ($user?->isBranchScoped() && (int) $expense->branch_id !== (int) $user->branch_id) {
+            abort(403, 'You are not allowed to edit expenses from another branch.');
+        }
+
         return Inertia::render('expenses/edit', [
             'expense'    => $expense,
-            'branches'   => Branch::notTrashed()->active()->select('id', 'name', 'code')->get(),
+            'branches'   => Branch::notTrashed()->active()->visibleTo($user)->select('id', 'name', 'code')->get(),
             'categories' => Expense::CATEGORIES,
             'methods'    => Expense::PAYMENT_METHODS,
         ]);

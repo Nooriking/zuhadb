@@ -824,7 +824,7 @@ class ProfitReportController extends Controller
         $rows = Investor::query()
             ->notTrashed()
             ->with('wallet')
-            ->orderBy('full_name')
+            ->orderBy('name')
             ->get()
             ->map(function (Investor $inv) use ($activity, $entries, $totalInvestorProfit) {
                 $m = $this->metrics($activity->get($inv->id) ?? (object) ['quantity' => 0]);
@@ -852,9 +852,9 @@ class ProfitReportController extends Controller
 
         $matrix = $this->buildMatrix(
             $batchItems()
-                ->join('investors', 'investors.id', '=', 'product_batches.investor_id'),
+                ->join('users', 'users.id', '=', 'product_batches.investor_id')->where('users.role', 'investor'),
             'product_batches.investor_id',
-            'investors.full_name',
+            'users.name',
             'SUM(sale_items.investor_profit_afn)',
             $this->periodExpr($f['matrix_by'], 'sales.sale_date'),
             'Unknown investor',

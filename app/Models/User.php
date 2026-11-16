@@ -95,7 +95,7 @@ class User extends Authenticatable
         self::ROLE_SUPER_ADMIN => ['*'],
 
         self::ROLE_ADMIN => [
-            'dashboard', 'companies', 'users',
+            'dashboard', 'companies', 'users', 'branches',
             'brands', 'categories', 'products',
             'suppliers', 'customers', 'purchases', 'inventory',
             'stock-transfers', 'sales', 'sale-returns',
@@ -153,6 +153,7 @@ class User extends Authenticatable
 
         self::ROLE_ADMIN => [
             'users.view', 'users.create', 'users.update', 'users.block', 'users.unblock',
+            'branches.view', 'branches.create', 'branches.update',
             'products.view', 'products.create', 'products.update', 'products.delete',
             'brands.view', 'brands.create', 'brands.update', 'brands.delete',
             'suppliers.view', 'suppliers.create',
@@ -174,6 +175,7 @@ class User extends Authenticatable
 
         self::ROLE_BRANCH_MANAGER => [
             'users.view', 'users.create', 'users.update', 'users.block', 'users.unblock',
+            'branches.view',
             'products.view', 'products.create', 'products.update', 'products.delete',
             'brands.view', 'brands.create', 'brands.update', 'brands.delete',
             'suppliers.view', 'suppliers.create',
@@ -307,6 +309,36 @@ class User extends Authenticatable
     public function expenses(): HasMany
     {
         return $this->hasMany(Expense::class, 'created_by');
+    }
+
+    /**
+     * True when this user id is referenced by investor financial ledgers.
+     * Used to block deletion while preserving history.
+     * An empty zero wallet alone does not count as history.
+     */
+    public function hasInvestorFinancialHistory(): bool
+    {
+        $id = (int) $this->id;
+
+        if (Investment::query()->where('investor_id', $id)->exists()
+            || InvestorTransaction::query()->where('investor_id', $id)->exists()
+            || InvestorProfitEntry::query()->where('investor_id', $id)->exists()
+            || InvestorWithdrawal::query()->where('investor_id', $id)->exists()
+            || Product::query()->where('investor_id', $id)->exists()
+            || ProductBatch::query()->where('investor_id', $id)->exists()) {
+            return true;
+        }
+
+        return InvestorWallet::query()
+            ->where('investor_id', $id)
+            ->where(function ($q) {
+                $q->where('capital_balance_afn', '>', 0)
+                    ->orWhere('profit_balance_afn', '>', 0)
+                    ->orWhere('total_invested_afn', '>', 0)
+                    ->orWhere('total_profit_earned_afn', '>', 0)
+                    ->orWhere('total_withdrawn_afn', '>', 0);
+            })
+            ->exists();
     }
 
     /* =========================================================
@@ -544,6 +576,20 @@ class User extends Authenticatable
     public function canManageBranches(): bool
     {
         return $this->isSuperAdmin() || $this->isAdmin();
+    }
+
+    /**
+     * Post or override operational FX rates (USD→AFN / AED→AFN).
+     * Cashiers and investors may only use existing rates.
+     */
+    public function canManageExchangeRates(): bool
+    {
+        return $this->hasAnyRole([
+            self::ROLE_SUPER_ADMIN,
+            self::ROLE_ADMIN,
+            self::ROLE_ACCOUNTANT,
+            self::ROLE_BRANCH_MANAGER,
+        ]);
     }
 
     /* =========================================================

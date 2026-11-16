@@ -8,7 +8,7 @@ class StoreExchangeRateRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return true;
+        return $this->user()?->canManageExchangeRates() ?? false;
     }
 
     public function rules(): array
