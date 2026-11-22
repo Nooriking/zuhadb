@@ -1,56 +1,79 @@
-// resources/js/pages/inventory/show.tsx
-
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Textarea } from '@/components/ui/textarea';
-import { useToast } from '@/hooks/use-toast';
+import { useExchange } from '@/hooks/useExchange';
 import AppLayout from '@/layouts/app-layout';
-import { LOW_STOCK_THRESHOLD } from '@/lib/inventory';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
-import { AlertTriangle, ArrowDownCircle, ArrowLeft, ArrowUpCircle, RefreshCw, TrendingDown, TrendingUp, Warehouse, X } from 'lucide-react';
 import { useState } from 'react';
 
-interface Inventory {
+interface InventoryPayload {
     id: number;
     quantity: number;
     reserved_quantity: number;
     available_quantity: number;
-    average_cost_afn: string;
+    average_cost_afn: number;
+    total_cost_afn: number;
+    sale_price_afn: number;
+    total_sale_afn: number;
     last_movement_at: string | null;
     branch: { id: number; name: string; code: string } | null;
     variant: {
         id: number;
         name: string | null;
+        sku: string | null;
         volume_ml: number | null;
         concentration: string | null;
         product: {
             id: number;
             name: string;
             brand: { id: number; name: string } | null;
-            category: { id: number; name: string } | null;
         } | null;
+        prices: Array<{
+            id: number;
+            price_type: string;
+            currency_code: string;
+            amount: number;
+            currency?: { id: number; code: string; symbol: string | null } | null;
+        }>;
     } | null;
 }
 
-interface Transaction {
+interface Movement {
     id: number;
     type: string;
     quantity: number;
     before_quantity: number;
     after_quantity: number;
     notes: string | null;
-    created_at: string;
-    batch: { id: number; batch_code: string } | null;
-    creator: { id: number; name: string } | null;
+    created_by: string | null;
+    created_at: string | null;
+    batch: {
+        id: number;
+        batch_code: string | null;
+        purchase_date: string | null;
+        invoice_number: string | null;
+    } | null;
+}
+
+interface BatchRow {
+    id: number;
+    batch_code: string | null;
+    quantity: number;
+    remaining_quantity: number;
+    unit_cost_afn: number;
+    unit_cost_currency: number;
+    purchase_currency: string | null;
+    exchange_rate: number;
+    purchase_date: string | null;
+    invoice_number: string | null;
+    investment_id: number | null;
+    investor: string | null;
+    sale_price_afn: number;
+    store_profit_per_unit_afn: number;
 }
 
 interface Props {
-    inventory: Inventory;
-    transactions: Transaction[];
+    inventory: InventoryPayload;
+    movements: Movement[];
+    batches: BatchRow[];
     stats: {
         total_purchased: number;
         total_sold: number;
@@ -58,7 +81,7 @@ interface Props {
     };
 }
 
-const breadcrumbs = (inventory: Inventory): BreadcrumbItem[] => [
+const breadcrumbs = (inventory: InventoryPayload): BreadcrumbItem[] => [
     { title: 'Dashboard', href: '/dashboard' },
     { title: 'Inventory', href: '/inventory' },
     { title: inventory.variant?.product?.name || 'Item', href: `/inventory/${inventory.id}` },
@@ -75,8 +98,8 @@ const TYPE_LABELS: Record<string, string> = {
     opening: 'Opening Stock',
 };
 
-export default function InventoryShow({ inventory, transactions, stats }: Props) {
-    const { toast } = useToast();
+export default function InventoryShow({ inventory, movements, batches, stats }: Props) {
+    const { convert } = useExchange();
     const [showAdjustModal, setShowAdjustModal] = useState(false);
     const [adjustForm, setAdjustForm] = useState({
         new_quantity: String(inventory.quantity),
@@ -84,272 +107,265 @@ export default function InventoryShow({ inventory, transactions, stats }: Props)
     });
     const [loading, setLoading] = useState(false);
 
+    const money = (value: number) =>
+        new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(value || 0);
+
+    const multi = (afn: number) => {
+        const usd = convert(afn, 'AFN', 'USD');
+        const aed = convert(afn, 'AFN', 'AED');
+        return `${money(afn)} AFN · ${usd == null ? '—' : money(usd)} USD · ${aed == null ? '—' : money(aed)} AED`;
+    };
+
+    const formatDate = (value: string | null) => {
+        if (!value) return '—';
+        return new Date(value).toLocaleString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+        });
+    };
+
     const handleAdjust = (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
-
         router.post(`/inventory/${inventory.id}/adjust`, adjustForm, {
             preserveScroll: true,
-            onSuccess: () => {
-                toast({ title: 'Success', description: 'Stock adjusted successfully.' });
+            onFinish: () => {
+                setLoading(false);
                 setShowAdjustModal(false);
-                setLoading(false);
-            },
-            onError: () => {
-                toast({ title: 'Error', description: 'Failed to adjust stock.', variant: 'destructive' });
-                setLoading(false);
             },
         });
     };
 
-    const getStockStatus = () => {
-        if (inventory.quantity <= 0) {
-            return (
-                <Badge variant="destructive" className="gap-1">
-                    <AlertTriangle className="h-3 w-3" /> Out of Stock
-                </Badge>
-            );
-        }
-        if (inventory.quantity > 0 && inventory.quantity <= 2) {
-            return (
-                <Badge variant="warning" className="gap-1">
-                    <TrendingDown className="h-3 w-3" /> Low Stock
-                </Badge>
-            );
-        }
-        return (
-            <Badge variant="success" className="gap-1">
-                <TrendingUp className="h-3 w-3" /> In Stock
-            </Badge>
-        );
-    };
-
-    const getTypeBadge = (type: string) => {
-        const positive = ['purchase', 'return', 'transfer_in', 'opening'].includes(type);
-
-        if (type === 'sale') {
-            return (
-                <Badge variant="destructive" className="gap-1">
-                    <ArrowDownCircle className="h-3 w-3" /> Sale
-                </Badge>
-            );
-        }
-        if (type === 'purchase') {
-            return (
-                <Badge variant="success" className="gap-1">
-                    <ArrowUpCircle className="h-3 w-3" /> Purchase
-                </Badge>
-            );
-        }
-        if (type === 'return') {
-            return (
-                <Badge variant="success" className="gap-1">
-                    <ArrowUpCircle className="h-3 w-3" /> Return
-                </Badge>
-            );
-        }
-        if (type === 'adjustment') {
-            return (
-                <Badge variant="outline" className="gap-1">
-                    <RefreshCw className="h-3 w-3" /> Adjustment
-                </Badge>
-            );
-        }
-
-        return <Badge variant={positive ? 'success' : 'destructive'}>{TYPE_LABELS[type] || type}</Badge>;
-    };
-
     return (
         <AppLayout breadcrumbs={breadcrumbs(inventory)}>
-            <Head title={`Inventory — ${inventory.variant?.product?.name}`} />
+            <Head title={inventory.variant?.product?.name || 'Inventory'} />
 
             <div className="flex flex-col gap-6 p-6">
-                {/* Header */}
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex items-center gap-4">
-                        <div className="flex h-14 w-14 items-center justify-center rounded-lg border bg-gray-100">
-                            <Warehouse className="h-7 w-7 text-gray-600" />
-                        </div>
-                        <div>
-                            <div className="flex items-center gap-3">
-                                <h1 className="text-xl font-bold">
-                                    {inventory.variant?.product?.brand?.name && `${inventory.variant.product.brand.name} — `}
-                                    {inventory.variant?.product?.name}
-                                </h1>
-                                {getStockStatus()}
-                            </div>
-                            <p className="text-muted-foreground text-sm">
-                                {inventory.variant?.volume_ml ? `${inventory.variant.volume_ml}ml` : ''}
-                                {inventory.variant?.concentration ? ` · ${inventory.variant.concentration.toUpperCase()}` : ''}
-                                {inventory.branch && ` · ${inventory.branch.name}`}
-                            </p>
-                        </div>
+                    <div>
+                        <h1 className="text-2xl font-bold tracking-tight">
+                            {inventory.variant?.product?.brand?.name && (
+                                <span className="text-gray-500">{inventory.variant.product.brand.name} — </span>
+                            )}
+                            {inventory.variant?.product?.name || inventory.variant?.name || 'Inventory item'}
+                        </h1>
+                        <p className="mt-1 text-sm text-gray-500">
+                            {inventory.branch?.name} ({inventory.branch?.code})
+                            {inventory.variant?.sku ? ` · SKU ${inventory.variant.sku}` : ''}
+                            {inventory.variant?.volume_ml ? ` · ${inventory.variant.volume_ml}ml` : ''}
+                        </p>
                     </div>
                     <div className="flex gap-2">
-                        <Button onClick={() => setShowAdjustModal(true)} variant="outline" className="gap-2">
-                            <RefreshCw className="h-4 w-4" /> Adjust Stock
-                        </Button>
+                        <button
+                            onClick={() => setShowAdjustModal(true)}
+                            className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white hover:bg-gray-800"
+                        >
+                            Adjust stock
+                        </button>
                         <Link href="/inventory">
-                            <Button variant="outline" className="gap-2">
-                                <ArrowLeft className="h-4 w-4" /> Back
-                            </Button>
+                            <button className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium hover:bg-gray-50">
+                                Back
+                            </button>
                         </Link>
                     </div>
                 </div>
 
-                {/* Stats Grid */}
                 <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-                    <div className="rounded-lg border bg-white p-4">
-                        <p className="text-xs text-gray-500">Current Stock</p>
-                        <p className="text-2xl font-bold">{inventory.quantity}</p>
-                        <p className="text-muted-foreground text-xs">Available: {inventory.available_quantity}</p>
+                    <div className="rounded-lg border bg-white p-4 shadow-sm">
+                        <p className="text-xs text-gray-500">Available</p>
+                        <p className="text-2xl font-bold">{inventory.available_quantity}</p>
+                        <p className="text-xs text-gray-500">
+                            on hand {inventory.quantity} · reserved {inventory.reserved_quantity}
+                        </p>
                     </div>
-                    <div className="rounded-lg border bg-white p-4">
-                        <p className="text-xs text-gray-500">Reserved</p>
-                        <p className="text-2xl font-bold text-yellow-600">{inventory.reserved_quantity}</p>
-                        <p className="text-muted-foreground text-xs">Low-stock threshold: {LOW_STOCK_THRESHOLD}</p>
+                    <div className="rounded-lg border bg-white p-4 shadow-sm">
+                        <p className="text-xs text-gray-500">Avg cost / unit</p>
+                        <p className="text-lg font-bold">{money(inventory.average_cost_afn)} AFN</p>
+                        <p className="text-[11px] text-gray-500">{multi(inventory.average_cost_afn)}</p>
                     </div>
-                    <div className="rounded-lg border bg-white p-4">
-                        <p className="text-xs text-gray-500">Total Purchased</p>
-                        <p className="text-2xl font-bold text-green-600">{stats.total_purchased}</p>
-                        <p className="text-muted-foreground text-xs">Since start</p>
+                    <div className="rounded-lg border bg-white p-4 shadow-sm">
+                        <p className="text-xs text-gray-500">Stock value</p>
+                        <p className="text-lg font-bold">{money(inventory.total_cost_afn)} AFN</p>
+                        <p className="text-[11px] text-gray-500">{multi(inventory.total_cost_afn)}</p>
                     </div>
-                    <div className="rounded-lg border bg-white p-4">
-                        <p className="text-xs text-gray-500">Total Sold</p>
-                        <p className="text-2xl font-bold text-red-600">{stats.total_sold}</p>
-                        <p className="text-muted-foreground text-xs">Returned: {stats.total_returned}</p>
+                    <div className="rounded-lg border bg-white p-4 shadow-sm">
+                        <p className="text-xs text-gray-500">Retail value</p>
+                        <p className="text-lg font-bold">{money(inventory.total_sale_afn)} AFN</p>
+                        <p className="text-[11px] text-gray-500">{multi(inventory.total_sale_afn)}</p>
                     </div>
                 </div>
 
-                {/* Avg Cost */}
-                <div className="rounded-lg border bg-white p-6">
-                    <h3 className="mb-2 text-sm font-semibold">Average Cost</h3>
-                    <p className="font-mono text-2xl font-bold">
-                        {new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(parseFloat(inventory.average_cost_afn))} AFN
-                    </p>
-                    <p className="text-muted-foreground text-xs">Weighted average across all batches</p>
+                <div className="grid grid-cols-3 gap-4">
+                    <div className="rounded-lg border bg-white p-4">
+                        <p className="text-xs text-gray-500">Purchased</p>
+                        <p className="text-xl font-bold text-green-700">{stats.total_purchased}</p>
+                    </div>
+                    <div className="rounded-lg border bg-white p-4">
+                        <p className="text-xs text-gray-500">Sold</p>
+                        <p className="text-xl font-bold text-red-700">{stats.total_sold}</p>
+                    </div>
+                    <div className="rounded-lg border bg-white p-4">
+                        <p className="text-xs text-gray-500">Returned</p>
+                        <p className="text-xl font-bold text-blue-700">{stats.total_returned}</p>
+                    </div>
                 </div>
 
-                {/* Transactions */}
                 <div className="rounded-lg border bg-white shadow-sm">
                     <div className="border-b px-6 py-4">
-                        <h2 className="text-lg font-semibold">Transaction History</h2>
-                        <p className="text-muted-foreground text-sm">Last 100 movements</p>
+                        <h2 className="text-lg font-semibold">Active batches ({batches.length})</h2>
+                        <p className="text-sm text-gray-500">FIFO lots for this branch + variant. Purchase date comes from product_batches.</p>
                     </div>
-                    <div className="overflow-x-auto">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Date</TableHead>
-                                    <TableHead>Type</TableHead>
-                                    <TableHead>Batch</TableHead>
-                                    <TableHead className="text-center">Change</TableHead>
-                                    <TableHead className="text-center">Before</TableHead>
-                                    <TableHead className="text-center">After</TableHead>
-                                    <TableHead>By</TableHead>
-                                    <TableHead>Notes</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {transactions.length === 0 ? (
-                                    <TableRow>
-                                        <TableCell colSpan={8} className="text-muted-foreground h-24 text-center">
-                                            No transactions yet.
-                                        </TableCell>
-                                    </TableRow>
-                                ) : (
-                                    transactions.map((tx) => (
-                                        <TableRow key={tx.id}>
-                                            <TableCell className="text-xs">
-                                                {new Date(tx.created_at).toLocaleString('en-US', {
-                                                    year: 'numeric',
-                                                    month: 'short',
-                                                    day: 'numeric',
-                                                    hour: '2-digit',
-                                                    minute: '2-digit',
-                                                })}
-                                            </TableCell>
-                                            <TableCell>{getTypeBadge(tx.type)}</TableCell>
-                                            <TableCell className="font-mono text-xs">{tx.batch?.batch_code || '—'}</TableCell>
-                                            <TableCell className="text-center font-mono font-bold">
-                                                <span className={tx.quantity > 0 ? 'text-green-600' : 'text-red-600'}>
-                                                    {tx.quantity > 0 ? '+' : ''}
-                                                    {tx.quantity}
-                                                </span>
-                                            </TableCell>
-                                            <TableCell className="text-center font-mono text-sm text-gray-500">{tx.before_quantity}</TableCell>
-                                            <TableCell className="text-center font-mono text-sm font-semibold">{tx.after_quantity}</TableCell>
-                                            <TableCell className="text-sm">{tx.creator?.name || '—'}</TableCell>
-                                            <TableCell className="text-muted-foreground max-w-xs truncate text-xs">{tx.notes || '—'}</TableCell>
-                                        </TableRow>
-                                    ))
-                                )}
-                            </TableBody>
-                        </Table>
+                    {batches.length === 0 ? (
+                        <div className="p-8 text-center text-gray-500">No active batches.</div>
+                    ) : (
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                                <thead className="bg-black text-white">
+                                    <tr>
+                                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Batch</th>
+                                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Purchase date</th>
+                                        <th className="px-4 py-3 text-center text-xs font-semibold uppercase">Left</th>
+                                        <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Unit cost</th>
+                                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Investor</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {batches.map((batch) => (
+                                        <tr key={batch.id} className="border-b">
+                                            <td className="px-4 py-3 font-mono text-xs">
+                                                <Link href={`/batches/${batch.id}`} className="text-blue-600 hover:underline">
+                                                    {batch.batch_code || `#${batch.id}`}
+                                                </Link>
+                                                {batch.invoice_number && (
+                                                    <div className="text-gray-500">Inv {batch.invoice_number}</div>
+                                                )}
+                                            </td>
+                                            <td className="px-4 py-3 text-xs">{batch.purchase_date || '—'}</td>
+                                            <td className="px-4 py-3 text-center font-mono font-semibold">
+                                                {batch.remaining_quantity}/{batch.quantity}
+                                            </td>
+                                            <td className="px-4 py-3 text-right font-mono text-xs">
+                                                <div>{money(batch.unit_cost_afn)} AFN</div>
+                                                {batch.purchase_currency && batch.purchase_currency !== 'AFN' && (
+                                                    <div className="text-gray-500">
+                                                        {money(batch.unit_cost_currency)} {batch.purchase_currency} @ {batch.exchange_rate || '—'}
+                                                    </div>
+                                                )}
+                                            </td>
+                                            <td className="px-4 py-3 text-sm">
+                                                {batch.investor || 'Store'}
+                                                {batch.investment_id ? (
+                                                    <div className="text-xs text-gray-500">
+                                                        <Link href={`/investments/${batch.investment_id}`} className="text-blue-600 hover:underline">
+                                                            Investment #{batch.investment_id}
+                                                        </Link>
+                                                    </div>
+                                                ) : null}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+
+                <div className="rounded-lg border bg-white shadow-sm">
+                    <div className="border-b px-6 py-4">
+                        <h2 className="text-lg font-semibold">Movements ({movements.length})</h2>
                     </div>
+                    {movements.length === 0 ? (
+                        <div className="p-8 text-center text-gray-500">No movements yet.</div>
+                    ) : (
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                                <thead className="bg-black text-white">
+                                    <tr>
+                                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase">When</th>
+                                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Type</th>
+                                        <th className="px-4 py-3 text-center text-xs font-semibold uppercase">Qty</th>
+                                        <th className="px-4 py-3 text-center text-xs font-semibold uppercase">Before → After</th>
+                                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Batch</th>
+                                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase">By</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {movements.map((m) => (
+                                        <tr key={m.id} className="border-b">
+                                            <td className="px-4 py-3 text-xs">{formatDate(m.created_at)}</td>
+                                            <td className="px-4 py-3">{TYPE_LABELS[m.type] || m.type}</td>
+                                            <td className="px-4 py-3 text-center font-mono font-semibold">{m.quantity}</td>
+                                            <td className="px-4 py-3 text-center font-mono text-xs">
+                                                {m.before_quantity} → {m.after_quantity}
+                                            </td>
+                                            <td className="px-4 py-3 text-xs">
+                                                {m.batch ? (
+                                                    <>
+                                                        <div className="font-mono">{m.batch.batch_code || `#${m.batch.id}`}</div>
+                                                        <div className="text-gray-500">{m.batch.purchase_date || '—'}</div>
+                                                    </>
+                                                ) : (
+                                                    '—'
+                                                )}
+                                            </td>
+                                            <td className="px-4 py-3 text-xs">{m.created_by || '—'}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
                 </div>
             </div>
 
-            {/* Adjust Modal */}
             {showAdjustModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowAdjustModal(false)}>
-                    <div className="bg-background w-full max-w-md rounded-lg border shadow-lg" onClick={(e) => e.stopPropagation()}>
+                    <div className="w-full max-w-md rounded-lg border bg-white shadow-lg" onClick={(e) => e.stopPropagation()}>
                         <form onSubmit={handleAdjust}>
-                            <div className="flex items-start justify-between p-6">
-                                <div className="flex items-start gap-4">
-                                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100">
-                                        <RefreshCw className="h-5 w-5 text-blue-600" />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-lg font-semibold">Adjust Stock</h3>
-                                        <p className="text-muted-foreground mt-1 text-sm">Set the current stock to a new value.</p>
-                                    </div>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={() => setShowAdjustModal(false)}
-                                    className="text-muted-foreground hover:text-foreground"
-                                >
-                                    <X className="h-5 w-5" />
-                                </button>
+                            <div className="border-b p-6">
+                                <h3 className="text-lg font-semibold">Adjust stock</h3>
+                                <p className="mt-1 text-sm text-gray-500">Sets on-hand quantity for this branch + variant.</p>
                             </div>
-
-                            <div className="space-y-4 px-6">
+                            <div className="space-y-4 p-6">
                                 <div className="space-y-2">
-                                    <Label>Current Quantity</Label>
-                                    <Input value={inventory.quantity} disabled className="font-mono" />
-                                </div>
-                                <div className="space-y-2">
-                                    <Label>
-                                        New Quantity <span className="text-destructive">*</span>
-                                    </Label>
-                                    <Input
+                                    <label className="text-sm font-medium">New quantity</label>
+                                    <input
                                         type="number"
                                         min="0"
                                         value={adjustForm.new_quantity}
                                         onChange={(e) => setAdjustForm({ ...adjustForm, new_quantity: e.target.value })}
-                                        className="font-mono"
+                                        className="w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-sm"
                                         required
                                     />
                                 </div>
                                 <div className="space-y-2">
-                                    <Label>Reason / Notes</Label>
-                                    <Textarea
+                                    <label className="text-sm font-medium">Notes</label>
+                                    <textarea
                                         value={adjustForm.notes}
                                         onChange={(e) => setAdjustForm({ ...adjustForm, notes: e.target.value })}
                                         rows={2}
-                                        placeholder="e.g. Physical count correction, damage, etc."
+                                        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
                                     />
                                 </div>
                             </div>
-
-                            <div className="mt-6 flex justify-end gap-2 border-t px-6 py-4">
-                                <Button type="button" variant="outline" onClick={() => setShowAdjustModal(false)}>
+                            <div className="flex justify-end gap-2 border-t px-6 py-4">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowAdjustModal(false)}
+                                    className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium hover:bg-gray-50"
+                                >
                                     Cancel
-                                </Button>
-                                <Button type="submit" disabled={loading}>
-                                    {loading ? 'Saving...' : 'Adjust Stock'}
-                                </Button>
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={loading}
+                                    className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+                                >
+                                    {loading ? 'Saving...' : 'Save'}
+                                </button>
                             </div>
                         </form>
                     </div>

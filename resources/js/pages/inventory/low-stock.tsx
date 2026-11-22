@@ -37,6 +37,7 @@ interface Props {
         to: number | null;
         links: { url: string | null; label: string; active: boolean }[];
     };
+    lowStockThreshold?: number;
 }
 
 const breadcrumbs: BreadcrumbItem[] = [
@@ -45,7 +46,7 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Low Stock', href: '/inventory/low-stock' },
 ];
 
-export default function LowStock({ inventories }: Props) {
+export default function LowStock({ inventories, lowStockThreshold = LOW_STOCK_THRESHOLD }: Props) {
     const handlePageChange = (url: string | null) => {
         if (url) router.get(url, {}, { preserveState: true, preserveScroll: true });
     };
@@ -112,12 +113,12 @@ export default function LowStock({ inventories }: Props) {
                                                 {inv.branch?.code}
                                             </Badge>
                                         </TableCell>
-                                        <TableCell className="text-center font-mono font-bold text-yellow-600">{inv.quantity}</TableCell>
+                                        <TableCell className="text-center font-mono font-bold text-yellow-600">{inv.available_quantity}</TableCell>
                                         <TableCell className="text-center font-mono text-sm text-gray-500">
-                                            {LOW_STOCK_THRESHOLD}
+                                            {lowStockThreshold}
                                         </TableCell>
                                         <TableCell className="text-center">
-                                            {inv.quantity <= 0 ? <Badge variant="destructive">Out</Badge> : <Badge variant="warning">Low</Badge>}
+                                            {inv.available_quantity <= 0 ? <Badge variant="destructive">Out</Badge> : <Badge variant="warning">Low</Badge>}
                                         </TableCell>
                                         <TableCell>
                                             <div className="flex items-center justify-center gap-1">

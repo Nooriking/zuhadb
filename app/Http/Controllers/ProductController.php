@@ -93,7 +93,6 @@ class ProductController extends Controller
         $gender  = $validated['gender']   ?? null;
 
         $products = Product::query()
-            ->whereNull('purchase_date')
             ->with([
                 'brand:id,name',
                 'variants' => fn ($q) => $q
@@ -102,8 +101,8 @@ class ProductController extends Controller
                         'id', 'product_id',
                         'name', 'sku', 'image',
                         'volume_ml', 'concentration',
-                        'stock_quantity'
                     )
+                    ->withSum('inventories as stock_quantity', 'available_quantity')
                     ->with([
                         'barcodes:id,variant_id,barcode,barcode_type,is_primary,status,current_stock',
                         'prices',
@@ -140,9 +139,7 @@ class ProductController extends Controller
         $batchRows = ProductBatch::query()
             ->whereIn('variant_id', $variantIds)
             ->where('trash', false)
-            ->where(function ($query) {
-                $query->whereNotNull('exchange_rate')->orWhereNotNull('usd_to_afn_rate');
-            })
+            ->whereNotNull('exchange_rate')
             ->get(['variant_id', 'exchange_rate', 'unit_cost_currency', 'unit_cost_afn', 'quantity', 'total_cost_afn']);
 
         // Weighted average FX from historical batch snapshots (unit cost original → AFN).

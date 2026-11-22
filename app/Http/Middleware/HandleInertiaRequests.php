@@ -5,7 +5,7 @@ namespace App\Http\Middleware;
 use App\Models\ActivityNotification;
 use App\Models\AppSetting;
 use App\Models\Currency;
-use App\Services\ExchangeService;
+use App\Services\ExchangeRateService;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Middleware;
@@ -100,7 +100,14 @@ class HandleInertiaRequests extends Middleware
     }
 
     /**
-     * @return array{usd_to_afn: string|null, aed_to_afn: string|null, usd_to_aed: string|null, effective_at: string|null, source: string|null}
+     * @return array{
+     *     usd_to_afn: float|null,
+     *     aed_to_afn: float|null,
+     *     usd_to_aed: float|null,
+     *     effective_at: string|null,
+     *     source: string|null,
+     *     updated_at: string|null
+     * }
      */
     private function sharedExchangeRates(): array
     {
@@ -110,20 +117,11 @@ class HandleInertiaRequests extends Middleware
             'usd_to_aed' => null,
             'effective_at' => null,
             'source' => null,
+            'updated_at' => null,
         ];
 
         try {
-            $exchange = app(ExchangeService::class);
-            $rates = $exchange->getCurrentRates();
-            $usdSnap = $exchange->snapshot('USD', 'AFN');
-
-            return [
-                'usd_to_afn' => $rates['usd_to_afn'] ?? null,
-                'aed_to_afn' => $rates['aed_to_afn'] ?? null,
-                'usd_to_aed' => $rates['usd_to_aed'] ?? null,
-                'effective_at' => $usdSnap['effective_at'] ?? null,
-                'source' => $usdSnap['source'] ?? null,
-            ];
+            return app(ExchangeRateService::class)->flatBoard();
         } catch (\Throwable) {
             return $empty;
         }

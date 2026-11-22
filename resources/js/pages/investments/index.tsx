@@ -1,7 +1,4 @@
-﻿// resources/js/pages/investments/index.tsx
-
-import { FilterField, IndexFilters, filterControlClass } from '@/components/index-filters';
-import { formatTotals, type MoneyTotals } from '@/lib/currencies';
+﻿import { FilterField, IndexFilters, filterControlClass } from '@/components/index-filters';
 import { DeleteAction, RowActions, ViewAction } from '@/components/row-actions';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
@@ -10,26 +7,27 @@ import { useState } from 'react';
 
 interface Investment {
     id: number;
-    investment_number: string;
-    capital_amount_currency?: string | null;
-    currency_code?: string | null;
-    capital_amount_afn: string;
-    available_amount_afn: string;
-    allocated_amount_afn: string;
-    profit_amount_afn: string;
+    amount_currency: string | number;
+    amount_afn: string | number;
+    exchange_rate: string | number | null;
     investment_date: string;
-    status: 'active' | 'partially_used' | 'fully_used' | 'withdrawn' | 'closed';
-    purchase_allocations_count: number;
-    product_allocations_count: number;
-    investor: { id: number; full_name: string; phone: string | null } | null;
+    status: 'active' | 'closed';
+    notes: string | null;
+    batches_count: number;
+    total_cost_batches: string | number | null;
+    investor: { id: number; name: string; email: string | null } | null;
     currency: { id: number; code: string; symbol: string | null } | null;
-    creator: { id: number; name: string } | null;
 }
 
-interface Investor {
+interface InvestorOption {
     id: number;
-    full_name: string;
-    phone: string | null;
+    name: string;
+}
+
+interface CurrencyOption {
+    id: number;
+    code: string;
+    symbol: string | null;
 }
 
 interface Props {
@@ -42,21 +40,17 @@ interface Props {
         to: number | null;
         links: { url: string | null; label: string; active: boolean }[];
     };
-    investors: Investor[];
-    filters: {
-        search: string | null;
-        investor_id: string | null;
-        status: string | null;
+    summary: {
+        total_invested_afn: number;
+        total_batches: number;
+        active_count: number;
     };
-    stats: {
-        total_investments: number;
-        active_investments: number;
-        total_capital_afn: string;
-        total_available_afn: string;
-        total_allocated_afn: string;
-        total_profit_afn: string;
-        capital_totals?: MoneyTotals;
-        profit_totals?: MoneyTotals;
+    investors: InvestorOption[];
+    currencies: CurrencyOption[];
+    filters: {
+        investor_id?: string | null;
+        status?: string | null;
+        currency_id?: string | null;
     };
 }
 
@@ -65,50 +59,51 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Investments', href: '/investments' },
 ];
 
-const formatPrice = (value: string | number) => {
-    const num = typeof value === 'string' ? parseFloat(value) : value;
-    return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(num);
+const formatMoney = (value: string | number | null | undefined) => {
+    const num = typeof value === 'string' ? parseFloat(value) : Number(value ?? 0);
+    return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(Number.isFinite(num) ? num : 0);
 };
 
-const getStatusBadge = (status: string) => {
+const statusBadge = (status: string) => {
     const map: Record<string, string> = {
         active: 'bg-blue-100 text-blue-800',
-        partially_used: 'bg-yellow-100 text-yellow-800',
-        fully_used: 'bg-purple-100 text-purple-800',
-        withdrawn: 'bg-orange-100 text-orange-800',
         closed: 'bg-gray-100 text-gray-800',
     };
     return (
         <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${map[status] || 'bg-gray-100 text-gray-800'}`}>
-            {status.replace('_', ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
+            {status.charAt(0).toUpperCase() + status.slice(1)}
         </span>
     );
 };
 
-export default function InvestmentsIndex({ investments, investors, filters, stats }: Props) {
-    const [search, setSearch] = useState(filters.search || '');
-    const [investorFilter, setInvestorFilter] = useState(filters.investor_id || 'all');
+export default function InvestmentsIndex({ investments, summary, investors, currencies, filters }: Props) {
+    const [investorFilter, setInvestorFilter] = useState(filters.investor_id ? String(filters.investor_id) : 'all');
     const [statusFilter, setStatusFilter] = useState(filters.status || 'all');
+    const [currencyFilter, setCurrencyFilter] = useState(filters.currency_id ? String(filters.currency_id) : 'all');
 
-    const handleSearch = () => {
+    const applyFilters = (overrides: Record<string, string | undefined> = {}) => {
+        const next = {
+            investor_id: investorFilter,
+            status: statusFilter,
+            currency_id: currencyFilter,
+            ...overrides,
+        };
+
         router.get(
             '/investments',
             {
-                search: search || undefined,
-                investor_id: investorFilter === 'all' ? undefined : investorFilter,
-                status: statusFilter === 'all' ? undefined : statusFilter,
+                investor_id: next.investor_id === 'all' ? undefined : next.investor_id,
+                status: next.status === 'all' ? undefined : next.status,
+                currency_id: next.currency_id === 'all' ? undefined : next.currency_id,
             },
             { preserveState: true, preserveScroll: true },
         );
     };
 
     const confirmDelete = (investment: Investment) => {
-        if (!confirm(`Move "${investment.investment_number}" to trash?`)) return;
+        const label = `#${investment.id}`;
+        if (!confirm(`Delete investment ${label}? This only works when no batches are linked.`)) return;
         router.delete(`/investments/${investment.id}`, { preserveScroll: true });
-    };
-
-    const handlePageChange = (url: string | null) => {
-        if (url) router.get(url, {}, { preserveState: true, preserveScroll: true });
     };
 
     return (
@@ -116,11 +111,10 @@ export default function InvestmentsIndex({ investments, investors, filters, stat
             <Head title="Investments" />
 
             <div className="flex flex-col gap-6 p-6">
-                {/* Header */}
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-3">
                         <h1 className="text-2xl font-bold tracking-tight">Investments</h1>
-                        <span className="rounded-full border px-2.5 py-0.5 text-xs font-semibold">{investments.total} Investments</span>
+                        <span className="rounded-full border px-2.5 py-0.5 text-xs font-semibold">{investments.total}</span>
                     </div>
                     <div className="flex gap-2">
                         <Link href="/investors">
@@ -128,73 +122,90 @@ export default function InvestmentsIndex({ investments, investors, filters, stat
                                 Investors
                             </button>
                         </Link>
-                        <Link href="/investments/trash">
-                            <button className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium hover:bg-gray-50">
-                                Trash
+                        <Link href="/investments/create">
+                            <button className="inline-flex items-center gap-2 rounded-md bg-black px-4 py-2 text-sm font-medium text-white hover:bg-gray-800">
+                                New Investment
                             </button>
                         </Link>
                     </div>
                 </div>
 
-                {/* Stats */}
-                <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
-                        <p className="text-xs text-gray-500">Total</p>
-                        <p className="text-2xl font-bold">{stats.total_investments}</p>
+                        <p className="text-xs text-gray-500">Active capital (AFN)</p>
+                        <p className="text-2xl font-bold">{formatMoney(summary.total_invested_afn)}</p>
                     </div>
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
-                        <p className="text-xs text-gray-500">Active</p>
-                        <p className="text-2xl font-bold text-blue-600">{stats.active_investments}</p>
+                        <p className="text-xs text-gray-500">Active investments</p>
+                        <p className="text-2xl font-bold text-blue-600">{summary.active_count}</p>
                     </div>
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
-                        <p className="text-xs text-gray-500">Total Capital</p>
-                        <p className="text-xl font-bold">{formatTotals(stats.capital_totals) || `${formatPrice(stats.total_capital_afn)} AFN`}</p>
-                        <p className="text-muted-foreground text-xs">Ledger {formatPrice(stats.total_capital_afn)} AFN</p>
-                    </div>
-                    <div className="rounded-lg border bg-white p-4 shadow-sm">
-                        <p className="text-xs text-gray-500">Available</p>
-                        <p className="text-xl font-bold text-green-600">{formatPrice(stats.total_available_afn)} AFN</p>
-                    </div>
-                    <div className="rounded-lg border bg-white p-4 shadow-sm">
-                        <p className="text-xs text-gray-500">Total Profit</p>
-                        <p className="text-xl font-bold text-purple-600">{formatTotals(stats.profit_totals) || `${formatPrice(stats.total_profit_afn)} AFN`}</p>
-                        <p className="text-muted-foreground text-xs">Ledger {formatPrice(stats.total_profit_afn)} AFN</p>
+                        <p className="text-xs text-gray-500">Linked batches</p>
+                        <p className="text-2xl font-bold">{summary.total_batches}</p>
                     </div>
                 </div>
 
-                <IndexFilters search={search} onSearchChange={setSearch} onSearch={handleSearch} placeholder="Search by number or investor...">
+                <IndexFilters>
                     <FilterField label="Investor">
-                        <select value={investorFilter} onChange={(e) => { setInvestorFilter(e.target.value); setTimeout(handleSearch, 0); }} className={filterControlClass}>
-                            <option value="all">All Investors</option>
+                        <select
+                            value={investorFilter}
+                            onChange={(e) => {
+                                setInvestorFilter(e.target.value);
+                                applyFilters({ investor_id: e.target.value });
+                            }}
+                            className={filterControlClass}
+                        >
+                            <option value="all">All investors</option>
                             {investors.map((i) => (
-                                <option key={i.id} value={String(i.id)}>{i.full_name}</option>
+                                <option key={i.id} value={String(i.id)}>
+                                    {i.name}
+                                </option>
                             ))}
                         </select>
                     </FilterField>
                     <FilterField label="Status">
-                        <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setTimeout(handleSearch, 0); }} className={filterControlClass}>
-                            <option value="all">All Status</option>
+                        <select
+                            value={statusFilter}
+                            onChange={(e) => {
+                                setStatusFilter(e.target.value);
+                                applyFilters({ status: e.target.value });
+                            }}
+                            className={filterControlClass}
+                        >
+                            <option value="all">All status</option>
                             <option value="active">Active</option>
-                            <option value="partially_used">Partially Used</option>
-                            <option value="fully_used">Fully Used</option>
-                            <option value="withdrawn">Withdrawn</option>
                             <option value="closed">Closed</option>
+                        </select>
+                    </FilterField>
+                    <FilterField label="Currency">
+                        <select
+                            value={currencyFilter}
+                            onChange={(e) => {
+                                setCurrencyFilter(e.target.value);
+                                applyFilters({ currency_id: e.target.value });
+                            }}
+                            className={filterControlClass}
+                        >
+                            <option value="all">All currencies</option>
+                            {currencies.map((c) => (
+                                <option key={c.id} value={String(c.id)}>
+                                    {c.code}
+                                </option>
+                            ))}
                         </select>
                     </FilterField>
                 </IndexFilters>
 
-                {/* Table */}
                 <div className="overflow-x-auto rounded-md border">
                     <table className="w-full text-sm">
                         <thead className="bg-black text-white">
                             <tr>
                                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase">#</th>
-                                <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Investment</th>
                                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Investor</th>
-                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Capital</th>
-                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Available</th>
-                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Used</th>
-                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Profit</th>
+                                <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Date</th>
+                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Amount</th>
+                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase">AFN</th>
+                                <th className="px-4 py-3 text-center text-xs font-semibold uppercase">Batches</th>
                                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Status</th>
                                 <th className="px-4 py-3 text-center text-xs font-semibold uppercase">Actions</th>
                             </tr>
@@ -202,66 +213,47 @@ export default function InvestmentsIndex({ investments, investors, filters, stat
                         <tbody>
                             {investments.data.length === 0 ? (
                                 <tr>
-                                    <td colSpan={9} className="h-24 px-4 py-6 text-center text-gray-500">
+                                    <td colSpan={8} className="h-24 px-4 py-6 text-center text-gray-500">
                                         No investments found.
                                     </td>
                                 </tr>
                             ) : (
-                                investments.data.map((inv, index) => {
-                                    return (
-                                        <tr key={inv.id} className="border-b hover:bg-gray-50">
-                                            <td className="px-4 py-3">{investments.from ? investments.from + index : index + 1}</td>
-                                            <td className="px-4 py-3">
-                                                <div className="font-mono text-xs font-semibold">{inv.investment_number}</div>
-                                                <div className="text-xs text-gray-500">
-                                                    {new Date(inv.investment_date).toLocaleDateString('en-US')}
-                                                </div>
-                                            </td>
-                                            <td className="px-4 py-3">
-                                                {inv.investor ? (
-                                                    <Link href={`/investors/${inv.investor.id}`} className="text-blue-600 hover:underline">
-                                                        {inv.investor.full_name}
-                                                    </Link>
-                                                ) : (
-                                                    '—'
+                                investments.data.map((inv, index) => (
+                                    <tr key={inv.id} className="border-b hover:bg-gray-50">
+                                        <td className="px-4 py-3">{investments.from ? investments.from + index : index + 1}</td>
+                                        <td className="px-4 py-3">
+                                            {inv.investor ? (
+                                                <Link href={`/investors/${inv.investor.id}`} className="text-blue-600 hover:underline">
+                                                    {inv.investor.name}
+                                                </Link>
+                                            ) : (
+                                                '—'
+                                            )}
+                                        </td>
+                                        <td className="px-4 py-3 text-xs text-gray-600">
+                                            {new Date(inv.investment_date).toLocaleDateString('en-US')}
+                                        </td>
+                                        <td className="px-4 py-3 text-right font-mono">
+                                            {formatMoney(inv.amount_currency)} {inv.currency?.code || 'AFN'}
+                                        </td>
+                                        <td className="px-4 py-3 text-right font-mono font-semibold">{formatMoney(inv.amount_afn)}</td>
+                                        <td className="px-4 py-3 text-center font-mono">{inv.batches_count}</td>
+                                        <td className="px-4 py-3">{statusBadge(inv.status)}</td>
+                                        <td className="px-4 py-3">
+                                            <RowActions>
+                                                <ViewAction href={`/investments/${inv.id}`} />
+                                                {inv.status === 'active' && inv.batches_count === 0 && (
+                                                    <DeleteAction onClick={() => confirmDelete(inv)} />
                                                 )}
-                                            </td>
-                                            <td className="px-4 py-3 text-right font-mono">
-                                                <div className="font-semibold">
-                                                    {formatPrice(inv.capital_amount_currency ?? inv.capital_amount_afn)}{' '}
-                                                    {inv.currency?.code || inv.currency_code || 'AFN'}
-                                                </div>
-                                                {inv.currency?.code && inv.currency.code !== 'AFN' ? (
-                                                    <div className="text-muted-foreground text-xs">{formatPrice(inv.capital_amount_afn)} AFN ledger</div>
-                                                ) : null}
-                                            </td>
-                                            <td className="px-4 py-3 text-right font-mono font-semibold">
-                                                {formatPrice(inv.available_amount_afn)} AFN
-                                            </td>
-                                            <td className="px-4 py-3 text-right font-mono">
-                                                {formatPrice(inv.allocated_amount_afn)} AFN
-                                            </td>
-                                            <td className="px-4 py-3 text-right font-mono font-semibold">
-                                                {formatPrice(inv.profit_amount_afn)} AFN
-                                            </td>
-                                            <td className="px-4 py-3">{getStatusBadge(inv.status)}</td>
-                                            <td className="px-4 py-3">
-                                                <RowActions>
-                                                    <ViewAction href={`/investments/${inv.id}`} />
-                                                    {!['closed', 'withdrawn'].includes(inv.status) && (
-                                                        <DeleteAction onClick={() => confirmDelete(inv)} />
-                                                    )}
-                                                </RowActions>
-                                            </td>
-                                        </tr>
-                                    );
-                                })
+                                            </RowActions>
+                                        </td>
+                                    </tr>
+                                ))
                             )}
                         </tbody>
                     </table>
                 </div>
 
-                {/* Pagination */}
                 {investments.last_page > 1 && (
                     <div className="flex items-center justify-between">
                         <div className="text-sm text-gray-500">
@@ -271,7 +263,7 @@ export default function InvestmentsIndex({ investments, investors, filters, stat
                             {investments.links.map((link, i) => (
                                 <button
                                     key={i}
-                                    onClick={() => handlePageChange(link.url)}
+                                    onClick={() => link.url && router.get(link.url, {}, { preserveState: true, preserveScroll: true })}
                                     disabled={!link.url}
                                     className={`min-w-[40px] rounded-md border px-3 py-1 text-sm ${
                                         link.active

@@ -1,6 +1,7 @@
 // resources/js/components/app-header.tsx
 
 import { Breadcrumbs } from '@/components/breadcrumbs';
+import { ExchangeRateDropdown } from '@/components/exchange-rate-dropdown';
 import { Icon } from '@/components/icon';
 import { ProductSearchBar } from '@/components/product-search-bar';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -288,6 +289,8 @@ export function AppHeader({ breadcrumbs = [] }: AppHeaderProps) {
                                 </TooltipContent>
                             </Tooltip>
                         </TooltipProvider>
+
+                        <ExchangeRateDropdown className="hidden sm:inline-flex" />
 
                         {/* Theme Toggle */}
                         <ThemeToggle />

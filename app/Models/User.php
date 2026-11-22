@@ -354,6 +354,11 @@ class User extends Authenticatable
     }
     public function scopeByRole($query, string $role) { return $query->where('role', $role); }
 
+    public function scopeInvestors($query)
+    {
+        return $query->where('role', self::ROLE_INVESTOR)->notTrashed();
+    }
+
     public function scopeVisibleTo($query, User $authUser)
     {
         if ($authUser->isSuperAdmin() || $authUser->isAdmin()) {

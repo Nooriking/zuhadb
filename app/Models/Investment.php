@@ -49,7 +49,7 @@ class Investment extends Model
 
     public function investor(): BelongsTo
     {
-        return $this->belongsTo(Investor::class, 'investor_id');
+        return $this->belongsTo(User::class, 'investor_id');
     }
 
     public function currency(): BelongsTo

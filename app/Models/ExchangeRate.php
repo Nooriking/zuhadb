@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\ExchangeRateService;
 use App\Support\Money;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -36,12 +37,27 @@ class ExchangeRate extends Model
         static::created(function (ExchangeRate $rate) {
             static::syncCurrencyCache($rate);
             static::recordHistory($rate);
+            static::forgetBoardCache();
         });
 
         static::updated(function (ExchangeRate $rate) {
             static::syncCurrencyCache($rate);
             static::recordHistory($rate);
+            static::forgetBoardCache();
         });
+
+        static::deleted(function () {
+            static::forgetBoardCache();
+        });
+    }
+
+    protected static function forgetBoardCache(): void
+    {
+        try {
+            app(ExchangeRateService::class)->forget();
+        } catch (\Throwable) {
+            // Service container may be unavailable during early boot / migrations.
+        }
     }
 
     /**

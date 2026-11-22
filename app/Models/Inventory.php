@@ -73,13 +73,13 @@ class Inventory extends Model
     public function scopeLowStock($query)
     {
         return $query
-            ->where('quantity', '>', 0)
-            ->where('quantity', '<=', self::LOW_STOCK_THRESHOLD);
+            ->where('available_quantity', '>', 0)
+            ->where('available_quantity', '<=', self::LOW_STOCK_THRESHOLD);
     }
 
     public function scopeOutOfStock($query)
     {
-        return $query->where('quantity', '<=', 0);
+        return $query->where('available_quantity', '<=', 0);
     }
 
     /* =========================================================

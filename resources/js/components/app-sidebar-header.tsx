@@ -1,4 +1,5 @@
 import { Breadcrumbs } from '@/components/breadcrumbs';
+import { ExchangeRateDropdown } from '@/components/exchange-rate-dropdown';
 import { HeaderSearch } from '@/components/header-search';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -83,6 +84,7 @@ export function AppSidebarHeader({ breadcrumbs = [] }: { breadcrumbs?: Breadcrum
             </div>
 
             <div className={cn('flex shrink-0 items-center gap-1', breadcrumbs.length === 0 && 'ml-auto lg:ml-0')}>
+                <ExchangeRateDropdown className="hidden sm:inline-flex" />
                 <NotificationBell />
                 <ThemeToggle />
                 <DropdownMenu>

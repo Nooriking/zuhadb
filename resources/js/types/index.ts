@@ -22,10 +22,20 @@ export interface NavItem {
     module?: string;
 }
 
+export interface SharedExchangeRates {
+    usd_to_afn: number | null;
+    aed_to_afn: number | null;
+    usd_to_aed: number | null;
+    effective_at: string | null;
+    source: string | null;
+    updated_at?: string | null;
+}
+
 export interface SharedData {
     name: string;
     quote: { message: string; author: string };
     auth: Auth;
+    exchange?: SharedExchangeRates;
     [key: string]: unknown;
 }
 
