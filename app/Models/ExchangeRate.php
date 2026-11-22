@@ -198,6 +198,41 @@ class ExchangeRate extends Model
     }
 
     /**
+     * Latest rate between two currencies (direct, inverse, or via AFN).
+     */
+    public static function getLatestRate(int $fromId, int $toId): float
+    {
+        if ($fromId === $toId) {
+            return 1.0;
+        }
+
+        $direct = self::getRate($fromId, $toId);
+        if ($direct !== null) {
+            return (float) $direct;
+        }
+
+        $afnId = (int) (Currency::query()->where('code', 'AFN')->value('id') ?? 0);
+        if ($afnId <= 0) {
+            return 1.0;
+        }
+
+        if ($fromId === $afnId) {
+            $toAfn = self::getRate($toId, $afnId);
+
+            return $toAfn && $toAfn > 0 ? 1.0 / $toAfn : 1.0;
+        }
+
+        if ($toId === $afnId) {
+            return 1.0;
+        }
+
+        $fromToAfn = self::getRate($fromId, $afnId) ?? 0.0;
+        $afnToTo = self::getLatestRate($afnId, $toId);
+
+        return $fromToAfn > 0 ? $fromToAfn * $afnToTo : 1.0;
+    }
+
+    /**
      * نرخ جاری بین AFN و ارز دیگر.
      */
     public static function rateToBase(int $currencyId): ?float

@@ -4,7 +4,7 @@ namespace App\Models;
 
 /**
  * Compatibility façade over investor_wallet_balances.
- * The investor_wallets table has been dropped; callers keep using this API.
+ * Callers keep using this API after the legacy single-currency wallet table was removed.
  */
 class InvestorWallet
 {

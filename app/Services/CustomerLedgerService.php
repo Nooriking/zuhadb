@@ -7,7 +7,7 @@ use App\Models\SalePayment;
 use App\Models\SaleReturn;
 
 /**
- * Cash-only POS: customer_balances / customer_transactions tables were removed.
+ * Cash-only POS: legacy customer AR ledgers were removed.
  * Methods are kept as no-ops so existing call sites do not break.
  */
 class CustomerLedgerService

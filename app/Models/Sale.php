@@ -146,9 +146,14 @@ class Sale extends Model
         return $this->hasMany(Receipt::class, 'sale_id');
     }
 
-    public function profitEntries(): HasMany
+    /**
+     * Investor profit ledger rows linked to this sale's items (via InvestorTransaction.reference).
+     */
+    public function profitTransactions(): HasMany
     {
-        return $this->hasMany(InvestorProfitEntry::class, 'sale_id');
+        return $this->hasMany(InvestorTransaction::class, 'reference_id')
+            ->where('reference_type', SaleItem::class)
+            ->where('type', 'profit_earned');
     }
 
     public function returns(): HasMany

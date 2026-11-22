@@ -3,12 +3,12 @@
 namespace App\Http\Controllers;
 
 use App\Models\Investment;
-use App\Models\InvestmentProductAllocation;
 use App\Models\Investor;
-use App\Models\InvestorProfitEntry;
 use App\Models\InvestorTransaction;
+use App\Models\InvestorWallet;
+use App\Models\InvestorWalletBalance;
 use App\Models\InvestorWithdrawal;
-use App\Models\Product;
+use App\Models\ProductBatch;
 use App\Services\CurrencyService;
 use App\Services\InvestorMultiCurrencyDashboardService;
 use Carbon\Carbon;
@@ -36,63 +36,52 @@ class InvestorDashboardController extends Controller
         $endDate = now()->endOfDay();
 
         $own = (bool) $request->user()?->isInvestor();
-        // Investor identity is the user row itself.
         $onlyId = $own ? (int) ($request->user()->id ?? 0) : null;
 
         $reporting = $this->currencies->reportingContext();
         $fxBoard = $this->currencies->dashboardFxBoard();
         $money = fn (float|string|null $amount): float => $this->currencies->reportAmount((float) ($amount ?? 0));
 
-        $walletQuery = DB::table('investor_wallets')
-            ->join('users', 'users.id', '=', 'investor_wallets.investor_id')
+        $walletQuery = InvestorWalletBalance::query()
+            ->join('users', 'users.id', '=', 'investor_wallet_balances.investor_id')
             ->where('users.role', 'investor')
             ->where('users.trash', false)
             ->whereNull('users.deleted_at');
         $this->restrictInvestor($walletQuery, $own, $onlyId, 'users.id');
 
         $walletRow = $walletQuery
-            ->selectRaw('COALESCE(SUM(investor_wallets.capital_balance_afn), 0) as capital_balance')
-            ->selectRaw('COALESCE(SUM(investor_wallets.profit_balance_afn), 0) as profit_balance')
-            ->selectRaw('COALESCE(SUM(investor_wallets.total_invested_afn), 0) as total_invested')
-            ->selectRaw('COALESCE(SUM(investor_wallets.total_profit_earned_afn), 0) as total_profit_earned')
-            ->selectRaw('COALESCE(SUM(investor_wallets.total_withdrawn_afn), 0) as total_withdrawn')
+            ->selectRaw('COALESCE(SUM(investor_wallet_balances.capital_balance_afn), 0) as capital_balance')
+            ->selectRaw('COALESCE(SUM(investor_wallet_balances.profit_balance_afn), 0) as profit_balance')
             ->first();
 
-        $availableCapital = (float) Investment::notTrashed()
-            ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
-            ->whereIn('status', ['active', 'partially_used'])
-            ->sum('available_amount_afn');
+        $currentCapital = (float) ($walletRow->capital_balance ?? 0);
+        $remainingProfit = (float) ($walletRow->profit_balance ?? 0);
 
-        $investedCapital = (float) Investment::notTrashed()
+        $lifetimeProfit = (float) InvestorTransaction::query()
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
-            ->sum('allocated_amount_afn');
+            ->where('type', 'profit_earned')
+            ->sum('amount_afn');
+
+        $lifetimeWithdrawn = (float) InvestorWithdrawal::query()
+            ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
+            ->where('status', 'paid')
+            ->sum('amount_afn');
 
         $periodContributions = (float) Investment::notTrashed()
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
             ->whereDate('investment_date', '>=', $startDate->toDateString())
             ->whereDate('investment_date', '<=', $endDate->toDateString())
-            ->sum('capital_amount_afn');
+            ->sum('amount_afn');
 
-        $periodProfit = (float) InvestorProfitEntry::query()
+        $periodProfit = (float) InvestorTransaction::query()
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
-            ->whereIn('status', ['pending', 'paid'])
-            ->where('earned_at', '>=', $startDate)
-            ->where('earned_at', '<=', $endDate)
-            ->sum('profit_amount_afn');
+            ->where('type', 'profit_earned')
+            ->whereDate('transaction_date', '>=', $startDate->toDateString())
+            ->whereDate('transaction_date', '<=', $endDate->toDateString())
+            ->sum('amount_afn');
 
-        $periodPendingProfit = (float) InvestorProfitEntry::query()
-            ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
-            ->where('status', 'pending')
-            ->where('earned_at', '>=', $startDate)
-            ->where('earned_at', '<=', $endDate)
-            ->sum('profit_amount_afn');
-
-        $periodPaidProfit = (float) InvestorProfitEntry::query()
-            ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
-            ->where('status', 'paid')
-            ->where('earned_at', '>=', $startDate)
-            ->where('earned_at', '<=', $endDate)
-            ->sum('profit_amount_afn');
+        $periodPendingProfit = 0.0;
+        $periodPaidProfit = $periodProfit;
 
         $periodWithdrawnProfit = (float) InvestorWithdrawal::query()
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
@@ -110,35 +99,32 @@ class InvestorDashboardController extends Controller
             ->whereDate('withdrawal_date', '<=', $endDate->toDateString())
             ->sum('amount_afn');
 
-        $currentCapital = (float) ($walletRow->capital_balance ?? 0);
-        $remainingProfit = (float) ($walletRow->profit_balance ?? 0);
-        $lifetimeProfit = (float) ($walletRow->total_profit_earned ?? 0);
-        $lifetimeWithdrawn = (float) ($walletRow->total_withdrawn ?? 0);
-
-        $cashCapitalAfn = (float) Investment::notTrashed()
+        $cashCapitalAfn = (float) InvestorTransaction::query()
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
-            ->where('source_type', 'cash')
-            ->sum('capital_amount_afn');
-        $goodsCapitalAfn = (float) Investment::notTrashed()
+            ->where('type', 'capital_deposit')
+            ->sum('amount_afn');
+        $goodsCapitalAfn = (float) InvestorTransaction::query()
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
-            ->where('source_type', 'goods')
-            ->sum('capital_amount_afn');
+            ->where('type', 'goods_deposit')
+            ->sum('amount_afn');
         $totalContributedAfn = round($cashCapitalAfn + $goodsCapitalAfn, 2);
 
-        $soldGoodsAfn = (float) InvestmentProductAllocation::query()
-            ->whereHas('investment', function ($q) use ($own, $onlyId) {
-                $q->where('trash', false);
-                $this->restrictInvestor($q, $own, $onlyId);
-            })
-            ->selectRaw('COALESCE(SUM(sold_quantity * cost_per_unit_afn), 0) as total')
+        $goodsQuery = ProductBatch::query()
+            ->where('product_batches.trash', false)
+            ->whereNotNull('product_batches.investment_id')
+            ->join('investments', 'investments.id', '=', 'product_batches.investment_id')
+            ->where('investments.trash', false);
+        $this->restrictInvestor($goodsQuery, $own, $onlyId, 'investments.investor_id');
+
+        $soldGoodsAfn = (float) (clone $goodsQuery)
+            ->selectRaw('COALESCE(SUM((product_batches.quantity - product_batches.remaining_quantity) * product_batches.unit_cost_afn), 0) as total')
             ->value('total');
-        $remainingGoodsAfn = (float) InvestmentProductAllocation::query()
-            ->whereHas('investment', function ($q) use ($own, $onlyId) {
-                $q->where('trash', false);
-                $this->restrictInvestor($q, $own, $onlyId);
-            })
-            ->selectRaw('COALESCE(SUM(remaining_quantity * cost_per_unit_afn), 0) as total')
+        $remainingGoodsAfn = (float) (clone $goodsQuery)
+            ->selectRaw('COALESCE(SUM(product_batches.remaining_quantity * product_batches.unit_cost_afn), 0) as total')
             ->value('total');
+
+        $availableCapital = $currentCapital;
+        $investedCapital = $goodsCapitalAfn;
 
         $usd = \App\Models\Currency::query()->notTrashed()->where('code', 'USD')->first();
         $aed = \App\Models\Currency::query()->notTrashed()->where('code', 'AED')->first();
@@ -152,19 +138,14 @@ class InvestorDashboardController extends Controller
             $currentAedEquivalent = (float) $this->currencies->convert((string) $totalContributedAfn, $ledger, $aed);
         }
 
-        // Original-currency goods totals (never sum AFN+USD+AED together).
         $multiCurrencySummary = $this->multiCurrency->summarize($own && $onlyId > 0 ? $onlyId : null);
         $goodsOriginalByCurrency = [
             'AFN' => (float) ($multiCurrencySummary['currency_sections']['AFN']['goods_purchase_value'] ?? 0),
             'USD' => (float) ($multiCurrencySummary['currency_sections']['USD']['goods_purchase_value'] ?? 0),
             'AED' => (float) ($multiCurrencySummary['currency_sections']['AED']['goods_purchase_value'] ?? 0),
         ];
-        $goodsHistoricalAfn = (float) (
-            $multiCurrencySummary['currency_sections']['AFN']['historical_afn']['goods_purchase_value']
-            ?? 0
-        );
         $goodsHistoricalAfn = round(
-            $goodsHistoricalAfn
+            (float) ($multiCurrencySummary['currency_sections']['AFN']['historical_afn']['goods_purchase_value'] ?? 0)
             + (float) ($multiCurrencySummary['currency_sections']['USD']['historical_afn']['goods_purchase_value'] ?? 0)
             + (float) ($multiCurrencySummary['currency_sections']['AED']['historical_afn']['goods_purchase_value'] ?? 0),
             2
@@ -221,40 +202,36 @@ class InvestorDashboardController extends Controller
                 : 0,
         ];
 
-        $purchases = $own && $onlyId > 0
-            ? \App\Models\ProductBatch::query()
-                ->where('trash', false)
-                ->where('investor_id', $onlyId)
-                ->with('purchaseItem:id,name')
-                ->orderByDesc('id')
-                ->get()
-            : collect();
+        $purchases = ProductBatch::query()
+            ->where('trash', false)
+            ->whereNotNull('investment_id')
+            ->when($own && $onlyId > 0, function ($q) use ($onlyId) {
+                $q->whereHas('investment', fn ($i) => $i->where('investor_id', $onlyId));
+            })
+            ->with(['variant:id,name,product_id', 'variant.product:id,name', 'investment:id,investor_id'])
+            ->orderByDesc('id')
+            ->limit($own ? 100 : 0)
+            ->get();
 
-        $stockItems = $purchases->map(function ($row) use ($money) {
+        $stockItems = $purchases->map(function (ProductBatch $row) use ($money) {
             $qty = (int) $row->quantity;
             $remaining = (int) $row->remaining_quantity;
             $sold = max(0, $qty - $remaining);
             $cost = (float) $row->total_cost_afn;
             $profitPerUnit = (float) $row->profit_per_unit_afn;
-            $profit = $profitPerUnit * $qty;
 
             return [
-                'name' => $row->purchaseItem?->name ?: ('Batch '.$row->batch_code),
+                'name' => $row->variant?->product?->name ?: ($row->variant?->name ?: ('Batch '.$row->batch_code)),
                 'quantity' => $qty,
                 'remaining' => $remaining,
                 'sold' => $sold,
                 'value' => $money($cost),
-                'profit' => $money($profit),
+                'profit' => $money($profitPerUnit * $qty),
                 'profit_per_unit_afn' => $profitPerUnit,
-                'profit_currency_code' => $row->profit_currency_code,
-                'original_currency' => $row->profit_currency_code,
                 'original_unit' => $row->unit_cost_currency,
-                'original_line' => (float) $row->unit_cost_currency * $qty,
+                'original_line' => (float) $row->purchase_amount_currency,
                 'historical_afn' => round($cost, 2),
-                'historical_usd' => null,
-                'historical_aed' => null,
-                'usd_to_afn_rate' => $row->usd_to_afn_rate,
-                'aed_to_afn_rate' => $row->aed_to_afn_rate,
+                'exchange_rate' => $row->exchange_rate,
             ];
         })->values();
 
@@ -266,9 +243,7 @@ class InvestorDashboardController extends Controller
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
             ->select(
                 DB::raw('DATE(investment_date) as date'),
-                DB::raw('SUM(capital_amount_afn) as capital'),
-                DB::raw('SUM(allocated_amount_afn) as allocated'),
-                DB::raw('SUM(profit_amount_afn) as profit'),
+                DB::raw('SUM(amount_afn) as capital'),
                 DB::raw('COUNT(*) as count')
             )
             ->whereDate('investment_date', '>=', $startDate->toDateString())
@@ -278,23 +253,36 @@ class InvestorDashboardController extends Controller
             ->get()
             ->keyBy(fn ($row) => Carbon::parse($row->date)->toDateString());
 
+        $profitTrendRows = InvestorTransaction::query()
+            ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
+            ->where('type', 'profit_earned')
+            ->select(
+                DB::raw('DATE(transaction_date) as date'),
+                DB::raw('SUM(amount_afn) as profit')
+            )
+            ->whereDate('transaction_date', '>=', $startDate->toDateString())
+            ->whereDate('transaction_date', '<=', $endDate->toDateString())
+            ->groupBy('date')
+            ->get()
+            ->keyBy(fn ($row) => Carbon::parse($row->date)->toDateString());
+
         $capitalTrend = [];
         $trendLedger = [];
         $cursor = $startDate->copy();
         while ($cursor->lte($endDate->copy()->startOfDay())) {
-            $row = $trendRows->get($cursor->toDateString());
             $key = $cursor->toDateString();
+            $row = $trendRows->get($key);
+            $profitRow = $profitTrendRows->get($key);
             $capitalAfn = $row ? (float) $row->capital : 0.0;
-            $allocatedAfn = $row ? (float) $row->allocated : 0.0;
-            $profitAfn = $row ? (float) $row->profit : 0.0;
+            $profitAfn = $profitRow ? (float) $profitRow->profit : 0.0;
             $trendLedger["{$key}|capital"] = $capitalAfn;
-            $trendLedger["{$key}|allocated"] = $allocatedAfn;
+            $trendLedger["{$key}|allocated"] = 0.0;
             $trendLedger["{$key}|profit"] = $profitAfn;
             $capitalTrend[] = [
                 'date' => $cursor->format('M d'),
                 'date_key' => $key,
                 'capital' => $money($capitalAfn),
-                'allocated' => $money($allocatedAfn),
+                'allocated' => $money(0),
                 'profit' => $money($profitAfn),
                 'count' => $row ? (int) $row->count : 0,
             ];
@@ -311,19 +299,15 @@ class InvestorDashboardController extends Controller
             return $point;
         }, $capitalTrend);
 
-        $profitByInvestor = InvestorProfitEntry::query()
-            ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId, 'investor_profit_entries.investor_id'))
-            ->join('users', 'investor_profit_entries.investor_id', '=', 'users.id')
+        $profitByInvestor = InvestorTransaction::query()
+            ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId, 'investor_transactions.investor_id'))
+            ->join('users', 'investor_transactions.investor_id', '=', 'users.id')
             ->where('users.role', 'investor')
             ->where('users.trash', false)
-            ->whereIn('investor_profit_entries.status', ['pending', 'paid'])
-            ->where('investor_profit_entries.earned_at', '>=', $startDate)
-            ->where('investor_profit_entries.earned_at', '<=', $endDate)
-            ->select(
-                'users.id',
-                'users.name',
-                DB::raw('SUM(investor_profit_entries.profit_amount_afn) as total')
-            )
+            ->where('investor_transactions.type', 'profit_earned')
+            ->whereDate('investor_transactions.transaction_date', '>=', $startDate->toDateString())
+            ->whereDate('investor_transactions.transaction_date', '<=', $endDate->toDateString())
+            ->select('users.id', 'users.name', DB::raw('SUM(investor_transactions.amount_afn) as total'))
             ->groupBy('users.id', 'users.name')
             ->orderByDesc('total')
             ->limit(8)
@@ -340,7 +324,7 @@ class InvestorDashboardController extends Controller
 
         $investmentStatus = Investment::notTrashed()
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
-            ->select('status', DB::raw('COUNT(*) as count'), DB::raw('SUM(capital_amount_afn) as total'))
+            ->select('status', DB::raw('COUNT(*) as count'), DB::raw('SUM(amount_afn) as total'))
             ->groupBy('status')
             ->get()
             ->map(fn ($row) => [
@@ -357,7 +341,7 @@ class InvestorDashboardController extends Controller
                 ->leftJoin('currencies', 'currencies.id', '=', 'investments.currency_id')
                 ->select(
                     DB::raw("COALESCE(currencies.code, 'AFN') as code"),
-                    DB::raw('SUM(COALESCE(investments.capital_amount_currency, investments.capital_amount_afn)) as total')
+                    DB::raw('SUM(COALESCE(investments.amount_currency, investments.amount_afn)) as total')
                 )
                 ->groupBy('code')
                 ->get()
@@ -368,51 +352,27 @@ class InvestorDashboardController extends Controller
                 ->all();
         }
 
+        $batchCountQuery = ProductBatch::query()
+            ->where('trash', false)
+            ->whereNotNull('investment_id')
+            ->when($own && $onlyId > 0, fn ($q) => $q->whereHas('investment', fn ($i) => $i->where('investor_id', $onlyId)));
+
         $counters = [
             'total_investors' => Investor::notTrashed()->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId, 'id'))->count(),
             'active_investors' => Investor::notTrashed()->active()->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId, 'id'))->count(),
             'total_investments' => Investment::notTrashed()->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))->count(),
             'active_investments' => Investment::notTrashed()->active()->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))->count(),
-            'total_allocations' => InvestmentProductAllocation::query()
-                ->when($own, function ($q) use ($onlyId) {
-                    if ($onlyId <= 0) {
-                        $q->whereRaw('1 = 0');
-
-                        return;
-                    }
-                    $q->whereHas('investment', fn ($i) => $i->where('investor_id', $onlyId));
-                })
-                ->count(),
-            'total_funded_qty' => (int) InvestmentProductAllocation::query()
-                ->when($own, function ($q) use ($onlyId) {
-                    if ($onlyId <= 0) {
-                        $q->whereRaw('1 = 0');
-
-                        return;
-                    }
-                    $q->whereHas('investment', fn ($i) => $i->where('investor_id', $onlyId));
-                })
-                ->sum('funded_quantity'),
-            'total_sold_qty' => (int) InvestmentProductAllocation::query()
-                ->when($own, function ($q) use ($onlyId) {
-                    if ($onlyId <= 0) {
-                        $q->whereRaw('1 = 0');
-
-                        return;
-                    }
-                    $q->whereHas('investment', fn ($i) => $i->where('investor_id', $onlyId));
-                })
-                ->sum('sold_quantity'),
+            'total_allocations' => (clone $batchCountQuery)->count(),
+            'total_funded_qty' => (int) (clone $batchCountQuery)->sum('quantity'),
+            'total_sold_qty' => (int) (clone $batchCountQuery)->selectRaw('COALESCE(SUM(quantity - remaining_quantity), 0) as sold')->value('sold'),
             'pending_withdrawals' => InvestorWithdrawal::pending()
                 ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
                 ->count(),
-            'pending_profit_rows' => InvestorProfitEntry::pending()
-                ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
-                ->count(),
+            'pending_profit_rows' => 0,
         ];
 
         $recentInvestments = Investment::query()
-            ->with(['investor:id,name,phone'])
+            ->with(['investor:id,name,phone', 'currency:id,code,symbol'])
             ->notTrashed()
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
             ->whereDate('investment_date', '>=', $startDate->toDateString())
@@ -422,40 +382,38 @@ class InvestorDashboardController extends Controller
             ->map(fn ($inv) => [
                 'id' => $inv->id,
                 'investor_id' => $inv->investor_id,
-                'investment_number' => $inv->investment_number,
+                'investment_number' => 'INV-'.$inv->id,
                 'investor' => $inv->investor?->full_name,
                 'investor_phone' => $inv->investor?->phone,
-                'capital_amount' => $money($inv->capital_amount_afn),
-                'available' => $money($inv->available_amount_afn),
-                'allocated' => $money($inv->allocated_amount_afn),
-                'profit' => $money($inv->profit_amount_afn),
-                'progress_percent' => $inv->progress_percent,
+                'capital_amount' => $money($inv->amount_afn),
+                'available' => $money(0),
+                'allocated' => $money($inv->amount_afn),
+                'profit' => $money(0),
+                'progress_percent' => 100,
                 'status' => $inv->status,
                 'status_label' => Investment::STATUS_LABELS[$inv->status] ?? $inv->status,
                 'investment_date' => optional($inv->investment_date)->toDateString(),
             ]);
 
-        $recentProfitEntries = InvestorProfitEntry::query()
+        $recentProfitEntries = InvestorTransaction::query()
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId))
-            ->with([
-                'investor:id,name',
-                'sale:id,invoice_number,total_afn',
-            ])
-            ->where('earned_at', '>=', $startDate)
+            ->where('type', 'profit_earned')
+            ->with(['investor:id,name'])
+            ->whereDate('transaction_date', '>=', $startDate->toDateString())
             ->orderByDesc('id')
             ->limit(8)
             ->get()
             ->map(fn ($e) => [
                 'id' => $e->id,
                 'investor' => $e->investor?->full_name,
-                'sale_invoice' => $e->sale?->invoice_number,
-                'quantity' => $e->quantity,
-                'profit_amount' => $money($e->profit_amount_afn),
-                'entry_type' => $e->entry_type,
-                'entry_type_label' => $e->entry_type_label,
-                'status' => $e->status,
-                'status_label' => $e->status_label,
-                'earned_at' => optional($e->earned_at)->toDateTimeString(),
+                'sale_invoice' => null,
+                'quantity' => null,
+                'profit_amount' => $money($e->amount_afn),
+                'entry_type' => 'profit',
+                'entry_type_label' => 'Profit Earned',
+                'status' => 'paid',
+                'status_label' => 'Paid',
+                'earned_at' => optional($e->transaction_date)->toDateTimeString(),
             ]);
 
         $recentWithdrawals = InvestorWithdrawal::query()
@@ -479,43 +437,41 @@ class InvestorDashboardController extends Controller
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId, 'users.id'))
             ->select('users.*')
             ->selectSub(
-                DB::table('investor_wallets')
-                    ->selectRaw('COALESCE(capital_balance_afn, 0)')
-                    ->whereColumn('investor_wallets.investor_id', 'users.id'),
+                InvestorWalletBalance::query()
+                    ->selectRaw('COALESCE(SUM(capital_balance_afn), 0)')
+                    ->whereColumn('investor_wallet_balances.investor_id', 'users.id'),
                 'capital_balance_afn'
             )
-            ->selectSub(
-                Investment::selectRaw('COALESCE(SUM(allocated_amount_afn), 0)')
-                    ->whereColumn('investments.investor_id', 'users.id')
-                    ->where('investments.trash', false),
-                'total_allocated_afn'
-            )
-            ->with(['wallet'])
             ->withCount(['investments'])
             ->orderByDesc('capital_balance_afn')
             ->limit(10)
             ->get()
-            ->map(fn ($inv) => [
-                'id' => $inv->id,
-                'full_name' => $inv->full_name,
-                'phone' => $inv->phone,
-                'status' => $inv->status,
-                'investments_count' => $inv->investments_count,
-                'total_capital' => $money($inv->capital_balance_afn),
-                'total_allocated' => $money($inv->total_allocated_afn),
-                'total_profit' => $money($inv->wallet?->total_profit_earned_afn ?? 0),
-                'total_withdrawn' => $money($inv->wallet?->total_withdrawn_afn ?? 0),
-            ]);
+            ->map(function ($inv) use ($money) {
+                $wallet = InvestorWallet::forInvestor((int) $inv->id);
+
+                return [
+                    'id' => $inv->id,
+                    'full_name' => $inv->full_name,
+                    'phone' => $inv->phone,
+                    'status' => $inv->status,
+                    'investments_count' => $inv->investments_count,
+                    'total_capital' => $money($inv->capital_balance_afn),
+                    'total_allocated' => $money(0),
+                    'total_profit' => $money($wallet->profit_balance_afn),
+                    'total_withdrawn' => $money(0),
+                ];
+            });
 
         $topProfitableInvestors = Investor::notTrashed()
             ->tap(fn ($q) => $this->restrictInvestor($q, $own, $onlyId, 'users.id'))
             ->select('users.*')
             ->selectSub(
-                InvestorProfitEntry::selectRaw('COALESCE(SUM(profit_amount_afn), 0)')
-                    ->whereColumn('investor_profit_entries.investor_id', 'users.id')
-                    ->whereIn('status', ['pending', 'paid'])
-                    ->where('earned_at', '>=', $startDate)
-                    ->where('earned_at', '<=', $endDate),
+                InvestorTransaction::query()
+                    ->selectRaw('COALESCE(SUM(amount_afn), 0)')
+                    ->whereColumn('investor_transactions.investor_id', 'users.id')
+                    ->where('type', 'profit_earned')
+                    ->whereDate('transaction_date', '>=', $startDate->toDateString())
+                    ->whereDate('transaction_date', '<=', $endDate->toDateString()),
                 'total_profit_afn'
             )
             ->orderByDesc('total_profit_afn')

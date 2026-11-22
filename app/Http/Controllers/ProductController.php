@@ -785,34 +785,47 @@ class ProductController extends Controller
 
         $variantIds = $product->variants->pluck('id');
 
-        $purchases = Product::whereNotNull('purchase_date')
-            ->where('name', $product->name)
-            ->where('brand_id', $product->brand_id)
+        $batches = ProductBatch::query()
+            ->whereIn('variant_id', $variantIds)
             ->where('trash', false)
             ->with([
-                'purchaseBatches' => fn ($q) => $q
-                    ->whereIn('variant_id', $variantIds)
-                    ->with(['investor:id,name', 'variant:id,product_id,volume_ml']),
+                'variant:id,product_id,volume_ml,concentration',
+                'investment:id,investor_id',
+                'investment.investor:id,name',
+                'purchaseCurrency:id,code,symbol',
             ])
             ->orderByDesc('purchase_date')
+            ->orderByDesc('id')
             ->get();
 
-        $purchases->each(function (Product $row) {
-            $batch = $row->purchaseBatches->first();
-            $row->setAttribute('variant_id', $batch?->variant_id);
-            $row->setAttribute('investor_id', $batch?->investor_id);
-            $row->setAttribute('purchase_price_afn', $batch?->total_cost_afn);
-            $row->setAttribute('unit_cost_afn', $batch?->unit_cost_afn);
-            $row->setAttribute('profit_per_unit', $batch?->profit_per_unit_afn);
-            $row->setAttribute('store_profit_per_unit', $batch?->store_profit_per_unit_afn);
-            $row->setAttribute('sale_price_afn', $batch?->sale_price_afn);
-            $row->setAttribute('exchange_rate', $batch?->exchange_rate);
-            $row->setAttribute('usd_to_afn_rate', $batch?->usd_to_afn_rate);
-            $row->setAttribute('aed_to_afn_rate', $batch?->aed_to_afn_rate);
-            $row->setAttribute('usd_to_aed_rate', $batch?->usd_to_aed_rate);
+        $purchases = $batches->map(function (ProductBatch $batch) {
+            return [
+                'id' => $batch->id,
+                'invoice_number' => $batch->invoice_number,
+                'purchase_date' => optional($batch->purchase_date)->toDateString(),
+                'quantity' => $batch->quantity,
+                'remaining_quantity' => $batch->remaining_quantity,
+                'payment_status' => $batch->payment_status,
+                'notes' => $batch->notes,
+                'bill_image' => $batch->bill_image,
+                'variant_id' => $batch->variant_id,
+                'investor_id' => $batch->investment?->investor_id,
+                'investment_id' => $batch->investment_id,
+                'unit_cost_afn' => $batch->unit_cost_afn,
+                'total_cost_afn' => $batch->total_cost_afn,
+                'purchase_price_afn' => $batch->total_cost_afn,
+                'profit_per_unit' => $batch->profit_per_unit_afn,
+                'profit_per_unit_original' => $batch->profit_per_unit_afn,
+                'profit_currency_id' => $batch->purchase_currency_id,
+                'store_profit_per_unit' => $batch->store_profit_per_unit_afn,
+                'sale_price_afn' => $batch->sale_price_afn,
+                'exchange_rate' => $batch->exchange_rate,
+                'purchase_unit_amount' => $batch->unit_cost_currency,
+                'purchase_currency_id' => $batch->purchase_currency_id,
+                'variant' => $batch->variant,
+                'investor' => $batch->investment?->investor,
+            ];
         });
-
-        $this->attachOriginalProfitFromBatches($purchases);
 
         return Inertia::render('products/edit', [
             'product'   => $product,
@@ -836,7 +849,7 @@ class ProductController extends Controller
                     $variant->purchase_currency_id,
                     $variant->sale_currency_id,
                     $variant->wholesale_currency_id,
-                ])->merge($purchases->pluck('profit_currency_id'))->all()
+                ])->merge($batches->pluck('purchase_currency_id'))->all()
             ),
             'fxBoard' => $this->currencies->formBoardContext(now()),
         ]);
@@ -972,16 +985,6 @@ class ProductController extends Controller
 
             $variantIds = $product->variants()->pluck('id')->all();
             if (! empty($variantIds)) {
-                $purchaseIds = ProductBatch::query()
-                    ->whereIn('variant_id', $variantIds)
-                    ->whereNotNull('purchase_item_id')
-                    ->pluck('purchase_item_id')
-                    ->unique()
-                    ->all();
-
-                Product::whereIn('id', $purchaseIds)
-                    ->update(['trash' => true, 'user_id' => Auth::id()]);
-
                 ProductBatch::whereIn('variant_id', $variantIds)
                     ->update(['trash' => true, 'user_id' => Auth::id()]);
 
@@ -999,7 +1002,7 @@ class ProductController extends Controller
 
     public function restore(int $id): RedirectResponse
     {
-        $product = Product::onlyTrash()->whereNull('purchase_date')->findOrFail($id);
+        $product = Product::onlyTrash()->findOrFail($id);
 
         DB::transaction(function () use ($product) {
             $product->update(['trash' => false, 'user_id' => Auth::id()]);
@@ -1007,16 +1010,6 @@ class ProductController extends Controller
 
             $variantIds = $product->variants()->pluck('id')->all();
             if (! empty($variantIds)) {
-                $purchaseIds = ProductBatch::query()
-                    ->whereIn('variant_id', $variantIds)
-                    ->whereNotNull('purchase_item_id')
-                    ->pluck('purchase_item_id')
-                    ->unique()
-                    ->all();
-
-                Product::whereIn('id', $purchaseIds)
-                    ->update(['trash' => false, 'user_id' => Auth::id()]);
-
                 ProductBatch::whereIn('variant_id', $variantIds)
                     ->update(['trash' => false, 'user_id' => Auth::id()]);
 
@@ -1033,25 +1026,19 @@ class ProductController extends Controller
     public function forceDelete(int $id): RedirectResponse
     {
         $product = Product::onlyTrash()
-            ->whereNull('purchase_date')
             ->with(['variants.barcodes', 'variants'])
             ->findOrFail($id);
 
         DB::transaction(function () use ($product) {
             $variantIds = $product->variants->pluck('id')->all();
 
-            $purchaseIds = ProductBatch::query()
+            $batches = ProductBatch::query()
                 ->whereIn('variant_id', $variantIds)
-                ->whereNotNull('purchase_item_id')
-                ->pluck('purchase_item_id')
-                ->unique()
-                ->all();
+                ->get();
 
-            $purchaseRows = Product::whereIn('id', $purchaseIds)->get();
-
-            foreach ($purchaseRows as $row) {
-                if ($row->bill_image && Storage::disk('public')->exists($row->bill_image)) {
-                    Storage::disk('public')->delete($row->bill_image);
+            foreach ($batches as $batch) {
+                if ($batch->bill_image && Storage::disk('public')->exists($batch->bill_image)) {
+                    Storage::disk('public')->delete($batch->bill_image);
                 }
             }
 
@@ -1059,12 +1046,9 @@ class ProductController extends Controller
 
             ProductPriceHistory::whereIn('variant_id', $variantIds)->forceDelete();
 
-            ProductBatch::whereIn('purchase_item_id', $purchaseIds)->forceDelete();
             ProductBatch::whereIn('variant_id', $variantIds)->forceDelete();
 
             ProductBarcode::whereIn('variant_id', $variantIds)->forceDelete();
-
-            Product::whereIn('id', $purchaseIds)->forceDelete();
 
             ProductVariant::where('product_id', $product->id)->forceDelete();
             $product->forceDelete();
@@ -1077,8 +1061,7 @@ class ProductController extends Controller
 
    public function trash(): Response
 {
-    $products = Product::onlyTrash()          // ✅ اصلاح شد (قبلاً trashed بود)
-        ->whereNull('purchase_date')
+    $products = Product::onlyTrash()
         ->with([
             'brand:id,name',
             'creator:id,name',
@@ -2379,10 +2362,10 @@ class ProductController extends Controller
     }
 
     /**
-     * Purchase shells linked to this catalog product via product_batches.variant_id.
+     * Purchase batches linked to catalog variants (source of truth after schema slim-down).
      *
      * @param  \Illuminate\Support\Collection<int, int>|array<int, int>  $variantIds
-     * @return \Illuminate\Support\Collection<int, Product>
+     * @return \Illuminate\Support\Collection<int, ProductBatch>
      */
     private function purchasesForVariants($variantIds, array $with = [])
     {
@@ -2391,30 +2374,12 @@ class ProductController extends Controller
             return collect();
         }
 
-        $purchaseIds = ProductBatch::query()
+        return ProductBatch::query()
             ->whereIn('variant_id', $ids->all())
-            ->whereNotNull('purchase_item_id')
             ->where('trash', false)
-            ->pluck('purchase_item_id')
-            ->unique()
-            ->all();
-
-        if ($purchaseIds === []) {
-            return collect();
-        }
-
-        $relations = array_merge([
-            'purchaseBatches' => fn ($q) => $q
-                ->whereIn('variant_id', $ids->all())
-                ->where('trash', false),
-        ], $with);
-
-        return Product::query()
-            ->whereIn('id', $purchaseIds)
-            ->whereNotNull('purchase_date')
-            ->where('trash', false)
-            ->with($relations)
+            ->with($with)
             ->orderByDesc('purchase_date')
+            ->orderByDesc('id')
             ->get();
     }
 }

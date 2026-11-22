@@ -127,7 +127,7 @@ class Customer extends Model
         $this->update(['current_due_afn' => $newBalance]);
     }
 
-    /** Cash-only POS — customer_balances removed. */
+    /** Cash-only POS — legacy AR balance table removed. */
     public function adjustBalance(
         string $currencyCode,
         float $deltaCurrency,

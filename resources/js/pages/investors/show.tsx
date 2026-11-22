@@ -387,7 +387,7 @@ export default function InvestorsShow({
                                 <Package className="h-4 w-4" /> Receive Investor Goods
                             </Button>
                         </Link>
-                        <Link href={`/investor-profit-entries/by-investor/${investor.id}`}>
+                        <Link href={`/investor-transactions/by-investor/${investor.id}?type=profit_earned`}>
                             <Button variant="outline">Profit</Button>
                         </Link>
                         <Link href={`/investor-transactions/by-investor/${investor.id}`}>

@@ -17,6 +17,7 @@ use App\Models\User;
 use App\Support\FxBoard;
 use App\Support\Money;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class SaleService

@@ -135,12 +135,6 @@ const customerNavItems: NavItem[] = [
         icon: UserCircle,
         module: 'customers',
     },
-    {
-        title: 'Customer Ledger',
-        url: '/customer-transactions',
-        icon: BookOpen,
-        module: 'customers',
-    },
 ];
 
 /* =========================================================
@@ -166,12 +160,6 @@ const investmentNavItems: NavItem[] = [
         url: '/investor-withdrawals',
         icon: Banknote,
         module: 'investor-withdrawals',
-    },
-    {
-        title: 'Profit',
-        url: '/investor-profit-entries',
-        icon: TrendingUp,
-        module: 'investor-profit-entries',
     },
     {
         title: 'Investor Ledger',
@@ -212,8 +200,8 @@ const financialNavItems: NavItem[] = [
 
 const reportNavItems: NavItem[] = [
     {
-        title: 'Profit Report',
-        url: '/reports/profit',
+        title: 'Investor Dashboard',
+        url: '/investors/dashboard',
         icon: BarChart3,
         module: 'reports',
     },

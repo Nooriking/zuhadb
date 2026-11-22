@@ -43,11 +43,11 @@ export function ExchangeRateDropdown({ className }: { className?: string }) {
                 <Button
                     variant="outline"
                     size="sm"
-                    className={cn('h-9 max-w-[14rem] gap-1.5 px-2.5 font-normal', className)}
+                    className={cn('h-9 max-w-[14rem] gap-1.5 px-2 font-normal sm:px-2.5', className)}
                     aria-label="Today's exchange rates"
                 >
                     <ArrowRightLeft className="h-3.5 w-3.5 shrink-0 opacity-70" />
-                    <span className="truncate text-xs tabular-nums sm:text-sm">{triggerLabel}</span>
+                    <span className="hidden truncate text-xs tabular-nums sm:inline sm:text-sm">{triggerLabel}</span>
                 </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-72" sideOffset={8}>

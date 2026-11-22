@@ -4,7 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Customer;
 use App\Models\Expense;
-use App\Models\InvestorProfitEntry;
+use App\Models\InvestorTransaction;
 use App\Models\Sale;
 use App\Models\SalePayment;
 use App\Services\CurrencyService;
@@ -40,8 +40,12 @@ class AccountantDashboardController extends Controller
             ->whereYear('expense_date', now()->year)
             ->sum('amount_afn');
         $customerDueLedger = (float) Customer::notTrashed()->sum('current_due_afn');
-        $pendingProfitLedger = (float) InvestorProfitEntry::where('status', 'pending')->sum('profit_amount_afn');
-        $paidProfitLedger = (float) InvestorProfitEntry::where('status', 'paid')->sum('profit_amount_afn');
+
+        // Profit is posted to investor_transactions at sale time (wallet credited immediately).
+        $paidProfitLedger = (float) InvestorTransaction::query()
+            ->where('type', 'profit_earned')
+            ->sum('amount_afn');
+        $pendingProfitLedger = 0.0;
         $monthNetLedger = $monthStoreProfitLedger - $monthExpensesLedger;
 
         $inventory = StoreAssetsService::summarize(null);

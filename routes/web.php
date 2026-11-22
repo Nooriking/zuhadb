@@ -33,7 +33,6 @@ use App\Http\Controllers\StockTransferController;
 use App\Http\Controllers\SupplierController;
 use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\ProfitReportController;
 /*
 |--------------------------------------------------------------------------
 | Public Routes
@@ -666,32 +665,7 @@ Route::get('/report', [SaleController::class, 'report'])->name('sales.report');
 
 
 
-Route::middleware(['auth'])->group(function () {
-    // ✅ Profit Report routes — قبل از هر چیز
-    Route::middleware('module:reports')->prefix('reports/profit')->name('reports.profit.')->group(function () {
-        Route::get('/', [ProfitReportController::class, 'index'])->name('index');
-
-        // PDF (اول)
-        Route::get('/pdf', [ProfitReportController::class, 'exportPdf'])->name('pdf');
-
-        // CSV
-        Route::get('/export', [ProfitReportController::class, 'export'])->name('export');
-        Route::get('/export-summary', [ProfitReportController::class, 'exportSummary'])->name('export.summary');
-        Route::get('/export-breakdown', [ProfitReportController::class, 'exportBreakdown'])->name('export.breakdown');
-        Route::get('/export-per-investor', [ProfitReportController::class, 'exportPerInvestor'])->name('export.per-investor');
-        Route::get('/export-exchange-rates', [ProfitReportController::class, 'exportExchangeRates'])->name('export.exchange-rates');
-        Route::get('/export-sales', [ProfitReportController::class, 'exportSales'])->name('export.sales');
-        Route::get('/export-products', [ProfitReportController::class, 'exportProducts'])->name('export.products');
-
-        // Detail pages (آخر)
-        Route::get('/investor/{investorId}/pdf', [ProfitReportController::class, 'investorPdf'])->whereNumber('investorId')->name('investor.pdf');
-        Route::get('/investor/{investorId}', [ProfitReportController::class, 'investorDetail'])->whereNumber('investorId')->name('investor.detail');
-        Route::get('/store/pdf', [ProfitReportController::class, 'storePdf'])->name('store.pdf');
-        Route::get('/store', [ProfitReportController::class, 'storeDetail'])->name('store.detail');
-    });
-    
-    // ... بقیه routes (dashboard, products, sales, ...)
-});
+// Profit report module removed — investor/store profit lives on InvestorDashboard + sales ledgers.
 
 /*
 |--------------------------------------------------------------------------

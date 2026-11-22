@@ -113,7 +113,6 @@ const SEARCH_ITEMS: SearchItem[] = [
     { title: 'Customers', url: '/customers', category: 'Sales' },
     { title: 'Investors', url: '/investors', category: 'Investments' },
     { title: 'Investor Dashboard', url: '/investors/dashboard', category: 'Investments' },
-    { title: 'Profit Entries', url: '/investor-profit-entries', category: 'Investments' },
     { title: 'Withdrawals', url: '/investor-withdrawals', category: 'Investments' },
     { title: 'Investor Ledger', url: '/investor-transactions', category: 'Investments' },
     { title: 'Payments', url: '/payments', category: 'Financial' },
@@ -290,7 +289,7 @@ export function AppHeader({ breadcrumbs = [] }: AppHeaderProps) {
                             </Tooltip>
                         </TooltipProvider>
 
-                        <ExchangeRateDropdown className="hidden sm:inline-flex" />
+                        <ExchangeRateDropdown />
 
                         {/* Theme Toggle */}
                         <ThemeToggle />

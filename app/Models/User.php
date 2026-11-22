@@ -322,20 +322,18 @@ class User extends Authenticatable
 
         if (Investment::query()->where('investor_id', $id)->exists()
             || InvestorTransaction::query()->where('investor_id', $id)->exists()
-            || InvestorProfitEntry::query()->where('investor_id', $id)->exists()
             || InvestorWithdrawal::query()->where('investor_id', $id)->exists()
-            || ProductBatch::query()->where('investor_id', $id)->exists()) {
+            || ProductBatch::query()
+                ->whereHas('investment', fn ($q) => $q->where('investor_id', $id))
+                ->exists()) {
             return true;
         }
 
-        return InvestorWallet::query()
+        return InvestorWalletBalance::query()
             ->where('investor_id', $id)
             ->where(function ($q) {
                 $q->where('capital_balance_afn', '>', 0)
-                    ->orWhere('profit_balance_afn', '>', 0)
-                    ->orWhere('total_invested_afn', '>', 0)
-                    ->orWhere('total_profit_earned_afn', '>', 0)
-                    ->orWhere('total_withdrawn_afn', '>', 0);
+                    ->orWhere('profit_balance_afn', '>', 0);
             })
             ->exists();
     }

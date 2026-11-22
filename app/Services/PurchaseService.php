@@ -284,6 +284,8 @@ class PurchaseService
                 qty: $qty,
                 type: 'purchase',
                 batchId: $batch->id,
+                referenceType: ProductBatch::class,
+                referenceId: $batch->id,
                 notes: 'Stock received',
                 unitCostAfn: $purchasePrice,
             );

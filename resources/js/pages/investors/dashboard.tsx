@@ -896,20 +896,21 @@ export default function InvestorDashboard({
                     </SectionCard>
 
                     <SectionCard
-                        title="Recent Profit Entries"
+                        title="Recent Profit"
                         action={
-                            <Link href="/investor-profit-entries" className="text-xs text-indigo-600 dark:text-indigo-400">
+                            <Link href="/investor-transactions?type=profit_earned" className="text-xs text-indigo-600 dark:text-indigo-400">
                                 View all
                             </Link>
                         }
                     >
                         <div className="space-y-2">
                             {recentProfitEntries.map((e) => (
-                                <Link key={e.id} href={`/investor-profit-entries/${e.id}`} className="flex items-center justify-between rounded-lg border border-gray-100 p-3 dark:border-gray-800">
+                                <Link key={e.id} href={`/investor-transactions/${e.id}`} className="flex items-center justify-between rounded-lg border border-gray-100 p-3 dark:border-gray-800">
                                     <div className="min-w-0 flex-1">
                                         <p className="truncate text-sm font-medium text-gray-900 dark:text-white">{e.investor ?? '—'}</p>
                                         <p className="truncate text-xs text-gray-500">
-                                            {e.sale_invoice ?? '—'} • Qty: {e.quantity}
+                                            {e.sale_invoice ?? e.entry_type_label ?? 'profit_earned'}
+                                            {e.quantity != null ? ` • Qty: ${e.quantity}` : ''}
                                         </p>
                                     </div>
                                     <div className="ml-3 shrink-0 text-right">
@@ -918,7 +919,7 @@ export default function InvestorDashboard({
                                     </div>
                                 </Link>
                             ))}
-                            {recentProfitEntries.length === 0 && <EmptyState message="No profit entries in this date range" />}
+                            {recentProfitEntries.length === 0 && <EmptyState message="No profit transactions in this date range" />}
                         </div>
                     </SectionCard>
                 </div>

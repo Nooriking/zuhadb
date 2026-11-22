@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use App\Http\Requests\StoreInvestorWithdrawalRequest;
 use App\Models\AppSetting;
 use App\Models\Currency;
-use App\Models\Investment;
 use App\Models\Investor;
 use App\Models\InvestorTransaction;
 use App\Models\InvestorWithdrawal;
@@ -123,17 +122,14 @@ class InvestorWithdrawalController extends Controller
             // Profit withdrawals only from payable (pending) profit balance on the cash wallet.
             // Capital withdrawals only from cash capital — goods capital is not cash.
             if ($data['type'] === 'profit') {
-                $payableAfn = (float) \App\Models\InvestorProfitEntry::query()
-                    ->where('investor_id', $investor->id)
-                    ->where('status', 'pending')
-                    ->sum('profit_amount_afn');
+                // Profit is credited to wallet at sale time (profit_earned); withdraw from wallet balance.
                 $availableCurrency = (float) ($mcBalance?->profit_balance_currency ?? 0);
                 $availableMcAfn = (float) ($mcBalance?->profit_balance_afn ?? 0);
                 if ($currencyCode === 'AFN' || ! $mcBalance) {
                     $availableCurrency = max($availableCurrency, (float) $wallet->profit_balance_afn);
                     $availableMcAfn = max($availableMcAfn, (float) $wallet->profit_balance_afn);
                 }
-                $availableAfn = min((float) $wallet->profit_balance_afn, $payableAfn, max($availableMcAfn, (float) $wallet->profit_balance_afn));
+                $availableAfn = min((float) $wallet->profit_balance_afn, max($availableMcAfn, (float) $wallet->profit_balance_afn));
                 if ($amountEntered > $availableCurrency + 0.01 || $amountAfn > $availableAfn + 0.01) {
                     throw new \Exception('The withdrawal is larger than the payable profit available in '.$currencyCode.'.');
                 }
@@ -172,7 +168,7 @@ class InvestorWithdrawalController extends Controller
     {
         $withdrawal->load([
             'investor:id,name,phone,email',
-            'investment:id,investment_number',
+            'investment:id,investor_id,amount_afn',
             'approvedBy:id,name',
             'paidBy:id,name',
             'creator:id,name',
@@ -237,16 +233,10 @@ class InvestorWithdrawalController extends Controller
             $rate = (float) ($withdrawal->exchange_rate ?: 1);
 
             if ($withdrawal->isProfitWithdrawal()) {
-                $wallet->decrement('profit_balance_afn', $amountAfn);
-                $wallet->increment('total_withdrawn_afn', $amountAfn);
                 $wallet->adjustProfit($currencyCode, -1 * $amountCurrency, -1 * $amountAfn, $rate);
-
                 $txType = 'profit_withdrawn';
             } else {
-                $wallet->decrement('capital_balance_afn', $amountAfn);
-                $wallet->increment('total_withdrawn_afn', $amountAfn);
                 $wallet->adjustCapital($currencyCode, -1 * $amountCurrency, -1 * $amountAfn, $rate);
-
                 $txType = 'capital_withdrawn';
             }
 
@@ -346,26 +336,21 @@ class InvestorWithdrawalController extends Controller
                 );
             }
 
-            Investment::query()
-                ->where('investor_id', $investor->id)
-                ->where('available_amount_afn', '>', 0)
-                ->get()
-                ->each(function (Investment $investment) {
-                    $available = (float) $investment->available_amount_afn;
-                    $investment->update([
-                        'available_amount_afn' => 0,
-                        'withdrawn_amount_afn' => (float) $investment->withdrawn_amount_afn + $available,
-                        'user_id' => Auth::id(),
-                    ]);
-                    $investment->refreshStatus();
-                });
-
             $wallet->update([
                 'capital_balance_afn' => 0,
                 'profit_balance_afn' => 0,
-                'total_withdrawn_afn' => (float) $wallet->total_withdrawn_afn + $total,
                 'last_transaction_at' => now(),
             ]);
+
+            // Zero multi-currency wallet rows as well.
+            \App\Models\InvestorWalletBalance::query()
+                ->where('investor_id', $investor->id)
+                ->update([
+                    'capital_balance_currency' => 0,
+                    'capital_balance_afn' => 0,
+                    'profit_balance_currency' => 0,
+                    'profit_balance_afn' => 0,
+                ]);
 
             return $withdrawal;
         });

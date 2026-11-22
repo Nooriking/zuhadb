@@ -3,8 +3,8 @@
 namespace App\Services;
 
 use App\Models\Investment;
-use App\Models\InvestorProfitEntry;
-use App\Models\InvestorWallet;
+use App\Models\InvestorTransaction;
+use App\Models\InvestorWalletBalance;
 use App\Models\InvestorWithdrawal;
 use App\Models\Product;
 use App\Models\ProductBatch;
@@ -75,7 +75,7 @@ class InvestorMultiCurrencyDashboardService
                 'remaining_inventory_original' => 'Sum(remaining_quantity × original unit purchase cost) grouped by purchase_currency_code',
                 'remaining_inventory_afn' => 'Sum(remaining_quantity × historical unit_cost_afn) — ledger cost, not a current-market revaluation',
                 'fifo' => 'Sales costing continues to consume batches FIFO; weighted average is reporting-only',
-                'current_balance_afn' => 'investor_wallets.capital_balance_afn + profit_balance_afn',
+                'current_balance_afn' => 'investor_wallet_balances.capital_balance_afn + profit_balance_afn',
                 'current_balance_foreign' => 'Sum(available_amount_currency for cash investments in that currency) + pending profit_amount_currency in that currency — never derived by converting the AFN wallet',
             ],
         ];
@@ -369,22 +369,21 @@ class InvestorMultiCurrencyDashboardService
      */
     private function accumulateProfits(array &$sections, array &$legacy, ?int $investorId): void
     {
-        $rows = InvestorProfitEntry::query()
+        // Profit is posted to investor_transactions (type=profit_earned) at sale time.
+        $rows = InvestorTransaction::query()
             ->when($investorId, fn ($q) => $q->where('investor_id', $investorId))
-            ->whereIn('status', ['pending', 'paid'])
+            ->where('type', 'profit_earned')
             ->get([
                 'currency_code',
-                'profit_amount_currency',
-                'profit_amount_afn',
-                'status',
+                'amount_currency',
+                'amount_afn',
             ]);
 
         foreach ($rows as $row) {
             $code = $this->normalizeKnownCode($row->currency_code);
-            $afn = Money::round((string) ($row->profit_amount_afn ?? '0'), 2);
+            $afn = Money::round((string) abs((float) ($row->amount_afn ?? 0)), 2);
 
             if ($code === null) {
-                // Do not invent original currency from AFN ledger.
                 $legacy['profit_afn_without_currency'] = Money::add(
                     (string) $legacy['profit_afn_without_currency'],
                     $afn,
@@ -394,8 +393,8 @@ class InvestorMultiCurrencyDashboardService
                 continue;
             }
 
-            $original = $row->profit_amount_currency !== null && $row->profit_amount_currency !== ''
-                ? Money::round((string) $row->profit_amount_currency, 2)
+            $original = $row->amount_currency !== null && $row->amount_currency !== ''
+                ? Money::round((string) abs((float) $row->amount_currency), 2)
                 : ($code === 'AFN' ? $afn : null);
 
             if ($original === null) {
@@ -415,21 +414,13 @@ class InvestorMultiCurrencyDashboardService
                 2
             );
 
-            if ($row->status === 'paid') {
-                $sections[$code]['paid_profit'] = Money::add($sections[$code]['paid_profit'], $original, 2);
-                $sections[$code]['historical_afn']['paid_profit'] = Money::add(
-                    $sections[$code]['historical_afn']['paid_profit'],
-                    $afn,
-                    2
-                );
-            } else {
-                $sections[$code]['pending_profit'] = Money::add($sections[$code]['pending_profit'], $original, 2);
-                $sections[$code]['historical_afn']['pending_profit'] = Money::add(
-                    $sections[$code]['historical_afn']['pending_profit'],
-                    $afn,
-                    2
-                );
-            }
+            // Sale-time posting credits the wallet immediately → treat as paid.
+            $sections[$code]['paid_profit'] = Money::add($sections[$code]['paid_profit'], $original, 2);
+            $sections[$code]['historical_afn']['paid_profit'] = Money::add(
+                $sections[$code]['historical_afn']['paid_profit'],
+                $afn,
+                2
+            );
         }
     }
 
@@ -491,23 +482,22 @@ class InvestorMultiCurrencyDashboardService
      */
     private function accumulateBalances(array &$sections, ?int $investorId, array &$limitations): void
     {
-        $walletBalances = InvestorWallet::query()
+        $walletBalances = InvestorWalletBalance::query()
             ->when($investorId, fn ($q) => $q->where('investor_id', $investorId))
             ->selectRaw('COALESCE(SUM(capital_balance_afn), 0) as capital, COALESCE(SUM(profit_balance_afn), 0) as profit')
             ->first();
 
-        $capital = Money::round((string) $walletBalances->capital, 2);
-        $profit = Money::round((string) $walletBalances->profit, 2);
+        $capital = Money::round((string) ($walletBalances->capital ?? 0), 2);
+        $profit = Money::round((string) ($walletBalances->profit ?? 0), 2);
 
         $sections['AFN']['current_balance'] = Money::round(Money::add($capital, $profit, 8), 2);
         $sections['AFN']['current_balance_available'] = true;
         $sections['AFN']['metrics_available']['current_balance'] = true;
 
-        $cashBalances = Investment::notTrashed()
+        $cashBalances = InvestorWalletBalance::query()
             ->when($investorId, fn ($q) => $q->where('investor_id', $investorId))
-            ->where('source_type', 'cash')
             ->whereIn('currency_code', ['USD', 'AED'])
-            ->selectRaw("currency_code, COALESCE(SUM(CASE WHEN status IN ('active', 'partially_used') THEN available_amount_currency ELSE 0 END), 0) as available_cash, COUNT(*) as cash_tracks")
+            ->selectRaw('currency_code, COALESCE(SUM(capital_balance_currency + profit_balance_currency), 0) as available_cash, COUNT(*) as cash_tracks')
             ->groupBy('currency_code')
             ->get()
             ->keyBy('currency_code');

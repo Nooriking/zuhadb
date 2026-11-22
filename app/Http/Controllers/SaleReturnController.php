@@ -7,8 +7,7 @@ use App\Models\Currency;
 use App\Models\Customer;
 use App\Models\Expense;
 use App\Models\Inventory;
-use App\Models\InvestmentProductAllocation;
-use App\Models\InvestorProfitEntry;
+use App\Models\InvestorTransaction;
 use App\Models\ProductBatch;
 use App\Models\Sale;
 use App\Models\SaleItem;
@@ -741,15 +740,6 @@ class SaleReturnController extends Controller
                         notes: "Returned via {$saleReturn->return_number}"
                     );
 
-                    $allocation = InvestmentProductAllocation::query()
-                        ->where('batch_id', $batch->id)
-                        ->where('status', '!=', 'cancelled')
-                        ->orderByDesc('id')
-                        ->lockForUpdate()
-                        ->first();
-
-                    $allocation?->recordReturn($qty);
-
                     $lineCogsFromParts = round(
                         $lineCogsFromParts + ((float) ($part['cost_per_unit_afn'] ?? $batch->unit_cost_afn) * $qty),
                         2
@@ -878,51 +868,52 @@ class SaleReturnController extends Controller
             return 0.0;
         }
 
-        $entries = InvestorProfitEntry::query()
-            ->where('sale_item_id', $saleItem->id)
-            ->where('entry_type', 'profit')
-            ->whereIn('status', ['pending', 'paid'])
-            ->orderByDesc('id')
-            ->lockForUpdate()
-            ->get();
+        $originalQty = max(1, (int) $saleItem->quantity);
+        $ratio = min(1, $returnedQty / $originalQty);
+        $lineProfit = (float) $saleItem->investor_profit_afn;
+        $reversed = round($lineProfit * $ratio, 2);
 
-        $left = $returnedQty;
-        $reversed = 0.0;
+        if ($reversed > 0.009) {
+            $profitTx = InvestorTransaction::query()
+                ->where('type', 'profit_earned')
+                ->where('reference_type', SaleItem::class)
+                ->where('reference_id', $saleItem->id)
+                ->orderByDesc('id')
+                ->lockForUpdate()
+                ->first();
 
-        foreach ($entries as $entry) {
-            if ($left <= 0) {
-                break;
+            if ($profitTx) {
+                $investorId = (int) $profitTx->investor_id;
+                $investor = \App\Models\Investor::query()->find($investorId);
+                if ($investor) {
+                    $wallet = $investor->getOrCreateWallet();
+                    $wallet->adjustProfit('AFN', -1 * $reversed, -1 * $reversed, 1.0);
+
+                    InvestorTransaction::record(
+                        investorId: $investorId,
+                        type: 'profit_withdrawn',
+                        amountAfn: $reversed,
+                        balanceType: 'profit',
+                        options: [
+                            'investment_id' => $profitTx->investment_id,
+                            'currency_code' => 'AFN',
+                            'amount_currency' => $reversed,
+                            'exchange_rate' => 1,
+                            'reference_type' => SaleReturnItem::class,
+                            'reference_id' => null,
+                            'description' => "Profit reversal for sale return · sale item #{$saleItem->id} · qty {$returnedQty}",
+                            'transaction_date' => now()->toDateString(),
+                        ]
+                    );
+                }
             }
-
-            // Net quantity still attributable to this profit entry after prior adjustments.
-            $alreadyReversedQty = (int) InvestorProfitEntry::query()
-                ->where('sale_item_id', $saleItem->id)
-                ->where('entry_type', 'adjustment')
-                ->where('notes', 'like', '%reversal of entry #'.$entry->id.'%')
-                ->sum('quantity');
-
-            $entryQty = max(0, (int) $entry->quantity - $alreadyReversedQty);
-            $take = min($left, $entryQty);
-            if ($take <= 0) {
-                continue;
-            }
-
-            $perUnit = abs((float) $entry->profit_per_unit_afn);
-            $reverseAmount = round($perUnit * $take, 2);
-            $entry->recordReturnReversal($take, 'Reversed by sale return');
-            $reversed = round($reversed + $reverseAmount, 2);
-            $left -= $take;
         }
 
-        // Keep sale line investor/company profit aligned with remaining sold qty.
-        $originalQty = max(1, (int) $saleItem->quantity);
         $remainingQty = max(0, $originalQty - $returnedQty);
-        $ratio = $originalQty > 0 ? ($remainingQty / $originalQty) : 0;
-        $newInvestor = round((float) $saleItem->investor_profit_afn * $ratio, 2);
-        // Prefer reducing by the exact reversed amount when returning from this line.
-        $newInvestor = round(max(0, (float) $saleItem->investor_profit_afn - $reversed), 2);
-        $gross = (float) ($saleItem->gross_profit_afn ?? ((float) $saleItem->store_profit_afn + (float) $saleItem->investor_profit_afn));
-        $newGross = round($gross * $ratio, 2);
+        $remainRatio = $originalQty > 0 ? ($remainingQty / $originalQty) : 0;
+        $newInvestor = round(max(0, $lineProfit - $reversed), 2);
+        $gross = (float) ($saleItem->gross_profit_afn ?? ((float) $saleItem->store_profit_afn + $lineProfit));
+        $newGross = round($gross * $remainRatio, 2);
 
         $saleItem->update([
             'investor_profit_afn' => $newInvestor,

@@ -2,6 +2,7 @@
 
 import { BackButton } from '@/components/form-page';
 import { MoneyField } from '@/components/money-field';
+import { TransactionExchangeRateSection, type FxBoardContext } from '@/components/transaction-exchange-rate-section';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -89,6 +90,8 @@ interface Props {
     investors?: Investor[];
     suppliers?: Supplier[];
     currencies?: CatalogCurrency[];
+    /** Page-level board context from CurrencyService::formBoardContext (labels/history). */
+    fxBoard?: FxBoardContext;
     errors?: Record<string, string>;
 }
 
@@ -207,10 +210,11 @@ export default function ProductsCreate({
     investors = [],
     suppliers = [],
     currencies = [],
+    fxBoard,
     errors: initialErrors,
 }: Props) {
     const { toast } = useToast();
-    const { usdToAfn, usdToAed, effectiveAt, source } = useExchange();
+    const { usdToAfn, aedToAfn, usdToAed, effectiveAt, source } = useExchange();
     const refUsdToAfn = usdToAfn ?? 0;
     const refUsdToAed = usdToAed ?? 0;
     const ledgerCurrencyId = defaultCurrencyId(currencies);
@@ -752,10 +756,12 @@ export default function ProductsCreate({
                             </div>
                         </div>
 
-                        {(usdToAfn || usdToAed) && (
+                        <TransactionExchangeRateSection context={fxBoard} />
+                        {(usdToAfn || aedToAfn || usdToAed) && (
                             <p className="text-muted-foreground text-xs">
-                                Estimates use the central exchange board
+                                Estimates use the shared central board
                                 {usdToAfn ? ` · 1 USD = ${usdToAfn} AFN` : ''}
+                                {aedToAfn ? ` · 1 AED = ${aedToAfn} AFN` : ''}
                                 {usdToAed ? ` · 1 USD = ${usdToAed} AED` : ''}
                                 {effectiveAt ? ` · effective ${effectiveAt}` : ''}
                                 {source ? ` · ${source}` : ''}.
@@ -1236,11 +1242,25 @@ function ExchangeEquivalents({
     refUsdToAfn: number;
     refUsdToAed: number;
 }) {
+    const { convert } = useExchange();
     const purchaseCur = findCurrency(currencies, variant.purchase_currency_id);
     const saleCur = findCurrency(currencies, variant.sale_currency_id);
 
     const purchaseAfn = estimateToAfn(toNum(variant.purchase_price_afn), purchaseCur, ledgerCur, refUsdToAfn, refUsdToAed);
     const saleAfn = estimateToAfn(toNum(variant.sale_price_afn), saleCur, ledgerCur, refUsdToAfn, refUsdToAed);
+
+    const triad = (afn: number | null) => {
+        if (afn == null) return null;
+        return {
+            afn,
+            usd: convert(afn, 'AFN', 'USD'),
+            aed: convert(afn, 'AFN', 'AED'),
+        };
+    };
+    const purchase3 = triad(purchaseAfn);
+    const sale3 = triad(saleAfn);
+    const marginAfn = purchaseAfn !== null && saleAfn !== null ? saleAfn - purchaseAfn : null;
+    const margin3 = triad(marginAfn);
 
     if (purchaseAfn === null && saleAfn === null) {
         return (
@@ -1250,6 +1270,21 @@ function ExchangeEquivalents({
         );
     }
 
+    const row = (label: string, values: { afn: number; usd: number | null; aed: number | null } | null, emphasize = false) => (
+        <div className="rounded bg-white p-2">
+            <div className="text-muted-foreground mb-0.5 text-[10px] uppercase tracking-wide">{label}</div>
+            <div className={`font-mono font-semibold ${emphasize ? 'text-emerald-700' : ''}`}>
+                {values ? fmt(values.afn) : '—'} <span className="text-muted-foreground">AFN</span>
+            </div>
+            {values && (
+                <div className="text-muted-foreground mt-1 space-y-0.5 font-mono text-[10px]">
+                    <div>≈ {values.usd != null ? fmt(values.usd) : '—'} USD</div>
+                    <div>≈ {values.aed != null ? fmt(values.aed) : '—'} AED</div>
+                </div>
+            )}
+        </div>
+    );
+
     return (
         <div className="rounded-md border border-dashed bg-gray-50/60 p-3">
             <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-gray-700">
@@ -1257,21 +1292,9 @@ function ExchangeEquivalents({
                 Exchange Equivalents (estimate)
             </div>
             <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
-                <div className="rounded bg-white p-2">
-                    <div className="text-muted-foreground mb-0.5 text-[10px] uppercase tracking-wide">Purchase → AFN</div>
-                    <div className="font-mono font-semibold">{purchaseAfn !== null ? fmt(purchaseAfn) : '—'} <span className="text-muted-foreground">AFN</span></div>
-                </div>
-                <div className="rounded bg-white p-2">
-                    <div className="text-muted-foreground mb-0.5 text-[10px] uppercase tracking-wide">Sale → AFN</div>
-                    <div className="font-mono font-semibold">{saleAfn !== null ? fmt(saleAfn) : '—'} <span className="text-muted-foreground">AFN</span></div>
-                </div>
-                <div className="rounded bg-white p-2">
-                    <div className="text-muted-foreground mb-0.5 text-[10px] uppercase tracking-wide">Gross margin</div>
-                    <div className="font-mono font-semibold text-emerald-700">
-                        {purchaseAfn !== null && saleAfn !== null ? fmt(saleAfn - purchaseAfn) : '—'}
-                        <span className="text-muted-foreground ml-1">AFN</span>
-                    </div>
-                </div>
+                {row('Purchase', purchase3)}
+                {row('Sale', sale3)}
+                {row('Gross margin', margin3, true)}
             </div>
         </div>
     );

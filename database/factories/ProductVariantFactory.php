@@ -21,7 +21,6 @@ class ProductVariantFactory extends Factory
             'sku' => 'SKU-'.$this->faker->unique()->numerify('######'),
             'volume_ml' => 100,
             'concentration' => 'edp',
-            'stock_quantity' => 25,
             'trash' => false,
         ];
     }
