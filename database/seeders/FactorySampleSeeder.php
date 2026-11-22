@@ -7,19 +7,14 @@ use App\Models\AppSetting;
 use App\Models\Branch;
 use App\Models\Currency;
 use App\Models\Customer;
-use App\Models\CustomerTransaction;
 use App\Models\ExchangeRate;
 use App\Models\ExchangeRateHistory;
 use App\Models\Expense;
 use App\Models\Inventory;
 use App\Models\InventoryTransaction;
 use App\Models\Investment;
-use App\Models\InvestmentProductAllocation;
-use App\Models\InvestmentPurchaseAllocation;
 use App\Models\Investor;
-use App\Models\InvestorProfitEntry;
 use App\Models\InvestorTransaction;
-use App\Models\InvestorWallet;
 use App\Models\InvestorWithdrawal;
 use App\Models\Product;
 use App\Models\ProductBarcode;
@@ -163,12 +158,6 @@ class FactorySampleSeeder extends Seeder
             'receipt_number' => 'FACTORY-RCT-0001',
             'created_by' => $user?->id,
         ]);
-        CustomerTransaction::factory()->create([
-            'customer_id' => $customer->id,
-            'reference_id' => $sale->id,
-            'created_by' => $user?->id,
-        ]);
-
         $return = SaleReturn::factory()->create([
             'sale_id' => $sale->id,
             'branch_id' => $branch->id,
@@ -211,12 +200,11 @@ class FactorySampleSeeder extends Seeder
         ]);
         $investment = Investment::factory()->create([
             'investor_id' => $investor->id,
-            'investment_number' => 'FACTORY-INV-0001',
+            'notes' => 'FACTORY-INV-0001',
             'created_by' => $user?->id,
-            'user_id' => $user?->id,
         ]);
-        InvestorWallet::factory()->create(['investor_id' => $investor->id]);
-        InvestorTransaction::factory()->create([
+        $investor->getOrCreateWallet();
+        InvestorTransaction::factory()->capitalDeposit()->create([
             'investor_id' => $investor->id,
             'investment_id' => $investment->id,
             'created_by' => $user?->id,
@@ -226,38 +214,6 @@ class FactorySampleSeeder extends Seeder
             'investment_id' => $investment->id,
             'withdrawal_number' => 'FACTORY-WD-0001',
             'created_by' => $user?->id,
-        ]);
-        if (Schema::hasTable('investment_purchase_allocations')) {
-            $purchaseAllocation = InvestmentPurchaseAllocation::factory()->create([
-                'investment_id' => $investment->id,
-                'purchase_id' => $purchase->id,
-                'created_by' => $user?->id,
-            ]);
-            if (Schema::hasTable('investment_product_allocations')) {
-                $this->insertRow(InvestmentProductAllocation::class, [
-                    'investment_id' => $investment->id,
-                    'batch_id' => $batch->id,
-                ], [
-                    'investment_id' => $investment->id,
-                    'investment_purchase_allocation_id' => $purchaseAllocation->id,
-                    'batch_id' => $batch->id,
-                    'variant_id' => $variant->id,
-                    'funded_quantity' => 2,
-                    'sold_quantity' => 0,
-                    'remaining_quantity' => 2,
-                    'cost_per_unit_afn' => 3000,
-                    'profit_per_unit_afn' => 10,
-                    'capital_recovered_afn' => 0,
-                    'profit_earned_afn' => 0,
-                    'status' => 'active',
-                ]);
-            }
-        }
-        InvestorProfitEntry::factory()->create([
-            'investor_id' => $investor->id,
-            'investment_id' => $investment->id,
-            'sale_id' => $sale->id,
-            'sale_item_id' => $item->id,
         ]);
 
         $bill = SupplierInvoice::factory()->create([
@@ -304,12 +260,9 @@ class FactorySampleSeeder extends Seeder
     {
         $sale = Sale::query()->where('invoice_number', 'FACTORY-0001')->first();
         $item = SaleItem::query()->where('sale_id', $sale?->id)->first();
-        $investment = Investment::query()->where('investment_number', 'FACTORY-INV-0001')->first();
+        $investment = Investment::query()->where('notes', 'FACTORY-INV-0001')->first();
         $supplier = Supplier::query()->where('phone', '0702223344')->first();
         $user = User::query()->first();
-        $variantId = $item?->variant_id;
-        $batchId = $item?->batch_id;
-        $purchase = Product::query()->where('variant_id', $variantId)->latest('id')->first();
 
         $investor = Investor::query()->firstOrCreate(
             ['email' => 'factory-investor@zuha.test'],
@@ -323,18 +276,17 @@ class FactorySampleSeeder extends Seeder
             ]
         );
         $investment = Investment::query()->firstOrCreate(
-            ['investment_number' => 'FACTORY-INV-0001'],
+            ['notes' => 'FACTORY-INV-0001'],
             [
                 'investor_id' => $investor->id,
-                'capital_amount_afn' => 10000,
-                'available_amount_afn' => 10000,
-                'allocated_amount_afn' => 0,
-                'profit_amount_afn' => 0,
-                'withdrawn_amount_afn' => 0,
+                'currency_id' => Currency::ledger()?->id,
+                'exchange_rate' => 1,
+                'amount_currency' => 10000,
+                'amount_afn' => 10000,
                 'investment_date' => now()->toDateString(),
                 'status' => 'active',
-                'notes' => 'Sample investor capital',
-                'user_id' => $user?->id,
+                'created_by' => $user?->id,
+                'trash' => false,
             ]
         );
         $investor->getOrCreateWallet();
@@ -361,52 +313,29 @@ class FactorySampleSeeder extends Seeder
             ]);
         }
 
-        if ($investment && $variantId && $batchId && Schema::hasTable('investment_product_allocations')) {
-            $this->insertRow(InvestmentProductAllocation::class, [
-                'investment_id' => $investment->id,
-                'batch_id' => $batchId,
-            ], [
-                'investment_id' => $investment->id,
-                'batch_id' => $batchId,
-                'variant_id' => $variantId,
-                'funded_quantity' => 2,
-                'sold_quantity' => 0,
-                'remaining_quantity' => 2,
-                'cost_per_unit_afn' => 3000,
-                'profit_per_unit_afn' => 10,
-                'capital_recovered_afn' => 0,
-                'profit_earned_afn' => 0,
-                'status' => 'active',
-            ]);
-        }
-
         if ($investment && $sale && $item) {
-            InvestorProfitEntry::query()->firstOrCreate([
-                'sale_id' => $sale->id,
-                'sale_item_id' => $item->id,
-            ], InvestorProfitEntry::factory()->make([
-                'investor_id' => $investment->investor_id,
-                'investment_id' => $investment->id,
-                'sale_id' => $sale->id,
-                'sale_item_id' => $item->id,
-            ])->only(Schema::getColumnListing('investor_profit_entries')));
-        }
-
-        if ($sale && $item) {
-            InvestorProfitEntry::query()->firstOrCreate([
-                'sale_id' => $sale->id,
-                'sale_item_id' => $item->id,
-            ], [
-                'investor_id' => $investor->id,
-                'investment_id' => $investment->id,
-                'quantity' => 1,
-                'profit_per_unit_afn' => 10,
-                'profit_amount_afn' => 10,
-                'entry_type' => 'profit',
-                'status' => 'pending',
-                'earned_at' => now(),
-                'notes' => 'Sample sale profit',
-            ]);
+            InvestorTransaction::query()->firstOrCreate(
+                [
+                    'investor_id' => $investor->id,
+                    'reference_type' => 'sale',
+                    'reference_id' => $sale->id,
+                    'type' => 'profit_earned',
+                ],
+                [
+                    'investment_id' => $investment->id,
+                    'currency_code' => 'AFN',
+                    'currency_symbol' => '؋',
+                    'exchange_rate' => 1,
+                    'amount_currency' => 10,
+                    'amount_afn' => 10,
+                    'balance_type' => 'profit',
+                    'balance_before_afn' => 0,
+                    'balance_after_afn' => 10,
+                    'description' => 'Sample sale profit',
+                    'transaction_date' => now()->toDateString(),
+                    'created_by' => $user?->id,
+                ]
+            );
         }
 
         if ($supplier) {

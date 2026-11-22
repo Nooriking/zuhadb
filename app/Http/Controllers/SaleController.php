@@ -595,12 +595,11 @@ class SaleController extends Controller
                 Log::warning('SaleController@update: No quantity column found on product_batches.');
             }
 
-            // برگرداندن قرض مشتری قبلی
+            // برگرداندن قرض مشتری قبلی (per-currency + current_due_afn via adjustBalance)
             if ($sale->customer_id && (float) $sale->remaining_due_afn > 0) {
                 $oldCustomer = Customer::lockForUpdate()->find($sale->customer_id);
                 if ($oldCustomer) {
                     $dueAfn = (float) $sale->remaining_due_afn;
-                    $oldCustomer->decrement('current_due_afn', $dueAfn);
                     $code = strtoupper((string) ($sale->sale_currency_code ?: 'AFN'));
                     $rate = $sale->rateToAfn();
                     $dueCurrency = $sale->sale_amount_currency !== null && (float) $sale->total_afn > 0
@@ -695,12 +694,11 @@ class SaleController extends Controller
                 SaleItem::create($line);
             }
 
-            // اعمال قرض جدید مشتری
+            // اعمال قرض جدید مشتری (per-currency + current_due_afn via adjustBalance)
             if ($sale->customer_id && (float) $sale->remaining_due_afn > 0) {
                 $newCustomer = Customer::lockForUpdate()->find($sale->customer_id);
                 if ($newCustomer) {
                     $dueAfn = (float) $sale->remaining_due_afn;
-                    $newCustomer->increment('current_due_afn', $dueAfn);
                     $code = strtoupper((string) ($sale->sale_currency_code ?: 'AFN'));
                     $rate = $sale->rateToAfn();
                     $dueCurrency = $sale->sale_amount_currency !== null && (float) $sale->total_afn > 0

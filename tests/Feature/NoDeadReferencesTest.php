@@ -97,4 +97,18 @@ class NoDeadReferencesTest extends TestCase
             "ارجاع به purchase_date روی Product در {$file} پیدا شد"
         );
     }
+
+    public function test_orphan_frontend_pages_for_deleted_modules_are_gone(): void
+    {
+        $orphanDirs = [
+            resource_path('js/pages/investor-profit-entries'),
+            resource_path('js/pages/customer-transactions'),
+            resource_path('js/pages/investment-product-allocations'),
+            resource_path('js/pages/investment-purchase-allocations'),
+        ];
+
+        foreach ($orphanDirs as $dir) {
+            $this->assertDirectoryDoesNotExist($dir, "Orphan page dir still present: {$dir}");
+        }
+    }
 }

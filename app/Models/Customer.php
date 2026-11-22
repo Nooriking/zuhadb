@@ -67,6 +67,11 @@ class Customer extends Model
         return $this->hasMany(Receipt::class, 'customer_id');
     }
 
+    public function balances(): HasMany
+    {
+        return $this->hasMany(CustomerBalance::class, 'customer_id');
+    }
+
     /* =========================================================
      |  Scopes
      ========================================================= */
@@ -120,20 +125,66 @@ class Customer extends Model
     }
 
     /**
-     * به‌روزرسانی مبلغ قرض فعلی
+     * به‌روزرسانی مبلغ قرض فعلی (جمع وزن‌دهی‌شده AFN)
      */
     public function updateCurrentDue(float $newBalance): void
     {
         $this->update(['current_due_afn' => $newBalance]);
     }
 
-    /** Cash-only POS — legacy AR balance table removed. */
+    /**
+     * Adjust per-currency due (customer_balances) and bump denormalized current_due_afn.
+     * Positive delta = customer owes more; negative = payment / credit.
+     *
+     * Callers should use this instead of separately incrementing current_due_afn.
+     */
     public function adjustBalance(
         string $currencyCode,
         float $deltaCurrency,
         float $deltaAfn,
         ?float $rate = null,
-    ): null {
-        return null;
+    ): CustomerBalance {
+        $balance = CustomerBalance::forCustomer((int) $this->id, $currencyCode);
+        $balance->adjust($deltaCurrency, $deltaAfn, $rate);
+
+        $this->current_due_afn = round((float) $this->current_due_afn + $deltaAfn, 2);
+        $this->save();
+
+        return $balance->fresh();
+    }
+
+    /**
+     * Recalculate denormalized current_due_afn from per-currency balance_afn rows.
+     */
+    public function syncCurrentDueFromBalances(): void
+    {
+        $totalAfn = round((float) $this->balances()->sum('balance_afn'), 2);
+        $this->update(['current_due_afn' => $totalAfn]);
+    }
+
+    /**
+     * Due breakdown for UI: primary currency balances + AFN total.
+     *
+     * @return array{total_afn: float, by_currency: list<array{currency_code: string, balance_currency: float, balance_afn: float, last_rate: float|null}>}
+     */
+    public function dueBreakdown(): array
+    {
+        $rows = $this->balances()
+            ->orderBy('currency_code')
+            ->get(['currency_code', 'balance_currency', 'balance_afn', 'last_rate']);
+
+        return [
+            'total_afn' => round((float) $rows->sum('balance_afn'), 2),
+            'by_currency' => $rows
+                ->filter(fn (CustomerBalance $b) => abs((float) $b->balance_currency) > 0.009 || abs((float) $b->balance_afn) > 0.009)
+                ->map(fn (CustomerBalance $b) => [
+                    'currency_code' => (string) $b->currency_code,
+                    'balance_currency' => round((float) $b->balance_currency, 2),
+                    'balance_afn' => round((float) $b->balance_afn, 2),
+                    'last_rate' => $b->last_rate !== null ? (float) $b->last_rate : null,
+                ])
+                ->values()
+                ->all(),
+        ];
     }
 }

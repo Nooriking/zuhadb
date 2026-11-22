@@ -357,7 +357,7 @@ class DashboardController extends Controller
          ========================================================= */
 
         $counters = [
-            'products' => Product::notTrashed()->whereNull('purchase_date')->count(),
+            'products' => Product::notTrashed()->count(),
             'variants' => ProductVariant::notTrashed()->count(),
             'customers' => Customer::notTrashed()->count(),
             'suppliers' => Supplier::notTrashed()->count(),

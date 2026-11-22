@@ -3,11 +3,11 @@
 use App\Models\Currency;
 use App\Models\Investment;
 use App\Models\Investor;
-use App\Models\InvestorProfitEntry;
-use App\Models\InvestorWallet;
+use App\Models\InvestorTransaction;
+use App\Models\InvestorWalletBalance;
 use App\Models\InvestorWithdrawal;
 use App\Models\User;
-use App\Services\CurrencyService;
+use App\Services\ExchangeRateService;
 
 function adminUser(): User
 {
@@ -16,56 +16,85 @@ function adminUser(): User
 
 function seedInvestorBooks(): array
 {
+    $afn = Currency::query()->where('code', 'AFN')->first()
+        ?? Currency::factory()->create([
+            'code' => 'AFN',
+            'name' => 'Afghani',
+            'symbol' => '؋',
+            'is_base' => true,
+            'rate_to_default' => '1',
+            'status' => 'active',
+            'trash' => false,
+        ]);
+
     $investor = Investor::factory()->create(['full_name' => 'Amina Capital']);
-    InvestorWallet::factory()->create([
-        'investor_id' => $investor->id,
+
+    InvestorWalletBalance::forInvestor((int) $investor->id, 'AFN')->update([
         'capital_balance_afn' => 1400,
+        'capital_balance_currency' => 1400,
         'profit_balance_afn' => 80,
-        'total_invested_afn' => 1400,
-        'total_profit_earned_afn' => 120,
-        'total_withdrawn_afn' => 40,
+        'profit_balance_currency' => 80,
     ]);
+
     Investment::factory()->create([
         'investor_id' => $investor->id,
-        'capital_amount_afn' => 1400,
-        'available_amount_afn' => 400,
-        'allocated_amount_afn' => 1000,
+        'currency_id' => $afn->id,
+        'exchange_rate' => 1,
+        'amount_currency' => 1400,
+        'amount_afn' => 1400,
         'investment_date' => now()->toDateString(),
-        'status' => 'partially_used',
+        'status' => 'active',
     ]);
-    InvestorProfitEntry::factory()->create([
+
+    $investmentId = $investor->investments()->value('id');
+
+    InvestorTransaction::factory()->create([
         'investor_id' => $investor->id,
-        'investment_id' => $investor->investments()->value('id'),
-        'profit_amount_afn' => 90,
-        'status' => 'pending',
-        'earned_at' => now()->subDays(2),
+        'investment_id' => $investmentId,
+        'currency_id' => $afn->id,
+        'type' => 'profit_earned',
+        'amount_afn' => 90,
+        'amount_currency' => 90,
+        'balance_type' => 'profit',
+        'transaction_date' => now()->subDays(2)->toDateString(),
     ]);
-    InvestorProfitEntry::factory()->create([
+
+    InvestorTransaction::factory()->create([
         'investor_id' => $investor->id,
-        'investment_id' => $investor->investments()->value('id'),
-        'profit_amount_afn' => 30,
-        'status' => 'paid',
-        'earned_at' => now()->subDays(40),
+        'investment_id' => $investmentId,
+        'currency_id' => $afn->id,
+        'type' => 'profit_earned',
+        'amount_afn' => 30,
+        'amount_currency' => 30,
+        'balance_type' => 'profit',
+        'transaction_date' => now()->subDays(40)->toDateString(),
     ]);
+
     InvestorWithdrawal::factory()->create([
         'investor_id' => $investor->id,
         'type' => 'profit',
         'amount_afn' => 25,
-        'status' => 'paid',
+        'status' => 'pending',
         'withdrawal_date' => now()->toDateString(),
     ]);
 
     $other = Investor::factory()->create(['full_name' => 'Other Investor']);
-    InvestorWallet::factory()->create([
-        'investor_id' => $other->id,
+    InvestorWalletBalance::forInvestor((int) $other->id, 'AFN')->update([
         'capital_balance_afn' => 500,
+        'capital_balance_currency' => 500,
         'profit_balance_afn' => 10,
-        'total_invested_afn' => 500,
-        'total_profit_earned_afn' => 10,
-        'total_withdrawn_afn' => 0,
+        'profit_balance_currency' => 10,
+    ]);
+    Investment::factory()->create([
+        'investor_id' => $other->id,
+        'currency_id' => $afn->id,
+        'exchange_rate' => 1,
+        'amount_currency' => 500,
+        'amount_afn' => 500,
+        'status' => 'active',
     ]);
 
-    return [$investor, $other];
+    return [$investor, $other, $afn];
 }
 
 test('guests cannot open the investor dashboard', function () {
@@ -78,58 +107,41 @@ test('cashiers cannot open the investor dashboard', function () {
     $this->get('/investors/dashboard')->assertForbidden();
 });
 
-test('admin investor dashboard capital matches investor wallets and respects the date range', function () {
+test('admin investor dashboard exposes new KPIs wallet capital and sale-time profit', function () {
     $this->actingAs(adminUser());
     seedInvestorBooks();
 
-    $money = app(CurrencyService::class);
-    $expectedCapital = $money->reportAmount(1900);
-    $expectedPeriodProfit = $money->reportAmount(90);
-    $expectedLifetimeProfit = $money->reportAmount(130);
-
-    $this->get('/investors/dashboard?days=7')
+    $this->get('/investors/dashboard')
         ->assertOk()
         ->assertInertia(fn ($page) => $page
             ->component('investors/dashboard')
-            ->where('kpis.total_capital', fn ($value) => (float) $value === (float) $expectedCapital)
-            ->where('kpis.total_profit', fn ($value) => (float) $value === (float) $expectedPeriodProfit)
-            ->where('kpis.lifetime_profit', fn ($value) => (float) $value === (float) $expectedLifetimeProfit)
-            ->where('kpis.remaining_profit', fn ($value) => (float) $value === (float) $money->reportAmount(90))
-            ->where('reporting.currency.code', fn ($code) => is_string($code) && $code !== '')
+            ->where('kpis.total_capital_afn', fn ($value) => (float) $value === 1900.0)
+            ->where('kpis.total_profit_afn', fn ($value) => (float) $value === 90.0)
+            ->where('kpis.total_profit_earned_actual_afn', fn ($value) => (float) $value === 120.0)
+            ->where('kpis.total_invested_afn', fn ($value) => (float) $value === 1900.0)
+            ->has('averageRates')
+            ->has('kpis3c.total_capital')
+            ->has('exchange')
         );
-
-    $this->get('/investors')->assertOk()->assertInertia(fn ($page) => $page
-        ->component('investors/index')
-        ->where('stats.total_capital', fn ($value) => (float) $value === 1900.0)
-        ->where('stats.current_balance', fn ($value) => (float) $value === 1990.0)
-        ->where('stats.total_withdrawals', fn ($value) => (float) $value === 40.0)
-        ->where('stats.paid_profit', fn ($value) => (float) $value === 30.0)
-        ->where('stats.pending_profit', fn ($value) => (float) $value === 90.0)
-        ->has('kpi_sources.cash_capital')
-        ->has('kpi_sources.current_balance')
-    );
 });
 
 test('investor users only see their own dashboard figures', function () {
     [$owner] = seedInvestorBooks();
 
-    $money = app(CurrencyService::class);
-
-    // Investor identity is the user row itself — act as the investor user.
     $this->actingAs($owner)
         ->get('/dashboard')
         ->assertOk()
         ->assertInertia(fn ($page) => $page
             ->component('investors/dashboard')
             ->where('own', true)
-            ->where('kpis.total_capital', fn ($value) => (float) $value === (float) $money->reportAmount(1400))
-            ->where('counters.total_investors', 1)
+            ->where('kpis.total_capital_afn', fn ($value) => (float) $value === 1400.0)
+            ->where('kpis.total_investors', 1)
+            ->has('averageRates')
         );
 });
 
-test('dashboard converts ledger totals when a valid default rate exists', function () {
+test('weighted average FX uses investment amounts per currency', function () {
     $this->actingAs(adminUser());
-    seedInvestorBooks();
 
     $usd = Currency::query()->where('code', 'USD')->first()
         ?? Currency::factory()->create([
@@ -139,36 +151,55 @@ test('dashboard converts ledger totals when a valid default rate exists', functi
             'rate_to_default' => '70',
             'is_base' => false,
             'status' => 'active',
+            'trash' => false,
         ]);
-    $usd->update(['rate_to_default' => '70', 'status' => 'active', 'trash' => false]);
-    app(CurrencyService::class)->makeDefault($usd);
 
-    $expected = app(CurrencyService::class)->reportAmount(1900);
+    $investor = Investor::factory()->create(['full_name' => 'FX Investor']);
 
-    $this->get('/investors/dashboard')
+    // 10 @ 65 + 5 @ 65.30 + 5 @ 65.50 → 1304 / 20 = 65.20
+    Investment::factory()->create([
+        'investor_id' => $investor->id,
+        'currency_id' => $usd->id,
+        'exchange_rate' => 65,
+        'amount_currency' => 10,
+        'amount_afn' => 650,
+        'status' => 'active',
+    ]);
+    Investment::factory()->create([
+        'investor_id' => $investor->id,
+        'currency_id' => $usd->id,
+        'exchange_rate' => 65.30,
+        'amount_currency' => 5,
+        'amount_afn' => 326.50,
+        'status' => 'active',
+    ]);
+    Investment::factory()->create([
+        'investor_id' => $investor->id,
+        'currency_id' => $usd->id,
+        'exchange_rate' => 65.50,
+        'amount_currency' => 5,
+        'amount_afn' => 327.50,
+        'status' => 'active',
+    ]);
+
+    $rows = app(ExchangeRateService::class)->investmentWeightedAverages((int) $investor->id);
+    $usdRow = collect($rows)->firstWhere('currency_code', 'USD');
+
+    expect($usdRow)->not->toBeNull()
+        ->and((float) $usdRow['total_currency'])->toBe(20.0)
+        ->and((float) $usdRow['total_afn'])->toBe(1304.0)
+        ->and(round((float) $usdRow['weighted_avg_rate'], 2))->toBe(65.2);
+
+    $this->get('/investors/dashboard?investor_id='.$investor->id)
         ->assertOk()
         ->assertInertia(fn ($page) => $page
-            ->where('reporting.currency.code', 'USD')
-            ->where('reporting.converts_from_ledger', true)
-            ->where('kpis.total_capital', $expected)
-        );
+            ->component('investors/dashboard')
+            ->where('averageRates', function ($rates) {
+                $usd = collect($rates)->firstWhere('currency_code', 'USD');
 
-    expect($expected)->toBeGreaterThan(0)->not->toBe(1900.0);
-});
-
-test('ledger amounts stay unconverted when the exchange rate is missing', function () {
-    $this->actingAs(adminUser());
-    seedInvestorBooks();
-
-    Currency::query()->update(['is_base' => false, 'rate_to_default' => '0']);
-    $ledger = Currency::query()->where('code', 'AFN')->first()
-        ?? Currency::factory()->create(['code' => 'AFN', 'status' => 'active']);
-    $ledger->update(['is_base' => true, 'rate_to_default' => '0', 'status' => 'active', 'trash' => false]);
-
-    $this->get('/investors/dashboard')
-        ->assertOk()
-        ->assertInertia(fn ($page) => $page
-            ->where('reporting.converts_from_ledger', false)
-            ->where('kpis.total_capital', fn ($value) => (float) $value === 1900.0)
+                return $usd
+                    && round((float) ($usd['weighted_avg_rate'] ?? 0), 2) === 65.2
+                    && (float) ($usd['total_currency'] ?? 0) === 20.0;
+            })
         );
 });

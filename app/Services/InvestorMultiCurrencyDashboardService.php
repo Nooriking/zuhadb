@@ -2,11 +2,9 @@
 
 namespace App\Services;
 
-use App\Models\Investment;
 use App\Models\InvestorTransaction;
 use App\Models\InvestorWalletBalance;
 use App\Models\InvestorWithdrawal;
-use App\Models\Product;
 use App\Models\ProductBatch;
 use App\Support\Money;
 use App\Support\OriginalCurrencyMoney;
@@ -76,7 +74,7 @@ class InvestorMultiCurrencyDashboardService
                 'remaining_inventory_afn' => 'Sum(remaining_quantity × historical unit_cost_afn) — ledger cost, not a current-market revaluation',
                 'fifo' => 'Sales costing continues to consume batches FIFO; weighted average is reporting-only',
                 'current_balance_afn' => 'investor_wallet_balances.capital_balance_afn + profit_balance_afn',
-                'current_balance_foreign' => 'Sum(available_amount_currency for cash investments in that currency) + pending profit_amount_currency in that currency — never derived by converting the AFN wallet',
+                'current_balance_foreign' => 'Sum(investor_wallet_balances capital+profit in that currency) + pending profit in that currency — never derived by converting the AFN wallet',
             ],
         ];
     }
@@ -179,31 +177,35 @@ class InvestorMultiCurrencyDashboardService
      */
     private function accumulateInvestments(array &$sections, ?int $investorId): void
     {
-        $query = Investment::notTrashed()
-            ->when($investorId, fn ($q) => $q->where('investor_id', $investorId));
+        // Cash vs goods lives on investor_transactions after investments were slimmed
+        // (source_type / capital_amount_* dropped from investments).
+        $rows = InvestorTransaction::query()
+            ->when($investorId, fn ($q) => $q->where('investor_id', $investorId))
+            ->whereIn('type', ['capital_deposit', 'goods_deposit'])
+            ->get([
+                'type',
+                'currency_code',
+                'amount_currency',
+                'amount_afn',
+            ]);
 
-        foreach ($query->get([
-            'source_type',
-            'currency_code',
-            'capital_amount_currency',
-            'capital_amount_afn',
-        ]) as $row) {
+        foreach ($rows as $row) {
             $code = $this->normalizeKnownCode($row->currency_code);
             if ($code === null) {
                 continue;
             }
 
-            $original = Money::round((string) ($row->capital_amount_currency ?? $row->capital_amount_afn ?? '0'), 2);
-            $afn = Money::round((string) ($row->capital_amount_afn ?? '0'), 2);
+            $original = Money::round((string) ($row->amount_currency ?? $row->amount_afn ?? '0'), 2);
+            $afn = Money::round((string) ($row->amount_afn ?? '0'), 2);
 
-            if ($row->source_type === 'cash') {
+            if ($row->type === 'capital_deposit') {
                 $sections[$code]['cash_capital'] = Money::add($sections[$code]['cash_capital'], $original, 2);
                 $sections[$code]['historical_afn']['cash_capital'] = Money::add(
                     $sections[$code]['historical_afn']['cash_capital'],
                     $afn,
                     2
                 );
-            } elseif ($row->source_type === 'goods') {
+            } elseif ($row->type === 'goods_deposit') {
                 $sections[$code]['goods_purchase_value'] = Money::add($sections[$code]['goods_purchase_value'], $original, 2);
                 $sections[$code]['historical_afn']['goods_purchase_value'] = Money::add(
                     $sections[$code]['historical_afn']['goods_purchase_value'],
@@ -236,11 +238,14 @@ class InvestorMultiCurrencyDashboardService
         }
 
         foreach ($batches as $batch) {
-            $purchase = $batch->purchaseItem;
-            $code = $this->normalizeKnownCode($purchase?->purchase_currency_code);
+            $code = $this->normalizeKnownCode($batch->purchaseCurrency?->code);
+            if ($code === null) {
+                // AFN ledger when rate is 1 and currency row is missing.
+                $code = ((float) ($batch->exchange_rate ?? 0) == 1.0) ? 'AFN' : null;
+            }
             if ($code === null) {
                 $legacy['purchases_without_currency'] = (int) $legacy['purchases_without_currency'] + 1;
-                $limitations[] = 'Some inventory batches lack purchase_currency_code and are excluded from original-currency sections.';
+                $limitations[] = 'Some inventory batches lack purchase currency and are excluded from original-currency sections.';
 
                 continue;
             }
@@ -249,16 +254,14 @@ class InvestorMultiCurrencyDashboardService
             $receivedQty = max(0, (int) $batch->quantity);
             $soldQty = max(0, $receivedQty - $remainingQty);
 
-            $unitOriginal = (string) ($batch->unit_cost_currency
-                ?? $purchase?->purchase_unit_amount
-                ?? '0');
+            $unitOriginal = (string) ($batch->unit_cost_currency ?? '0');
             $unitAfn = (string) ($batch->unit_cost_afn ?? '0');
 
-            if ((float) $unitOriginal <= 0 && $purchase) {
-                $unitOriginal = (string) ($purchase->purchase_unit_amount ?? '0');
+            if ((float) $unitOriginal <= 0 && $receivedQty > 0 && $batch->purchase_amount_currency !== null) {
+                $unitOriginal = Money::div((string) $batch->purchase_amount_currency, (string) max(1, $receivedQty), 8);
             }
-            if ((float) $unitAfn <= 0 && $purchase && (int) ($purchase->quantity ?? 0) > 0) {
-                $unitAfn = Money::div((string) ($purchase->purchase_price_afn ?? $purchase->line_total ?? '0'), (string) max(1, (int) $purchase->quantity), 8);
+            if ((float) $unitAfn <= 0 && $receivedQty > 0 && $batch->total_cost_afn !== null) {
+                $unitAfn = Money::div((string) $batch->total_cost_afn, (string) max(1, $receivedQty), 8);
             }
 
             $remainingOriginal = Money::round(Money::mul($unitOriginal, (string) $remainingQty, 8), 2);
@@ -266,7 +269,7 @@ class InvestorMultiCurrencyDashboardService
             $soldOriginal = Money::round(Money::mul($unitOriginal, (string) $soldQty, 8), 2);
             $soldAfn = Money::round(Money::mul($unitAfn, (string) $soldQty, 8), 2);
 
-            // Prefer goods contribution from investments when present; otherwise sum received batch costs.
+            // Prefer goods contribution from ledger deposits when present; otherwise sum received batch costs.
             if (! $goodsFromInvestments[$code]) {
                 $receivedOriginal = Money::round(Money::mul($unitOriginal, (string) $receivedQty, 8), 2);
                 $receivedAfn = Money::round(Money::mul($unitAfn, (string) $receivedQty, 8), 2);
@@ -303,32 +306,44 @@ class InvestorMultiCurrencyDashboardService
      */
     private function accumulateInventoryFromPurchases(array &$sections, ?int $investorId, array &$legacy, array &$limitations): void
     {
-        $purchases = ProductBatch::query()
+        $batches = ProductBatch::query()
+            ->with(['purchaseCurrency:id,code', 'investment:id,investor_id'])
             ->where('trash', false)
-            ->when($investorId, fn ($q) => $q->where('investor_id', $investorId), fn ($q) => $q->whereNotNull('investor_id'))
+            ->when(
+                $investorId,
+                fn ($q) => $q->whereHas('investment', fn ($iq) => $iq->where('investor_id', $investorId)),
+                fn ($q) => $q->whereNotNull('investment_id')
+            )
             ->get([
                 'id',
+                'investment_id',
+                'purchase_currency_id',
+                'purchase_amount_currency',
                 'quantity',
                 'remaining_quantity',
                 'unit_cost_currency',
                 'unit_cost_afn',
                 'total_cost_afn',
-                'profit_currency_code',
                 'exchange_rate',
             ]);
 
-        foreach ($purchases as $purchase) {
-            $code = $this->normalizeKnownCode($purchase->profit_currency_code)
+        foreach ($batches as $purchase) {
+            $code = $this->normalizeKnownCode($purchase->purchaseCurrency?->code)
                 ?? ((float) ($purchase->exchange_rate ?? 0) == 1.0 ? 'AFN' : null);
             if ($code === null) {
                 // Prefer AFN ledger when original currency was not snapshotted on the batch.
                 $code = 'AFN';
+                $legacy['purchases_without_currency'] = (int) $legacy['purchases_without_currency'] + 1;
+                $limitations[] = 'Some inventory batches lack purchase currency; attributed to AFN ledger as fallback.';
             }
 
             $qty = max(0, (int) $purchase->quantity);
             $remaining = max(0, (int) $purchase->remaining_quantity);
             $sold = max(0, $qty - $remaining);
             $unitOriginal = (string) ($purchase->unit_cost_currency ?? '0');
+            if ((float) $unitOriginal <= 0 && $qty > 0 && $purchase->purchase_amount_currency !== null) {
+                $unitOriginal = Money::div((string) $purchase->purchase_amount_currency, (string) $qty, 8);
+            }
             if ((float) $unitOriginal <= 0 && $qty > 0 && $purchase->total_cost_afn !== null) {
                 $unitOriginal = Money::div((string) $purchase->total_cost_afn, (string) $qty, 8);
             }
@@ -554,7 +569,10 @@ class InvestorMultiCurrencyDashboardService
         ];
 
         foreach ($batches as $batch) {
-            $code = $this->normalizeKnownCode($batch->purchaseItem?->purchase_currency_code);
+            $code = $this->normalizeKnownCode($batch->purchaseCurrency?->code);
+            if ($code === null) {
+                $code = ((float) ($batch->exchange_rate ?? 0) == 1.0) ? 'AFN' : null;
+            }
             if ($code === null) {
                 continue;
             }
@@ -564,10 +582,14 @@ class InvestorMultiCurrencyDashboardService
                 continue;
             }
 
-            $unitOriginal = (string) ($batch->unit_cost_currency
-                ?? $batch->purchaseItem?->purchase_unit_amount
-                ?? '0');
+            $unitOriginal = (string) ($batch->unit_cost_currency ?? '0');
             $unitAfn = (string) ($batch->unit_cost_afn ?? '0');
+            if ((float) $unitOriginal <= 0 && (int) $batch->quantity > 0 && $batch->purchase_amount_currency !== null) {
+                $unitOriginal = Money::div((string) $batch->purchase_amount_currency, (string) max(1, (int) $batch->quantity), 8);
+            }
+            if ((float) $unitAfn <= 0 && (int) $batch->quantity > 0 && $batch->total_cost_afn !== null) {
+                $unitAfn = Money::div((string) $batch->total_cost_afn, (string) max(1, (int) $batch->quantity), 8);
+            }
             $original = Money::round(Money::mul($unitOriginal, (string) $remainingQty, 8), 2);
             $afn = Money::round(Money::mul($unitAfn, (string) $remainingQty, 8), 2);
 
@@ -627,21 +649,23 @@ class InvestorMultiCurrencyDashboardService
     private function investorBatches(?int $investorId): Collection
     {
         return ProductBatch::query()
-            ->with(['purchaseItem:id,purchase_currency_code,purchase_unit_amount,purchase_price_afn,line_total,quantity'])
+            ->with(['purchaseCurrency:id,code', 'investment:id,investor_id'])
             ->where('trash', false)
             ->when(
                 $investorId,
-                fn ($q) => $q->where('investor_id', $investorId),
-                fn ($q) => $q->whereNotNull('investor_id')
+                fn ($q) => $q->whereHas('investment', fn ($iq) => $iq->where('investor_id', $investorId)),
+                fn ($q) => $q->whereNotNull('investment_id')
             )
             ->get([
                 'id',
-                'purchase_item_id',
-                'investor_id',
+                'investment_id',
+                'purchase_currency_id',
+                'purchase_amount_currency',
                 'quantity',
                 'remaining_quantity',
                 'unit_cost_currency',
                 'unit_cost_afn',
+                'total_cost_afn',
                 'exchange_rate',
             ]);
     }

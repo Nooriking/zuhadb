@@ -11,7 +11,8 @@ class StoreAssetsService
      * ✅ محاسبه دارایی‌های دوکان (بدون investor)
      *
      * منطق:
-     *  - جنس‌هایی که investor_id = NULL دارند → مال دوکان هستند
+     *  - جنس‌هایی که investment_id = NULL دارند → مال دوکان هستند
+     *    (ستون investor_id از product_batches حذف شده)
      *  - سود این جنس‌ها کامل به دوکان می‌رسد (نه به هیچ سرمایه‌گذار)
      */
     public static function summarize(?int $branchId = null): array
@@ -21,8 +22,8 @@ class StoreAssetsService
          ═══════════════════════════════════════════════════ */
 
         $batches = ProductBatch::query()
-            ->where('trash', false)
-            ->whereNull('investor_id')
+            ->notTrashed()
+            ->storeOwned()
             ->where('remaining_quantity', '>', 0)
             ->when($branchId, fn ($q) => $q->where('branch_id', $branchId))
             ->with([
@@ -43,8 +44,8 @@ class StoreAssetsService
             // ارزش باقی‌مانده بر اساس قیمت خرید
             $remainingCostAfn = $remaining * $unitCostAfn;
 
-            // قیمت فروش برای محاسبه سود مورد انتظار
-            $salePriceAfn = (float) ($b->variant?->sale_price_afn ?? 0);
+            // قیمت فروش: اول از خود batch، وگرنه از variant
+            $salePriceAfn = (float) ($b->sale_price_afn ?: ($b->variant?->sale_price_afn ?? 0));
 
             // سود مورد انتظار (اگر همه بفروشند)
             $expectedProfitAfn = max(0, ($salePriceAfn - $unitCostAfn) * $remaining);
@@ -85,7 +86,7 @@ class StoreAssetsService
          |  2. فروش‌های تحقق‌یافته از جنس‌های دوکان
          ═══════════════════════════════════════════════════ */
 
-        // از product_batches که investor_id = NULL، sale_items را بگیر
+        // از product_batches که investment_id = NULL (مال دوکان)، sale_items را بگیر
         $realizedRow = DB::table('sale_items')
             ->join('sales', 'sale_items.sale_id', '=', 'sales.id')
             ->join('product_batches', 'sale_items.batch_id', '=', 'product_batches.id')
@@ -93,7 +94,7 @@ class StoreAssetsService
             ->whereNull('sales.deleted_at')
             ->where('sales.status', 'completed')
             ->where('product_batches.trash', false)
-            ->whereNull('product_batches.investor_id')
+            ->whereNull('product_batches.investment_id')
             ->when($branchId, fn ($q) => $q->where('sales.branch_id', $branchId))
             ->selectRaw('
                 COALESCE(SUM(sale_items.line_total_afn), 0) as total_sales_afn,
