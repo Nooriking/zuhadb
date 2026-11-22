@@ -62,6 +62,11 @@ function srCurrencies(): array
         ]);
     $aed->update(['rate_to_default' => '19', 'status' => 'active', 'trash' => false, 'is_base' => false]);
 
+    // ExchangeService reads only exchange_rates — seed the board explicitly.
+    $fx = app(CurrencyService::class);
+    $fx->postRate($usd, $afn, '70', '2026-01-01 08:00:00', null, 'test');
+    $fx->postRate($aed, $afn, '19', '2026-01-01 08:00:00', null, 'test');
+
     return compact('afn', 'usd', 'aed');
 }
 
@@ -86,7 +91,7 @@ function srCreateDraftReturn(Sale $sale, User $admin, SaleItem $saleItem, Produc
         'trash' => false,
     ]);
 
-    SaleReturnItem::create([
+    $item = new SaleReturnItem([
         'sale_return_id' => $return->id,
         'sale_item_id' => $saleItem->id,
         'variant_id' => $saleItem->variant_id,
@@ -96,6 +101,8 @@ function srCreateDraftReturn(Sale $sale, User $admin, SaleItem $saleItem, Produc
         'total_afn' => round((float) $saleItem->sale_price_afn * $qty, 2),
         'condition' => SaleReturnItem::CONDITION_GOOD,
     ]);
+    $item->calculateFromOriginalSaleItem();
+    $item->save();
 
     return $return;
 }
@@ -116,10 +123,7 @@ test('full return restores FIFO stock, cancels pending investor profit, and reve
     ]);
     $investor->getOrCreateWallet();
 
-    $variant = ProductVariant::factory()->create([
-        'purchase_price_afn' => 1400,
-        'sale_price_afn' => 2000,
-    ]);
+    $variant = ProductVariant::factory()->create();
 
     $purchase = app(PurchaseService::class)->receiveStock([
         'variant_id' => $variant->id,
@@ -197,10 +201,7 @@ test('partial return preserves original-currency pending profit remainder and hi
     ]);
     $investor->getOrCreateWallet();
 
-    $variant = ProductVariant::factory()->create([
-        'purchase_price_afn' => 1400,
-        'sale_price_afn' => 2000,
-    ]);
+    $variant = ProductVariant::factory()->create();
 
     $purchase = app(PurchaseService::class)->receiveStock([
         'variant_id' => $variant->id,
@@ -251,7 +252,7 @@ test('partial return preserves original-currency pending profit remainder and hi
         ->and((float) $entry->profit_amount_currency)->toBe(6.0)
         ->and((float) $entry->profit_amount_afn)->toBe(420.0)
         ->and((float) $entry->exchange_rate)->toBe(70.0)
-        ->and((float) $purchase->exchange_rate)->toBe(70.0)
+        ->and((float) $batch->fresh()->exchange_rate)->toBe(70.0)
         ->and((int) $batch->fresh()->remaining_quantity)->toBe(7);
 });
 
@@ -272,10 +273,7 @@ test('multi-batch FIFO return restores original batch costs without current FX',
     ]);
     $investor->getOrCreateWallet();
 
-    $variant = ProductVariant::factory()->create([
-        'purchase_price_afn' => 100,
-        'sale_price_afn' => 200,
-    ]);
+    $variant = ProductVariant::factory()->create();
 
     app(PurchaseService::class)->receiveStock([
         'variant_id' => $variant->id,
@@ -388,10 +386,7 @@ test('multi-investor sale return reverses each investor profit independently', f
     $invA->getOrCreateWallet();
     $invB->getOrCreateWallet();
 
-    $variant = ProductVariant::factory()->create([
-        'purchase_price_afn' => 1000,
-        'sale_price_afn' => 1500,
-    ]);
+    $variant = ProductVariant::factory()->create();
 
     app(PurchaseService::class)->receiveStock([
         'variant_id' => $variant->id,
@@ -461,10 +456,7 @@ test('paid investor profit return creates immutable adjustment without mutating 
     ]);
     $investor->getOrCreateWallet();
 
-    $variant = ProductVariant::factory()->create([
-        'purchase_price_afn' => 1400,
-        'sale_price_afn' => 2000,
-    ]);
+    $variant = ProductVariant::factory()->create();
 
     app(PurchaseService::class)->receiveStock([
         'variant_id' => $variant->id,
@@ -532,6 +524,7 @@ test('paid investor profit return creates immutable adjustment without mutating 
 });
 
 test('duplicate finalize and over-return quantity are prevented', function () {
+    srCurrencies();
     $branch = Branch::factory()->create();
     $admin = User::factory()->create(['role' => User::ROLE_ADMIN, 'branch_id' => $branch->id]);
     $investor = Investor::factory()->create();
@@ -543,10 +536,7 @@ test('duplicate finalize and over-return quantity are prevented', function () {
     ]);
     $investor->getOrCreateWallet();
 
-    $variant = ProductVariant::factory()->create([
-        'purchase_price_afn' => 1000,
-        'sale_price_afn' => 1500,
-    ]);
+    $variant = ProductVariant::factory()->create();
 
     app(PurchaseService::class)->receiveStock([
         'variant_id' => $variant->id,
@@ -610,6 +600,7 @@ test('duplicate finalize and over-return quantity are prevented', function () {
 });
 
 test('unauthorized investor-profit-exceeds-gross sale remains hard-blocked with no silent reduction', function () {
+    srCurrencies();
     $branch = Branch::factory()->create();
     $admin = User::factory()->create(['role' => User::ROLE_ADMIN, 'branch_id' => $branch->id]);
     $cashier = User::factory()->create(['role' => User::ROLE_CASHIER, 'branch_id' => $branch->id]);
@@ -621,10 +612,7 @@ test('unauthorized investor-profit-exceeds-gross sale remains hard-blocked with 
         'available_amount_afn' => 20000,
     ]);
 
-    $variant = ProductVariant::factory()->create([
-        'purchase_price_afn' => 1000,
-        'sale_price_afn' => 1100,
-    ]);
+    $variant = ProductVariant::factory()->create();
 
     app(PurchaseService::class)->receiveStock([
         'variant_id' => $variant->id,

@@ -1,8 +1,6 @@
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useMemo } from 'react';
+import { useExchange } from '@/hooks/useExchange';
 
+/** @deprecated Prefer useExchange(); kept for pages that still receive fxBoard props. */
 export type FxBoardSnapshot = {
     usd_to_afn_rate?: string | null;
     aed_to_afn_rate?: string | null;
@@ -11,6 +9,7 @@ export type FxBoardSnapshot = {
     rate_source?: string | null;
 };
 
+/** @deprecated Prefer useExchange(); kept for pages that still receive fxBoard props. */
 export type FxBoardContext = {
     currencies?: {
         afn?: { id?: number; code: string; name: string; symbol: string | null } | null;
@@ -31,59 +30,23 @@ export type FxBoardContext = {
 };
 
 type Props = {
-    usdToAfn: string;
-    aedToAfn: string;
-    onChange: (field: 'usd_to_afn_rate' | 'aed_to_afn_rate', value: string) => void;
+    /** Optional labels; rates always come from shared ExchangeService props. */
     context?: FxBoardContext;
-    canManageRates?: boolean;
-    errors?: Record<string, string>;
 };
 
-function deriveUsdToAed(usdToAfn: string, aedToAfn: string): string {
-    const usd = parseFloat(usdToAfn);
-    const aed = parseFloat(aedToAfn);
-    if (!usd || !aed || usd <= 0 || aed <= 0) return '';
-    return (usd / aed).toFixed(8).replace(/\.?0+$/, (m) => (m.includes('.') ? m.replace(/0+$/, '').replace(/\.$/, '') : m));
+function formatRate(value: number | null | undefined): string {
+    if (value == null || Number.isNaN(value) || !Number.isFinite(value)) return '—';
+    const s = String(value);
+    if (!s.includes('.')) return s;
+    return s.replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '');
 }
 
-export function TransactionExchangeRateSection({
-    usdToAfn,
-    aedToAfn,
-    onChange,
-    context,
-    canManageRates = false,
-    errors = {},
-}: Props) {
-    const usdToAed = useMemo(() => deriveUsdToAed(usdToAfn, aedToAfn), [usdToAfn, aedToAfn]);
+export function TransactionExchangeRateSection({ context }: Props) {
+    const { usdToAfn, aedToAfn, usdToAed, effectiveAt, source } = useExchange();
+
     const usdCode = context?.currencies?.usd?.code || 'USD';
     const aedCode = context?.currencies?.aed?.code || 'AED';
     const afnCode = context?.currencies?.afn?.code || 'AFN';
-
-    const historyOptions = useMemo(() => {
-        const rows = context?.history || [];
-        const usdId = context?.currencies?.usd?.id;
-        const aedId = context?.currencies?.aed?.id;
-        return rows.map((row) => {
-            const labelCode = row.from_currency_id === usdId ? usdCode : row.from_currency_id === aedId ? aedCode : 'FX';
-            return {
-                ...row,
-                label: `${labelCode}→${afnCode} ${row.rate} @ ${row.effective_at || '—'} (${row.source || 'rate'})`,
-            };
-        });
-    }, [context, usdCode, aedCode, afnCode]);
-
-    const applyHistory = (id: string) => {
-        if (id === 'current') return;
-        const row = (context?.history || []).find((h) => String(h.id) === id);
-        if (!row) return;
-        const usdId = context?.currencies?.usd?.id;
-        const aedId = context?.currencies?.aed?.id;
-        if (row.from_currency_id === usdId) {
-            onChange('usd_to_afn_rate', row.rate);
-        } else if (row.from_currency_id === aedId) {
-            onChange('aed_to_afn_rate', row.rate);
-        }
-    };
 
     return (
         <div className="space-y-4 rounded-lg border p-4">
@@ -91,86 +54,34 @@ export function TransactionExchangeRateSection({
                 <h2 className="text-sm font-semibold">Exchange rates</h2>
                 <p className="text-muted-foreground text-xs">
                     {context?.policy ||
-                        `Base rates: AFN per 1 ${usdCode} and AFN per 1 ${aedCode}. ${usdCode}/${aedCode} is derived.`}
+                        `Base rates: AFN per 1 ${usdCode} and AFN per 1 ${aedCode}. ${usdCode}/${aedCode} is derived. Server applies these rates at post time.`}
                 </p>
-                {context?.board?.rate_effective_at ? (
+                {effectiveAt || source ? (
                     <p className="text-muted-foreground mt-1 text-xs">
-                        Active as of {context.board.rate_effective_at}
-                        {context.board_kind ? ` · ${context.board_kind}` : ''}
-                        {context.board.rate_source ? ` · ${context.board.rate_source}` : ''}
+                        {effectiveAt ? `Active as of ${effectiveAt}` : null}
+                        {effectiveAt && source ? ' · ' : null}
+                        {source || null}
                     </p>
                 ) : null}
             </div>
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                <div className="space-y-2">
-                    <Label htmlFor="tx_usd_to_afn">
-                        {usdCode} → {afnCode}
-                    </Label>
-                    <Input
-                        id="tx_usd_to_afn"
-                        type="number"
-                        min="0.00000001"
-                        step="0.00000001"
-                        inputMode="decimal"
-                        value={usdToAfn}
-                        disabled={!canManageRates}
-                        onChange={(e) => onChange('usd_to_afn_rate', e.target.value)}
-                        placeholder="e.g. 70"
-                        className={errors.usd_to_afn_rate ? 'border-destructive' : ''}
-                    />
-                    {errors.usd_to_afn_rate ? <p className="text-destructive text-xs">{errors.usd_to_afn_rate}</p> : null}
-                </div>
-                <div className="space-y-2">
-                    <Label htmlFor="tx_aed_to_afn">
-                        {aedCode} → {afnCode}
-                    </Label>
-                    <Input
-                        id="tx_aed_to_afn"
-                        type="number"
-                        min="0.00000001"
-                        step="0.00000001"
-                        inputMode="decimal"
-                        value={aedToAfn}
-                        disabled={!canManageRates}
-                        onChange={(e) => onChange('aed_to_afn_rate', e.target.value)}
-                        placeholder="e.g. 19"
-                        className={errors.aed_to_afn_rate ? 'border-destructive' : ''}
-                    />
-                    {errors.aed_to_afn_rate ? <p className="text-destructive text-xs">{errors.aed_to_afn_rate}</p> : null}
-                </div>
-                <div className="space-y-2">
-                    <Label>
-                        {usdCode} → {aedCode} (derived)
-                    </Label>
-                    <Input value={usdToAed || '—'} readOnly tabIndex={-1} />
-                    <p className="text-muted-foreground text-xs">Auto: usd_to_afn ÷ aed_to_afn</p>
-                </div>
-            </div>
-
-            {historyOptions.length > 0 ? (
-                <div className="space-y-2">
-                    <Label>Select a historical rate</Label>
-                    <Select onValueChange={applyHistory} disabled={!canManageRates}>
-                        <SelectTrigger>
-                            <SelectValue placeholder="Keep current board rates" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="current">Keep current board rates</SelectItem>
-                            {historyOptions.map((row) => (
-                                <SelectItem key={row.id} value={String(row.id)}>
-                                    {row.label}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                    {!canManageRates ? (
-                        <p className="text-muted-foreground text-xs">
-                            Rates are locked for your role. Historical transactions keep their own snapshots.
-                        </p>
-                    ) : null}
-                </div>
-            ) : null}
+            <dl className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                {[
+                    { label: `${usdCode} → ${afnCode}`, value: usdToAfn },
+                    { label: `${aedCode} → ${afnCode}`, value: aedToAfn },
+                    { label: `${usdCode} → ${aedCode} (derived)`, value: usdToAed },
+                ].map((row) => (
+                    <div key={row.label} className="bg-muted/30 rounded-md border px-3 py-2">
+                        <dt className="text-muted-foreground text-xs">{row.label}</dt>
+                        <dd className="font-mono text-base font-semibold">{formatRate(row.value)}</dd>
+                    </div>
+                ))}
+            </dl>
+            {(!usdToAfn || !aedToAfn) && (
+                <p className="text-xs text-amber-800">
+                    Some board rates are missing. Only an admin can post rates, from Exchange Rates → New Rate.
+                </p>
+            )}
         </div>
     );
 }

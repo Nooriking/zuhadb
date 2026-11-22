@@ -303,7 +303,7 @@ class User extends Authenticatable
 
     public function purchases(): HasMany
     {
-        return $this->hasMany(Product::class, 'user_id')->whereNotNull('variant_id');
+        return $this->hasMany(Product::class, 'user_id')->whereNotNull('purchase_date');
     }
 
     public function expenses(): HasMany
@@ -324,7 +324,6 @@ class User extends Authenticatable
             || InvestorTransaction::query()->where('investor_id', $id)->exists()
             || InvestorProfitEntry::query()->where('investor_id', $id)->exists()
             || InvestorWithdrawal::query()->where('investor_id', $id)->exists()
-            || Product::query()->where('investor_id', $id)->exists()
             || ProductBatch::query()->where('investor_id', $id)->exists()) {
             return true;
         }

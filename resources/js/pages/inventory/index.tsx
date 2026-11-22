@@ -20,7 +20,6 @@ interface Inventory {
         volume_ml: number | null;
         concentration: string | null;
         sale_price_afn: string;
-        minimum_stock: number;
         product: {
             id: number;
             name: string;
@@ -100,8 +99,9 @@ export default function InventoryIndex({ inventories, branches, filters, stats }
                         <p className="text-2xl font-bold">{new Intl.NumberFormat('en-US').format(stats.total_quantity)}</p>
                     </div>
                     <div className="rounded-lg border bg-white p-4 shadow-sm">
-                        <p className="text-xs text-gray-500">Total amount</p>
+                        <p className="text-xs text-gray-500">Retail value (qty × catalog sale)</p>
                         <p className="text-2xl font-bold">{money(stats.total_amount)} AFN</p>
+                        <p className="mt-1 text-[10px] text-gray-400">Not batch/FIFO cost — catalog selling price × quantity</p>
                     </div>
                 </div>
 
@@ -151,7 +151,7 @@ export default function InventoryIndex({ inventories, branches, filters, stats }
                                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Product</th>
                                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase">Branch</th>
                                 <th className="px-4 py-3 text-center text-xs font-semibold uppercase">Quantity</th>
-                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Total amount</th>
+                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase">Retail value</th>
                             </tr>
                         </thead>
                         <tbody>

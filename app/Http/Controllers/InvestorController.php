@@ -10,6 +10,8 @@ use App\Models\InvestmentPurchaseAllocation;
 use App\Models\Investor;
 use App\Models\InvestorProfitEntry;
 use App\Models\Product;
+use App\Models\ProductBatch;
+use App\Services\ExchangeService;
 use App\Services\InvestmentCapitalService;
 use App\Services\InvestorMultiCurrencyDashboardService;
 use App\Support\Money;
@@ -36,6 +38,9 @@ use Inertia\Response;
  */
 class InvestorController extends Controller
 {
+    /** Currencies shown on the investors index (never cross-added in original amounts). */
+    private const INDEX_CURRENCIES = ['AFN', 'USD', 'AED'];
+
     public function __construct(
         private readonly InvestmentCapitalService $capital,
         private readonly InvestorMultiCurrencyDashboardService $multiCurrency,
@@ -50,8 +55,8 @@ class InvestorController extends Controller
 
         $investors = Investor::query()
             ->with([
-                'wallet.currency:id,code,name,symbol',
-                'creator:id,name',
+                'wallet',
+                'investorWalletBalances',
             ])
             ->withCount(['investments', 'withdrawals', 'batches', 'purchaseRows'])
             ->withSum([
@@ -83,29 +88,83 @@ class InvestorController extends Controller
             })
             ->when($status, fn ($q, $v) => $q->where('status', $v))
             ->orderBy('name')
-            ->paginate(15)
+            ->paginate(20)
             ->withQueryString();
 
         $goodsTotals = $this->goodsAllocationTotalsByInvestor(
             $investors->getCollection()->pluck('id')->all()
         );
 
-        $investors->getCollection()->transform(function (Investor $investor) use ($goodsTotals) {
+        // Central board rates (units of AFN per 1 unit of currency). Null = no rate posted.
+        $rates = $this->centralRatesToAfn();
+
+        $investors->getCollection()->transform(function (Investor $investor) use ($goodsTotals, $rates) {
             $goods = $goodsTotals[$investor->id] ?? ['held' => '0.00', 'sold' => '0.00'];
-            $capital = (string) ($investor->wallet?->capital_balance_afn ?? '0');
-            $profit = (string) ($investor->wallet?->profit_balance_afn ?? '0');
+            $balances = $investor->investorWalletBalances->keyBy(fn ($row) => strtoupper((string) $row->currency_code));
 
-            $investor->setAttribute('goods_held_afn', $goods['held']);
-            $investor->setAttribute('goods_sold_afn', $goods['sold']);
-            $investor->setAttribute('total_withdrawals_afn', Money::round((string) ($investor->wallet?->total_withdrawn_afn ?? '0'), 2));
-            $investor->setAttribute('current_balance_afn', Money::round(Money::add($capital, $profit, 8), 2));
-            $investor->setAttribute('cash_capital_afn', Money::round((string) ($investor->cash_capital_afn ?? '0'), 2));
-            $investor->setAttribute('goods_contribution_afn', Money::round((string) ($investor->goods_contribution_afn ?? '0'), 2));
-            $investor->setAttribute('total_investor_profit_afn', Money::round((string) ($investor->total_investor_profit_afn ?? '0'), 2));
-            $investor->setAttribute('paid_profit_afn', Money::round((string) ($investor->paid_profit_afn ?? '0'), 2));
-            $investor->setAttribute('pending_profit_afn', Money::round((string) ($investor->pending_profit_afn ?? '0'), 2));
+            $wallet = [];
+            $totalAfnEquivalent = '0';
+            foreach (self::INDEX_CURRENCIES as $code) {
+                $row = $balances->get($code);
+                $capitalCurrency = (string) ($row?->capital_balance_currency ?? '0');
+                $profitCurrency = (string) ($row?->profit_balance_currency ?? '0');
+                $capitalLedgerAfn = (string) ($row?->capital_balance_afn ?? '0');
+                $profitLedgerAfn = (string) ($row?->profit_balance_afn ?? '0');
+                $lastRate = (float) ($row?->last_rate ?? ($code === 'AFN' ? 1 : 0));
+                $rate = $rates[$code] ?? null;
 
-            return $investor;
+                // Equivalent at the central rate; without a posted rate fall back to the ledger snapshot.
+                $capitalAfnEq = $rate !== null
+                    ? Money::round(Money::mul($capitalCurrency, (string) $rate, 8), 2)
+                    : Money::round($capitalLedgerAfn, 2);
+                $profitAfnEq = $rate !== null
+                    ? Money::round(Money::mul($profitCurrency, (string) $rate, 8), 2)
+                    : Money::round($profitLedgerAfn, 2);
+                $balanceAfnEq = Money::round(Money::add($capitalAfnEq, $profitAfnEq, 8), 2);
+
+                $totalAfnEquivalent = Money::add($totalAfnEquivalent, $balanceAfnEq, 8);
+
+                $wallet[$code] = [
+                    // Ledger AFN snapshot (rate at the time of each transaction)
+                    'capital' => (float) $capitalLedgerAfn,
+                    'profit' => (float) $profitLedgerAfn,
+                    // Original currency amounts
+                    'capital_currency' => (float) $capitalCurrency,
+                    'profit_currency' => (float) $profitCurrency,
+                    'balance_currency' => (float) Money::round(Money::add($capitalCurrency, $profitCurrency, 8), 2),
+                    'last_rate' => $lastRate,
+                    // AFN equivalent at today's central rate
+                    'rate' => $rate !== null ? (float) $rate : null,
+                    'rate_available' => $rate !== null,
+                    'capital_afn_equivalent' => (float) $capitalAfnEq,
+                    'profit_afn_equivalent' => (float) $profitAfnEq,
+                    'balance_afn_equivalent' => (float) $balanceAfnEq,
+                ];
+            }
+
+            return [
+                'id' => $investor->id,
+                'full_name' => $investor->full_name,
+                'phone' => $investor->phone,
+                'email' => $investor->email,
+                'status' => $investor->status,
+                'wallet' => $wallet,
+                'total_afn_equivalent' => (float) Money::round($totalAfnEquivalent, 2),
+                // Counts + AFN ledger figures shown in the expanded detail panel
+                'investments_count' => (int) $investor->investments_count,
+                'withdrawals_count' => (int) $investor->withdrawals_count,
+                'batches_count' => (int) $investor->batches_count,
+                'ledger' => [
+                    'cash_capital_afn' => (float) Money::round((string) ($investor->cash_capital_afn ?? '0'), 2),
+                    'goods_contribution_afn' => (float) Money::round((string) ($investor->goods_contribution_afn ?? '0'), 2),
+                    'goods_held_afn' => (float) $goods['held'],
+                    'goods_sold_afn' => (float) $goods['sold'],
+                    'total_profit_afn' => (float) Money::round((string) ($investor->total_investor_profit_afn ?? '0'), 2),
+                    'paid_profit_afn' => (float) Money::round((string) ($investor->paid_profit_afn ?? '0'), 2),
+                    'pending_profit_afn' => (float) Money::round((string) ($investor->pending_profit_afn ?? '0'), 2),
+                    'total_withdrawals_afn' => (float) Money::round((string) ($investor->wallet?->total_withdrawn_afn ?? '0'), 2),
+                ],
+            ];
         });
 
         $stats = [
@@ -160,6 +219,11 @@ class InvestorController extends Controller
                 'status' => $status,
             ],
             'stats' => $stats,
+            'rates' => [
+                'AFN' => 1.0,
+                'USD' => isset($rates['USD']) ? (float) $rates['USD'] : null,
+                'AED' => isset($rates['AED']) ? (float) $rates['AED'] : null,
+            ],
             'kpi_sources' => [
                 'cash_capital' => 'investments.capital_amount_afn WHERE source_type=cash',
                 'goods_contribution' => 'investments.capital_amount_afn WHERE source_type=goods',
@@ -232,7 +296,8 @@ class InvestorController extends Controller
             'investments' => fn ($q) => $q
                 ->with([
                     'currency:id,code,name,symbol,decimal_places',
-                    'purchaseAllocations.purchase:id,name,invoice_number,purchase_date,quantity,remaining_quantity,purchase_price_afn,line_total,purchase_currency_code,purchase_currency_symbol,purchase_line_amount,exchange_rate,supplier_id,investor_id,variant_id',
+                    'purchaseAllocations.purchase:id,name,invoice_number,purchase_date,quantity,remaining_quantity',
+                    'purchaseAllocations.purchase.purchaseBatches',
                     'purchaseAllocations.purchase.supplier:id,name',
                     'purchaseAllocations.purchase.variant:id,name,product_id,volume_ml',
                     'purchaseAllocations.purchase.variant.product:id,name',
@@ -318,6 +383,38 @@ class InvestorController extends Controller
      * @param  list<int>  $investorIds
      * @return array<int, array{held:string,sold:string}>
      */
+    /**
+     * Current central rates to AFN from ExchangeService (exchange_rates table).
+     * A currency without a posted rate is null so callers can fall back to the ledger snapshot.
+     *
+     * @return array{AFN: string, USD: string|null, AED: string|null}
+     */
+    private function centralRatesToAfn(): array
+    {
+        $rates = ['AFN' => '1', 'USD' => null, 'AED' => null];
+
+        try {
+            $board = app(ExchangeService::class)->getCurrentRates();
+            $usd = (string) ($board['usd_to_afn'] ?? '0');
+            $aed = (string) ($board['aed_to_afn'] ?? '0');
+            $rates['USD'] = (float) $usd > 0 ? $usd : null;
+            $rates['AED'] = (float) $aed > 0 ? $aed : null;
+        } catch (\Throwable) {
+            // getCurrentRates() requires both pairs; resolve each independently when the board is incomplete.
+            $service = app(ExchangeService::class);
+            foreach (['USD', 'AED'] as $code) {
+                try {
+                    $rate = $service->getRate($code, 'AFN');
+                    $rates[$code] = $rate > 0 ? sprintf('%.8F', $rate) : null;
+                } catch (\Throwable) {
+                    $rates[$code] = null;
+                }
+            }
+        }
+
+        return $rates;
+    }
+
     protected function goodsAllocationTotalsByInvestor(array $investorIds): array
     {
         if ($investorIds === []) {
@@ -426,19 +523,28 @@ class InvestorController extends Controller
         $rows = [];
         $seenPurchaseIds = [];
 
-        $direct = Product::query()
-            ->whereNotNull('variant_id')
+        $directBatches = ProductBatch::query()
             ->where('investor_id', $investor->id)
+            ->where('trash', false)
             ->with([
-                'supplier:id,name',
+                'purchaseItem:id,name,invoice_number,purchase_date,quantity,remaining_quantity',
                 'variant:id,name,product_id,volume_ml',
                 'variant.product:id,name',
             ])
-            ->orderByDesc('purchase_date')
+            ->orderByDesc('received_date')
             ->get();
 
-        foreach ($direct as $purchase) {
+        foreach ($directBatches as $batch) {
+            $purchase = $batch->purchaseItem;
+            if (! $purchase) {
+                continue;
+            }
             $seenPurchaseIds[$purchase->id] = true;
+            $purchase->setAttribute('variant_id', $batch->variant_id);
+            $purchase->setAttribute('investor_id', $batch->investor_id);
+            $purchase->setAttribute('purchase_price_afn', $batch->total_cost_afn);
+            $purchase->setAttribute('line_total', $batch->total_cost_afn);
+            $purchase->setRelation('variant', $batch->variant);
             $rows[] = $this->mapFundedPurchase($purchase, 'investor_id', null, null);
         }
 
@@ -446,10 +552,9 @@ class InvestorController extends Controller
             ->whereHas('investment', fn ($q) => $q->where('investor_id', $investor->id))
             ->with([
                 'investment:id,investment_number,investor_id,currency_code,currency_symbol,exchange_rate',
-                'purchase:id,name,invoice_number,purchase_date,quantity,remaining_quantity,purchase_price_afn,line_total,purchase_currency_code,purchase_currency_symbol,purchase_line_amount,exchange_rate,supplier_id,investor_id,variant_id',
-                'purchase.supplier:id,name',
-                'purchase.variant:id,name,product_id,volume_ml',
-                'purchase.variant.product:id,name',
+                'purchase:id,name,invoice_number,purchase_date,quantity,remaining_quantity',
+                'purchase.purchaseBatches.variant:id,name,product_id,volume_ml',
+                'purchase.purchaseBatches.variant.product:id,name',
             ])
             ->orderByDesc('created_at')
             ->get();
@@ -485,6 +590,10 @@ class InvestorController extends Controller
 
         $hasReliableLink = $linkType === 'investor_id' || $linkType === 'allocation';
 
+        $batch = $purchase->relationLoaded('purchaseBatches')
+            ? $purchase->purchaseBatches->first()
+            : null;
+
         return [
             'id'                    => $purchase->id,
             'purchase_date'         => optional($purchase->purchase_date)?->toDateString(),
@@ -493,15 +602,15 @@ class InvestorController extends Controller
             'variant_name'          => $purchase->variant?->name,
             'quantity'              => (int) $purchase->quantity,
             'remaining_quantity'    => (int) $purchase->remaining_quantity,
-            'unit_cost_afn'         => (float) $purchase->purchase_price_afn,
-            'line_total_afn'        => (float) ($purchase->line_total ?? $purchase->purchase_price_afn * $purchase->quantity),
-            'original_currency'     => $purchase->purchase_currency_code,
-            'original_currency_symbol' => $purchase->purchase_currency_symbol,
-            'original_line_amount'  => $purchase->purchase_line_amount !== null
-                ? (float) $purchase->purchase_line_amount
+            'unit_cost_afn'         => (float) ($purchase->getAttribute('purchase_price_afn') ?? $batch?->unit_cost_afn ?? 0),
+            'line_total_afn'        => (float) ($purchase->getAttribute('line_total') ?? $batch?->total_cost_afn ?? 0),
+            'original_currency'     => $batch?->profit_currency_code,
+            'original_currency_symbol' => null,
+            'original_line_amount'  => $batch?->unit_cost_currency !== null
+                ? (float) $batch->unit_cost_currency * (int) $purchase->quantity
                 : null,
-            'exchange_rate'         => $purchase->exchange_rate !== null ? (float) $purchase->exchange_rate : null,
-            'supplier_name'         => $purchase->supplier?->name,
+            'exchange_rate'         => $batch?->exchange_rate !== null ? (float) $batch->exchange_rate : null,
+            'supplier_name'         => $purchase->getAttribute('supplier_name'),
             'link_type'             => $linkType,
             'investment_number'     => $investmentNumber,
             'allocated_amount_afn'  => $allocatedAfn,

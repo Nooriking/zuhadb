@@ -98,13 +98,16 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Sales', href: '/sales' },
 ];
 
+/** Number of visible table columns — keep in sync with <TableHeader>. */
+const COLUMN_COUNT = 11;
+
 /* ═══════════════════════════════════════════════════════
  |  Helpers
  ═══════════════════════════════════════════════════════ */
 
-const formatPrice = (value: string | number, digits: number = 0) => {
+const formatPrice = (value: string | number, digits: number = 0): string => {
     const num = typeof value === 'string' ? parseFloat(value) : value;
-    return new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(num || 0);
+    return new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(Number.isFinite(num) ? num : 0);
 };
 
 const getPaymentBadge = (status: string) => {
@@ -113,7 +116,7 @@ const getPaymentBadge = (status: string) => {
         partial: { variant: 'secondary', label: 'Partial' },
         paid: { variant: 'success', label: 'Paid' },
     };
-    const item = map[status] || map.unpaid;
+    const item = map[status] ?? map.unpaid;
     return <Badge variant={item.variant}>{item.label}</Badge>;
 };
 
@@ -123,7 +126,7 @@ const getStatusBadge = (status: string) => {
         completed: { variant: 'success', label: 'Completed' },
         cancelled: { variant: 'destructive', label: 'Cancelled' },
     };
-    const item = map[status] || map.draft;
+    const item = map[status] ?? map.draft;
     return <Badge variant={item.variant}>{item.label}</Badge>;
 };
 
@@ -131,7 +134,15 @@ const getStatusBadge = (status: string) => {
  |  Component
  ═══════════════════════════════════════════════════════ */
 
-export default function SalesIndex({ sales, branches, customers, filters, stats, monthlyRates = [], canEditCompleted = false }: Props) {
+export default function SalesIndex({
+    sales,
+    branches,
+    customers,
+    filters,
+    stats,
+    monthlyRates = [],
+    canEditCompleted = false,
+}: Props) {
     const [search, setSearch] = useState(filters.search || '');
     const [branchFilter, setBranchFilter] = useState(filters.branch_id || 'all');
     const [customerFilter, setCustomerFilter] = useState(filters.customer_id || 'all');
@@ -140,60 +151,60 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
     const [onlyDue, setOnlyDue] = useState<boolean>(filters.only_due || false);
 
     /* ═══════════════════════════════════════════════════════
+     |  URL builder (single source of truth)
+     ═══════════════════════════════════════════════════════ */
+
+    const buildQuery = (overrides: Partial<{ search: string; branch_id: string; customer_id: string; payment_status: string; status: string; only_due: boolean }> = {}) => ({
+        search: (overrides.search ?? search) || undefined,
+        branch_id: (overrides.branch_id ?? branchFilter) === 'all' ? undefined : (overrides.branch_id ?? branchFilter),
+        customer_id: (overrides.customer_id ?? customerFilter) === 'all' ? undefined : (overrides.customer_id ?? customerFilter),
+        payment_status: (overrides.payment_status ?? paymentFilter) === 'all' ? undefined : (overrides.payment_status ?? paymentFilter),
+        status: (overrides.status ?? statusFilter) === 'all' ? undefined : (overrides.status ?? statusFilter),
+        only_due: (overrides.only_due ?? onlyDue) ? 1 : undefined,
+    });
+
+    /* ═══════════════════════════════════════════════════════
      |  Handlers
      ═══════════════════════════════════════════════════════ */
 
-    const handleSearch = (overrides?: { only_due?: boolean }) => {
-        router.get(
-            '/sales',
-            {
-                search: search || undefined,
-                branch_id: branchFilter === 'all' ? undefined : branchFilter,
-                customer_id: customerFilter === 'all' ? undefined : customerFilter,
-                payment_status: paymentFilter === 'all' ? undefined : paymentFilter,
-                status: statusFilter === 'all' ? undefined : statusFilter,
-                only_due: (overrides?.only_due ?? onlyDue) ? 1 : undefined,
-            },
-            { preserveState: true, preserveScroll: true },
-        );
+    /** Manual search submit — pushes a new history entry. */
+    const handleSearch = () => {
+        router.get('/sales', buildQuery(), { preserveState: true, preserveScroll: true });
     };
 
-    const skipLiveSearch = useRef(true);
+    /** Skip the very first render so mount doesn't trigger a redundant fetch. */
+    const isFirstRender = useRef(true);
 
+    /** Debounced live-search when *any* filter or the search text changes. */
     useEffect(() => {
-        if (skipLiveSearch.current) {
-            skipLiveSearch.current = false;
+        if (isFirstRender.current) {
+            isFirstRender.current = false;
             return;
         }
 
         const timer = window.setTimeout(() => {
-            router.get(
-                '/sales',
-                {
-                    search: search || undefined,
-                    branch_id: branchFilter === 'all' ? undefined : branchFilter,
-                    customer_id: customerFilter === 'all' ? undefined : customerFilter,
-                    payment_status: paymentFilter === 'all' ? undefined : paymentFilter,
-                    status: statusFilter === 'all' ? undefined : statusFilter,
-                    only_due: onlyDue ? 1 : undefined,
-                },
-                { preserveState: true, preserveScroll: true, replace: true },
-            );
+            router.get('/sales', buildQuery(), {
+                preserveState: true,
+                preserveScroll: true,
+                replace: true,
+            });
         }, 300);
 
         return () => window.clearTimeout(timer);
-    }, [search]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [search, branchFilter, customerFilter, paymentFilter, statusFilter, onlyDue]);
 
     const handlePageChange = (url: string | null) => {
-        if (url) router.get(url, {}, { preserveState: true, preserveScroll: true });
+        if (!url) return;
+        router.get(url, {}, { preserveState: true, preserveScroll: true });
     };
 
-    /* ⭐ Print Receipt */
+    /** Open the receipt print view in a new tab. */
     const handlePrint = (sale: Sale) => {
         window.open(`/sales/${sale.id}/receipt`, '_blank', 'noopener,noreferrer');
     };
 
-    /* ⭐ Delete Sale — با تأیید SweetAlert */
+    /** Delete a sale after explicit confirmation. */
     const handleDelete = async (sale: Sale) => {
         const Swal = await getSwal();
         const result = await Swal.fire({
@@ -212,7 +223,7 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
         router.delete(`/sales/${sale.id}`, {
             preserveScroll: true,
             onSuccess: () => {
-                Swal.fire({
+                void Swal.fire({
                     icon: 'success',
                     title: 'Deleted',
                     text: `Sale "${sale.invoice_number}" moved to trash.`,
@@ -221,7 +232,7 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                 });
             },
             onError: () => {
-                Swal.fire({
+                void Swal.fire({
                     icon: 'error',
                     title: 'Error',
                     text: 'Could not delete this sale.',
@@ -231,15 +242,16 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
         });
     };
 
-    /* ⭐ Sales Report — باز کردن گزارش در تب جدید */
+    /** Open the sales report in a new tab, carrying the current filters. */
     const handleOpenReport = () => {
         const params = new URLSearchParams();
-        if (search) params.append('search', search);
-        if (branchFilter !== 'all') params.append('branch_id', branchFilter);
-        if (customerFilter !== 'all') params.append('customer_id', customerFilter);
-        if (paymentFilter !== 'all') params.append('payment_status', paymentFilter);
-        if (statusFilter !== 'all') params.append('status', statusFilter);
-        if (onlyDue) params.append('only_due', '1');
+        const q = buildQuery();
+        if (q.search) params.append('search', q.search);
+        if (q.branch_id) params.append('branch_id', q.branch_id);
+        if (q.customer_id) params.append('customer_id', q.customer_id);
+        if (q.payment_status) params.append('payment_status', q.payment_status);
+        if (q.status) params.append('status', q.status);
+        if (q.only_due) params.append('only_due', '1');
 
         const query = params.toString();
         window.open(`/sales/report${query ? `?${query}` : ''}`, '_blank', 'noopener,noreferrer');
@@ -262,11 +274,9 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                         <Badge variant="outline">{sales.total} Sales</Badge>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                        {/* ⭐ Sales Report */}
                         <Button variant="outline" className="gap-2" onClick={handleOpenReport}>
                             <BarChart3 className="h-4 w-4" /> Sales Report
                         </Button>
-
                         <Link href="/sales/trash">
                             <Button variant="outline" className="gap-2">
                                 <Trash2 className="h-4 w-4" /> Trash
@@ -289,7 +299,7 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                         </div>
                         <ByCurrencyAmounts
                             amounts={stats.today_sales_by_currency}
-                            titlePrefix="فروش"
+                            titlePrefix="Sales"
                             valueClassName="font-mono text-sm font-bold"
                             digits={2}
                         />
@@ -308,7 +318,7 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                         </div>
                         <ByCurrencyAmounts
                             amounts={stats.today_profit_by_currency}
-                            titlePrefix="سود"
+                            titlePrefix="Profit"
                             valueClassName="font-mono text-sm font-bold"
                             digits={2}
                         />
@@ -320,7 +330,7 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                         </div>
                         <ByCurrencyAmounts
                             amounts={stats.total_due_by_currency}
-                            titlePrefix="قرض"
+                            titlePrefix="Due"
                             valueClassName="font-mono text-sm font-bold"
                             digits={2}
                         />
@@ -344,18 +354,12 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                 <IndexFilters
                     search={search}
                     onSearchChange={setSearch}
-                    onSearch={() => handleSearch()}
+                    onSearch={handleSearch}
                     placeholder="Search invoice, receipt, or customer phone..."
                 >
                     {branches.length > 1 && (
                         <FilterField label="Branch">
-                            <Select
-                                value={branchFilter}
-                                onValueChange={(v) => {
-                                    setBranchFilter(v);
-                                    setTimeout(() => handleSearch(), 0);
-                                }}
-                            >
+                            <Select value={branchFilter} onValueChange={setBranchFilter}>
                                 <SelectTrigger className="w-full">
                                     <SelectValue placeholder="Branch" />
                                 </SelectTrigger>
@@ -371,13 +375,7 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                         </FilterField>
                     )}
                     <FilterField label="Customer">
-                        <Select
-                            value={customerFilter}
-                            onValueChange={(v) => {
-                                setCustomerFilter(v);
-                                setTimeout(() => handleSearch(), 0);
-                            }}
-                        >
+                        <Select value={customerFilter} onValueChange={setCustomerFilter}>
                             <SelectTrigger className="w-full">
                                 <SelectValue placeholder="Customer" />
                             </SelectTrigger>
@@ -392,18 +390,12 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                         </Select>
                     </FilterField>
                     <FilterField label="Payment">
-                        <Select
-                            value={paymentFilter}
-                            onValueChange={(v) => {
-                                setPaymentFilter(v);
-                                setTimeout(() => handleSearch(), 0);
-                            }}
-                        >
+                        <Select value={paymentFilter} onValueChange={setPaymentFilter}>
                             <SelectTrigger className="w-full">
                                 <SelectValue placeholder="Payment" />
                             </SelectTrigger>
                             <SelectContent>
-                                <SelectItem value="all">All Payment</SelectItem>
+                                <SelectItem value="all">All Payments</SelectItem>
                                 <SelectItem value="unpaid">Unpaid</SelectItem>
                                 <SelectItem value="partial">Partial</SelectItem>
                                 <SelectItem value="paid">Paid</SelectItem>
@@ -411,18 +403,12 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                         </Select>
                     </FilterField>
                     <FilterField label="Status">
-                        <Select
-                            value={statusFilter}
-                            onValueChange={(v) => {
-                                setStatusFilter(v);
-                                setTimeout(() => handleSearch(), 0);
-                            }}
-                        >
+                        <Select value={statusFilter} onValueChange={setStatusFilter}>
                             <SelectTrigger className="w-full">
                                 <SelectValue placeholder="Status" />
                             </SelectTrigger>
                             <SelectContent>
-                                <SelectItem value="all">All Status</SelectItem>
+                                <SelectItem value="all">All Statuses</SelectItem>
                                 <SelectItem value="draft">Draft</SelectItem>
                                 <SelectItem value="completed">Completed</SelectItem>
                                 <SelectItem value="cancelled">Cancelled</SelectItem>
@@ -433,12 +419,9 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                         <Button
                             type="button"
                             variant={onlyDue ? 'default' : 'outline'}
-                            onClick={() => {
-                                const next = !onlyDue;
-                                setOnlyDue(next);
-                                setTimeout(() => handleSearch({ only_due: next }), 0);
-                            }}
+                            onClick={() => setOnlyDue((v) => !v)}
                             className="w-full gap-2"
+                            aria-pressed={onlyDue}
                         >
                             <Banknote className="h-4 w-4" />
                             Only with Due
@@ -447,20 +430,22 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                 </IndexFilters>
 
                 {monthlyRates.length > 0 && (
-                    <div className="flex flex-wrap gap-2">
-                        {monthlyRates.map((row) => (
-                            <div key={`${row.year}-${row.month}`} className="rounded-md border px-3 py-2 text-sm">
-                                <span className="text-muted-foreground">
-                                    {new Date(row.year, row.month - 1, 1).toLocaleString('en-US', {
-                                        month: 'long',
-                                        year: 'numeric',
-                                    })}
-                                </span>
-                                <span className="ml-2 font-mono font-semibold">{row.average_rate}</span>
-                                <span className="text-muted-foreground ml-1 text-xs">avg USD to AFN</span>
-                            </div>
-                        ))}
-                    </div>
+                    <section aria-label="Monthly average USD to AFN exchange rates">
+                        <div className="flex flex-wrap gap-2">
+                            {monthlyRates.map((row) => (
+                                <div key={`${row.year}-${row.month}`} className="rounded-md border px-3 py-2 text-sm">
+                                    <span className="text-muted-foreground">
+                                        {new Date(row.year, row.month - 1, 1).toLocaleString('en-US', {
+                                            month: 'long',
+                                            year: 'numeric',
+                                        })}
+                                    </span>
+                                    <span className="ml-2 font-mono font-semibold">{row.average_rate}</span>
+                                    <span className="text-muted-foreground ml-1 text-xs">avg USD to AFN</span>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
                 )}
 
                 {/* ═══════════ Table ═══════════ */}
@@ -484,7 +469,7 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                         <TableBody>
                             {sales.data.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={11} className="text-muted-foreground h-24 text-center">
+                                    <TableCell colSpan={COLUMN_COUNT} className="text-muted-foreground h-24 text-center">
                                         No sales found.
                                     </TableCell>
                                 </TableRow>
@@ -502,7 +487,9 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                                                     <div className="text-muted-foreground font-mono text-[10px]">{sale.receipt_no}</div>
                                                 )}
                                                 {sale.printed_count > 0 && (
-                                                    <div className="text-muted-foreground mt-0.5 text-[10px]">🖨️ Printed {sale.printed_count}×</div>
+                                                    <div className="text-muted-foreground mt-0.5 text-[10px]">
+                                                        🖨️ Printed {sale.printed_count}×
+                                                    </div>
                                                 )}
                                             </TableCell>
                                             <TableCell>
@@ -519,7 +506,9 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                                                     <span className="text-muted-foreground text-xs">Walk-in</span>
                                                 )}
                                             </TableCell>
-                                            <TableCell className="text-xs">{new Date(sale.sale_date).toLocaleDateString('en-US')}</TableCell>
+                                            <TableCell className="text-xs">
+                                                {new Date(sale.sale_date).toLocaleDateString('en-US')}
+                                            </TableCell>
                                             <TableCell className="text-center text-xs font-semibold">
                                                 {sale.sale_currency_label || (code ? code : 'Unknown')}
                                             </TableCell>
@@ -541,8 +530,6 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                                                     {getStatusBadge(sale.status)}
                                                 </div>
                                             </TableCell>
-
-                                            {/* ⭐ Actions — شامل Delete */}
                                             <TableCell className="px-1 text-center whitespace-nowrap">
                                                 <RowActions>
                                                     <ViewAction href={`/sales/${sale.id}`} />
@@ -565,19 +552,23 @@ export default function SalesIndex({ sales, branches, customers, filters, stats,
                         <div className="text-muted-foreground text-sm">
                             Showing {sales.from || 0} to {sales.to || 0} of {sales.total} results
                         </div>
-                        <div className="flex gap-1">
+                        <nav aria-label="Pagination" className="flex gap-1">
                             {sales.links.map((link, i) => (
                                 <Button
-                                    key={i}
+                                    key={`${link.label}-${i}`}
                                     variant={link.active ? 'default' : 'outline'}
                                     size="sm"
                                     onClick={() => handlePageChange(link.url)}
                                     disabled={!link.url}
                                     className="min-w-[40px]"
+                                    aria-current={link.active ? 'page' : undefined}
+                                    aria-label={link.label.replace(/&[a-z]+;/gi, '').trim() || `Page ${i + 1}`}
+                                    // Pagination labels come from Laravel and include HTML entities like &laquo;
+                                    // They are server-controlled, not user-supplied.
                                     dangerouslySetInnerHTML={{ __html: link.label }}
                                 />
                             ))}
-                        </div>
+                        </nav>
                     </div>
                 )}
             </div>

@@ -242,8 +242,7 @@ test('acceptance D: purchase USD sell AFN profit uses historical snapshots', fun
         ->and((float) $sale->total_profit_afn)->toBe(1000.0);
 
     $item = $sale->items()->first();
-    expect((float) $item->sale_unit_amount)->toBe(8000.0)
-        ->and((float) $item->sale_price_afn)->toBe(8000.0)
+    expect((float) $item->sale_price_afn)->toBe(8000.0)
         ->and((float) $item->cost_price_afn)->toBe(7000.0);
 });
 
@@ -336,6 +335,7 @@ test('acceptance F: updating exchange rates does not rewrite historical purchase
         'funding_source' => 'investor',
         'investor_id' => $investor->id,
         'profit_per_unit' => 50,
+        'profit_currency_id' => $afn->id,
         'usd_to_afn_rate' => '70',
         'aed_to_afn_rate' => '19',
         'purchase_date' => '2026-01-01',

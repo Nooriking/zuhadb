@@ -29,6 +29,11 @@ interface Payment {
     sale_id: number;
     customer_id: number | null;
     amount_afn: string;
+    amount_currency?: string | number | null;
+    currency_code?: string | null;
+    rate_to_ledger?: string | number | null;
+    rate_effective_at?: string | null;
+    rate_source?: string | null;
     remaining_due_afn: string;
     payment_method: string;
     payment_method_label?: string;
@@ -85,6 +90,16 @@ interface Sale {
     sale_currency_symbol?: string | null;
     sale_currency_known?: boolean;
     sale_currency_label?: string;
+    sale_amount_currency?: string | number | null;
+    usd_to_afn_rate?: string | number | null;
+    aed_to_afn_rate?: string | number | null;
+    usd_to_aed_rate?: string | number | null;
+    rate_effective_at?: string | null;
+    rate_source?: string | null;
+    fx_rate_kind?: string | null;
+    usd_equivalent_amount?: string | number | null;
+    aed_equivalent_amount?: string | number | null;
+    total_afn?: string | number | null;
     display_total?: number | null;
     display_subtotal?: number | null;
     display_discount?: number | null;
@@ -275,6 +290,66 @@ export default function SalesShow({ sale }: Props) {
                                 </div>
                             </div>
                         </div>
+
+                        {/* Transaction FX snapshot (immutable historical rates — not live board) */}
+                        {(sale.usd_equivalent_amount != null ||
+                            sale.aed_equivalent_amount != null ||
+                            sale.usd_to_afn_rate != null) && (
+                            <div className="bg-muted/40 mt-4 rounded-md border p-3 text-xs">
+                                <p className="mb-2 font-semibold tracking-wide uppercase">
+                                    Transaction FX snapshot
+                                </p>
+                                <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                                    <div>
+                                        <p className="text-muted-foreground">Original total</p>
+                                        <p className="font-mono font-medium">
+                                            {money(sale.sale_amount_currency ?? newSale)}
+                                        </p>
+                                    </div>
+                                    <div>
+                                        <p className="text-muted-foreground">AFN ledger</p>
+                                        <p className="font-mono font-medium">
+                                            {formatPrice(sale.total_afn ?? 0)} AFN
+                                        </p>
+                                    </div>
+                                    <div>
+                                        <p className="text-muted-foreground">USD equivalent</p>
+                                        <p className="font-mono font-medium">
+                                            {sale.usd_equivalent_amount != null
+                                                ? `${formatPrice(sale.usd_equivalent_amount, 4)} USD`
+                                                : '—'}
+                                        </p>
+                                    </div>
+                                    <div>
+                                        <p className="text-muted-foreground">AED equivalent</p>
+                                        <p className="font-mono font-medium">
+                                            {sale.aed_equivalent_amount != null
+                                                ? `${formatPrice(sale.aed_equivalent_amount, 4)} AED`
+                                                : '—'}
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-4 gap-y-1 font-mono">
+                                    {sale.usd_to_afn_rate != null && (
+                                        <span>USD→AFN {formatPrice(sale.usd_to_afn_rate, 4)}</span>
+                                    )}
+                                    {sale.aed_to_afn_rate != null && (
+                                        <span>AED→AFN {formatPrice(sale.aed_to_afn_rate, 4)}</span>
+                                    )}
+                                    {sale.usd_to_aed_rate != null && (
+                                        <span>USD→AED {formatPrice(sale.usd_to_aed_rate, 4)}</span>
+                                    )}
+                                    {sale.rate_effective_at && (
+                                        <span>Effective {formatDateTime(sale.rate_effective_at)}</span>
+                                    )}
+                                    {(sale.rate_source || sale.fx_rate_kind) && (
+                                        <span>
+                                            Source {sale.rate_source || sale.fx_rate_kind}
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </CardContent>
                 </Card>
 
@@ -513,6 +588,7 @@ export default function SalesShow({ sale }: Props) {
                                         <TableHead>Method</TableHead>
                                         <TableHead>Reference</TableHead>
                                         <TableHead className="text-right">Amount</TableHead>
+                                        <TableHead className="text-right">FX rate</TableHead>
                                         <TableHead className="text-right">Remaining Due</TableHead>
                                         <TableHead>Received By</TableHead>
                                     </TableRow>
@@ -520,7 +596,7 @@ export default function SalesShow({ sale }: Props) {
                                 <TableBody>
                                     {sale.payments.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={8} className="text-muted-foreground h-20 text-center">
+                                            <TableCell colSpan={9} className="text-muted-foreground h-20 text-center">
                                                 No payments recorded yet for this sale.
                                             </TableCell>
                                         </TableRow>
@@ -555,6 +631,22 @@ export default function SalesShow({ sale }: Props) {
                                                     </TableCell>
                                                     <TableCell className="text-foreground text-right font-mono text-sm font-semibold">
                                                         {money(p.display_amount ?? p.amount_afn, p.display_currency_code || currencyCode)}
+                                                    </TableCell>
+                                                    <TableCell className="text-right">
+                                                        {p.rate_to_ledger != null ? (
+                                                            <div className="flex flex-col items-end gap-0.5">
+                                                                <span className="font-mono text-xs">{Number(p.rate_to_ledger).toFixed(4)}</span>
+                                                                {(p.rate_source || p.rate_effective_at) && (
+                                                                    <span className="text-muted-foreground text-[10px]">
+                                                                        {[p.rate_source, p.rate_effective_at ? formatDateTime(p.rate_effective_at) : null]
+                                                                            .filter(Boolean)
+                                                                            .join(' · ')}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        ) : (
+                                                            <span className="text-muted-foreground">—</span>
+                                                        )}
                                                     </TableCell>
                                                     <TableCell className="text-right">
                                                         <span className="font-mono text-sm font-bold">{money(pRemaining)}</span>

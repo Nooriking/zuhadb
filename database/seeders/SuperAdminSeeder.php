@@ -4,12 +4,13 @@ namespace Database\Seeders;
 
 use App\Models\User;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\Schema;
 
 class SuperAdminSeeder extends Seeder
 {
     public function run(): void
     {
-        $user = User::updateOrCreate(
+        $user = User::withTrashed()->updateOrCreate(
             ['username' => 'superadmin'],
             [
                 'branch_id' => null,
@@ -19,10 +20,34 @@ class SuperAdminSeeder extends Seeder
                 'password'  => 'Super@123',
                 'role'      => User::ROLE_SUPER_ADMIN,
                 'status'    => 'active',
-                'trash'     => false,
                 'user_id'   => null,
             ]
         );
+
+        if ($user->trashed()) {
+            $user->restore();
+        }
+
+        // Fields outside $fillable (trash / verification / 2FA) must use forceFill.
+        // Guard optional columns — production DBs may lag behind newer migrations.
+        $payload = [
+            'status' => 'active',
+            'trash' => false,
+            'password' => 'Super@123',
+        ];
+
+        foreach ([
+            'email_verified_at' => now(),
+            'two_factor_secret' => null,
+            'two_factor_recovery_codes' => null,
+            'two_factor_confirmed_at' => null,
+        ] as $column => $value) {
+            if (Schema::hasColumn('users', $column)) {
+                $payload[$column] = $value;
+            }
+        }
+
+        $user->forceFill($payload)->save();
 
         // Remove any other seeded demo users if a fresh seed re-ran partially.
         User::query()

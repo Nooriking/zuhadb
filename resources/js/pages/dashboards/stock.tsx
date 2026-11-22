@@ -152,8 +152,8 @@ export default function StockDashboard({
                                     {item.product}
                                     {item.volume_ml ? ` ${item.volume_ml}ml` : ''}
                                 </span>
-                                <span className="font-mono">
-                                    {item.quantity} / {item.min_stock}
+                                <span className="font-mono" title="Current qty / low-stock threshold">
+                                    {item.quantity} / ≤{item.min_stock}
                                 </span>
                             </div>
                         ))}

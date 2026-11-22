@@ -18,7 +18,6 @@ interface Brand {
     name: string;
     country: string | null;
     description: string | null;
-    logo: string | null;
     status: 'active' | 'inactive';
 }
 
@@ -35,7 +34,6 @@ export default function BrandsEdit({ brand, errors: initialErrors }: Props) {
         description: brand.description || '',
         status: brand.status,
     });
-    const [logo, setLogo] = useState<File | null>(null);
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
     const [loading, setLoading] = useState(false);
 
@@ -51,13 +49,7 @@ export default function BrandsEdit({ brand, errors: initialErrors }: Props) {
         setLoading(true);
         setErrors({});
 
-        const formData = new FormData();
-        formData.append('_method', 'PUT');
-        Object.entries(form).forEach(([key, value]) => formData.append(key, value));
-        if (logo) formData.append('logo', logo);
-
-        router.post(`/brands/${brand.id}`, formData, {
-            forceFormData: true,
+        router.put(`/brands/${brand.id}`, form, {
             onSuccess: () => {
                 toast({ title: 'Success', description: `Brand "${form.name}" was updated successfully.` });
                 setLoading(false);
@@ -141,42 +133,20 @@ export default function BrandsEdit({ brand, errors: initialErrors }: Props) {
                                 {errors.description && <p className="text-destructive text-sm">{errors.description}</p>}
                             </div>
 
-                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                <div className="space-y-2">
-                                    <Label>Logo</Label>
-                                    {brand.logo && (
-                                        <div className="mb-2">
-                                            <img loading="lazy" decoding="async"
-                                                src={`/storage/${brand.logo}`}
-                                                alt={brand.name}
-                                                className="h-16 w-16 rounded-md border object-contain"
-                                            />
-                                        </div>
-                                    )}
-                                    <Input
-                                        type="file"
-                                        accept="image/*"
-                                        onChange={(e) => setLogo(e.target.files?.[0] || null)}
-                                        className={errors.logo ? 'border-destructive' : ''}
-                                    />
-                                    {errors.logo && <p className="text-destructive text-sm">{errors.logo}</p>}
-                                </div>
-
-                                <div className="space-y-2">
-                                    <Label>
-                                        Status <span className="text-destructive">*</span>
-                                    </Label>
-                                    <Select value={form.status} onValueChange={(v) => handleChange('status', v as 'active' | 'inactive')}>
-                                        <SelectTrigger className={errors.status ? 'border-destructive' : ''}>
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="active">Active</SelectItem>
-                                            <SelectItem value="inactive">Inactive</SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                    {errors.status && <p className="text-destructive text-sm">{errors.status}</p>}
-                                </div>
+                            <div className="max-w-md space-y-2">
+                                <Label>
+                                    Status <span className="text-destructive">*</span>
+                                </Label>
+                                <Select value={form.status} onValueChange={(v) => handleChange('status', v as 'active' | 'inactive')}>
+                                    <SelectTrigger className={errors.status ? 'border-destructive' : ''}>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="active">Active</SelectItem>
+                                        <SelectItem value="inactive">Inactive</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                {errors.status && <p className="text-destructive text-sm">{errors.status}</p>}
                             </div>
 
                             <div className="flex gap-2 border-t pt-4">

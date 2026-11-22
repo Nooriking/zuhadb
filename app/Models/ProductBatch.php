@@ -7,7 +7,6 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Database\Eloquent\Builder;
 
 class ProductBatch extends Model
 {
@@ -15,64 +14,50 @@ class ProductBatch extends Model
 
     protected $table = 'product_batches';
 
-    /* =========================================================
-     |  Fillable
-     ========================================================= */
-
     protected $fillable = [
         'branch_id',
         'variant_id',
-        'purchase_item_id',        // ⭐ FK → products.id
-        'investor_id',
+        'investment_id',
         'batch_code',
+        'invoice_number',
+        'purchase_date',
+        'payment_status',
+        'bill_image',
+        'notes',
+        'purchase_currency_id',
+        'purchase_amount_currency',
         'quantity',
         'remaining_quantity',
         'unit_cost_currency',
         'exchange_rate',
         'unit_cost_afn',
         'total_cost_afn',
-        'profit_per_unit_currency',
         'profit_per_unit_afn',
-        'profit_currency_id',
-        'profit_currency_code',
-        'profit_per_unit_usd',
-        'profit_per_unit_aed',
-
-        // ✅ جدید
         'sale_price_afn',
         'store_profit_per_unit_afn',
-
         'received_date',
         'status',
         'user_id',
         'trash',
     ];
 
-    /* =========================================================
-     |  Casts
-     ========================================================= */
-
     protected $casts = [
-        'quantity'                    => 'integer',
-        'remaining_quantity'          => 'integer',
-        'unit_cost_currency'          => 'decimal:4',
-        'exchange_rate'               => 'decimal:8',
-        'unit_cost_afn'               => 'decimal:2',
-        'total_cost_afn'              => 'decimal:2',
-        'profit_per_unit_currency'    => 'decimal:4',
-        'profit_per_unit_afn'         => 'decimal:2',
-        'profit_per_unit_usd'         => 'decimal:4',
-        'profit_per_unit_aed'         => 'decimal:4',
-
-        // ✅ جدید
-        'sale_price_afn'              => 'decimal:2',
-        'store_profit_per_unit_afn'   => 'decimal:2',
-
-        'received_date'               => 'date',
-        'trash'                       => 'boolean',
-        'created_at'                  => 'datetime',
-        'updated_at'                  => 'datetime',
-        'deleted_at'                  => 'datetime',
+        'quantity' => 'integer',
+        'remaining_quantity' => 'integer',
+        'purchase_amount_currency' => 'decimal:2',
+        'unit_cost_currency' => 'decimal:4',
+        'exchange_rate' => 'decimal:8',
+        'unit_cost_afn' => 'decimal:2',
+        'total_cost_afn' => 'decimal:2',
+        'profit_per_unit_afn' => 'decimal:2',
+        'sale_price_afn' => 'decimal:2',
+        'store_profit_per_unit_afn' => 'decimal:2',
+        'purchase_date' => 'date',
+        'received_date' => 'date',
+        'trash' => 'boolean',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+        'deleted_at' => 'datetime',
     ];
 
     /* =========================================================
@@ -89,26 +74,14 @@ class ProductBatch extends Model
         return $this->belongsTo(ProductVariant::class, 'variant_id');
     }
 
-    /**
-     * ⭐ purchase_item_id به جدول products اشاره می‌کند
-     * (چون purchase rows در products ذخیره می‌شوند)
-     */
-    public function purchaseItem(): BelongsTo
+    public function investment(): BelongsTo
     {
-        return $this->belongsTo(Product::class, 'purchase_item_id');
+        return $this->belongsTo(Investment::class, 'investment_id');
     }
 
-    /**
-     * ⭐ alias برای وضوح بیشتر
-     */
-    public function purchaseProduct(): BelongsTo
+    public function purchaseCurrency(): BelongsTo
     {
-        return $this->belongsTo(Product::class, 'purchase_item_id');
-    }
-
-    public function investor(): BelongsTo
-    {
-        return $this->belongsTo(Investor::class, 'investor_id');
+        return $this->belongsTo(Currency::class, 'purchase_currency_id');
     }
 
     public function creator(): BelongsTo
@@ -124,6 +97,18 @@ class ProductBatch extends Model
     public function saleItems(): HasMany
     {
         return $this->hasMany(SaleItem::class, 'batch_id');
+    }
+
+    /** Investor via the linked investment (users.role = investor). */
+    public function getInvestorIdAttribute(): ?int
+    {
+        if (array_key_exists('investor_id', $this->attributes) && $this->attributes['investor_id'] !== null) {
+            return (int) $this->attributes['investor_id'];
+        }
+
+        $this->loadMissing('investment:id,investor_id');
+
+        return $this->investment?->investor_id ? (int) $this->investment->investor_id : null;
     }
 
     /* =========================================================
@@ -154,13 +139,12 @@ class ProductBatch extends Model
 
     public function scopeInvestorFunded($query)
     {
-        return $query->whereNotNull('investor_id');
+        return $query->whereNotNull('investment_id');
     }
 
-    /** ✅ فقط batch های مال دوکان (بدون investor) */
     public function scopeStoreOwned($query)
     {
-        return $query->whereNull('investor_id');
+        return $query->whereNull('investment_id');
     }
 
     public function scopeAvailableForSale($query, int $branchId, int $variantId)
@@ -180,17 +164,46 @@ class ProductBatch extends Model
 
     public static function generateBatchCode(): string
     {
-        $prefix = 'B-' . date('Ymd');
+        $prefix = 'B-'.date('Ymd');
         $last = self::where('batch_code', 'like', "{$prefix}-%")
             ->orderByDesc('id')
             ->value('batch_code');
 
         if ($last) {
             $lastNum = (int) substr($last, -4);
-            return $prefix . '-' . str_pad($lastNum + 1, 4, '0', STR_PAD_LEFT);
+
+            return $prefix.'-'.str_pad($lastNum + 1, 4, '0', STR_PAD_LEFT);
         }
 
-        return $prefix . '-0001';
+        return $prefix.'-0001';
+    }
+
+    /**
+     * Create a batch using the exchange_rates board for the purchase currency → AFN rate.
+     */
+    public static function createWithSnapshot(array $data): self
+    {
+        $service = app(\App\Services\ExchangeService::class);
+        $from = strtoupper((string) ($data['currency_code'] ?? 'AFN'));
+        unset($data['currency_code']);
+
+        $pair = $service->snapshot($from, 'AFN');
+
+        if ($from !== 'AFN' && empty($data['exchange_rate'])) {
+            $data['exchange_rate'] = $pair['rate'];
+        } elseif ($from === 'AFN' && empty($data['exchange_rate'])) {
+            $data['exchange_rate'] = '1.00000000';
+        }
+
+        if ($from !== 'AFN' && isset($data['unit_cost_currency'])) {
+            $data['unit_cost_afn'] = $service->convert(
+                (string) $data['unit_cost_currency'],
+                $from,
+                'AFN'
+            );
+        }
+
+        return static::create($data);
     }
 
     public function isDepleted(): bool
@@ -200,12 +213,8 @@ class ProductBatch extends Model
 
     public function isInvestorFunded(): bool
     {
-        return ! is_null($this->investor_id);
+        return ! is_null($this->investment_id);
     }
-
-    /* =========================================================
-     |  Accessors
-     ========================================================= */
 
     public function getSoldQuantityAttribute(): int
     {
@@ -222,93 +231,60 @@ class ProductBatch extends Model
         return (float) $this->profit_per_unit_afn * $this->sold_quantity;
     }
 
-    // ✅ جدید
     public function getIsStoreOwnedAttribute(): bool
     {
-        return $this->investor_id === null;
+        return $this->investment_id === null;
     }
 
-    // ✅ جدید
     public function getTotalStoreProfitAfnAttribute(): float
     {
         return (float) $this->store_profit_per_unit_afn * $this->quantity;
     }
 
-    // ✅ جدید
     public function getRealizedStoreProfitAfnAttribute(): float
     {
         return (float) $this->store_profit_per_unit_afn * $this->sold_quantity;
     }
 
-    // ✅ جدید
     public function getRemainingCostAfnAttribute(): float
     {
-        return (float) $this->remaining_quantity * (float) $this->unit_cost_afn;
+        return (float) bcmul((string) $this->remaining_quantity, (string) $this->unit_cost_afn, 2);
     }
 
-    // ✅ جدید
     public function getExpectedStoreProfitAfnAttribute(): float
     {
-        return (float) $this->remaining_quantity * (float) $this->store_profit_per_unit_afn;
+        return (float) bcmul((string) $this->remaining_quantity, (string) ($this->store_profit_per_unit_afn ?? 0), 2);
     }
 
     /* =========================================================
      |  Stock Operations
      ========================================================= */
 
-    /**
-     * کم کردن موجودی Batch هنگام فروش
-     */
     public function reduceStock(int $qty): void
     {
         $newRemaining = max(0, $this->remaining_quantity - $qty);
 
         $this->update([
             'remaining_quantity' => $newRemaining,
-            'status'             => $newRemaining === 0 ? 'depleted' : 'active',
+            'status' => $newRemaining === 0 ? 'depleted' : 'active',
         ]);
-
-        $this->syncPurchaseRowRemaining();
     }
 
-    /**
-     * بازگرداندن موجودی هنگام مرجوعی
-     */
     public function restoreStock(int $qty): void
     {
         $newRemaining = min($this->quantity, $this->remaining_quantity + $qty);
 
         $this->update([
             'remaining_quantity' => $newRemaining,
-            'status'             => $newRemaining > 0 ? 'active' : $this->status,
+            'status' => $newRemaining > 0 ? 'active' : $this->status,
         ]);
-
-        $this->syncPurchaseRowRemaining();
-    }
-
-    /**
-     * Keep dual-purpose purchase-row remaining_quantity aligned with this batch.
-     */
-    public function syncPurchaseRowRemaining(): void
-    {
-        if (! $this->purchase_item_id) {
-            return;
-        }
-
-        Product::query()
-            ->whereKey($this->purchase_item_id)
-            ->update([
-                'remaining_quantity' => max(0, (int) $this->remaining_quantity),
-            ]);
     }
 
     /* =========================================================
-     |  ⭐ FIFO COST CALCULATION
+     |  FIFO COST CALCULATION
      ========================================================= */
 
     /**
-     * محاسبه هزینه FIFO برای یک variant در یک شعبه
-     *
      * @return array{
      *     cost_afn: float,
      *     cost_per_unit_afn: float,
@@ -319,12 +295,11 @@ class ProductBatch extends Model
      *         cost_per_unit_afn: float,
      *         line_cost_afn: float,
      *         investor_id: int|null,
+     *         investment_id: int|null,
      *         profit_per_unit_afn: float,
      *         store_profit_per_unit_afn: float
      *     }>
      * }
-     *
-     * @throws \Exception اگر موجودی کافی نباشد
      */
     public static function calculateFifoCost(int $branchId, int $variantId, int $qty): array
     {
@@ -333,10 +308,11 @@ class ProductBatch extends Model
         }
 
         $remaining = $qty;
-        $totalCost = 0;
+        $totalCost = '0';
         $breakdown = [];
 
         $batches = self::query()
+            ->with('investment:id,investor_id')
             ->where('branch_id', $branchId)
             ->where('variant_id', $variantId)
             ->where('status', 'active')
@@ -348,25 +324,26 @@ class ProductBatch extends Model
             ->get();
 
         foreach ($batches as $batch) {
-            if ($remaining <= 0) break;
+            if ($remaining <= 0) {
+                break;
+            }
 
-            $take = min($remaining, $batch->remaining_quantity);
-
-            $costPerUnit = (float) $batch->unit_cost_afn;
-            $lineCost    = $take * $costPerUnit;
-
-            $totalCost += $lineCost;
+            $take = min($remaining, (int) $batch->remaining_quantity);
+            $costPerUnit = (string) $batch->unit_cost_afn;
+            $lineCost = bcmul((string) $take, $costPerUnit, 2);
+            $totalCost = bcadd($totalCost, $lineCost, 2);
 
             $breakdown[] = [
-                'batch_id'                  => $batch->id,
-                'batch_code'                => $batch->batch_code,
-                'qty'                       => $take,
-                'cost_per_unit_afn'         => $costPerUnit,
-                'line_cost_afn'             => $lineCost,
-                'investor_id'               => $batch->investor_id,
-                'profit_per_unit_afn'       => (float) $batch->profit_per_unit_afn,
-                'store_profit_per_unit_afn' => (float) $batch->store_profit_per_unit_afn,  // ✅ جدید
-                'sale_price_afn'            => (float) $batch->sale_price_afn,              // ✅ جدید
+                'batch_id' => $batch->id,
+                'batch_code' => $batch->batch_code,
+                'qty' => $take,
+                'cost_per_unit_afn' => (float) $costPerUnit,
+                'line_cost_afn' => (float) $lineCost,
+                'investor_id' => $batch->investor_id,
+                'investment_id' => $batch->investment_id,
+                'profit_per_unit_afn' => (float) $batch->profit_per_unit_afn,
+                'store_profit_per_unit_afn' => (float) $batch->store_profit_per_unit_afn,
+                'sale_price_afn' => (float) $batch->sale_price_afn,
             ];
 
             $remaining -= $take;
@@ -378,16 +355,15 @@ class ProductBatch extends Model
             );
         }
 
+        $costPerUnitAfn = bcdiv($totalCost, (string) $qty, 8);
+
         return [
-            'cost_afn'          => $totalCost,
-            'cost_per_unit_afn' => $totalCost / $qty,
-            'breakdown'         => $breakdown,
+            'cost_afn' => (float) $totalCost,
+            'cost_per_unit_afn' => (float) $costPerUnitAfn,
+            'breakdown' => $breakdown,
         ];
     }
 
-    /**
-     * بررسی اینکه آیا موجودی کافی برای یک variant وجود دارد یا نه
-     */
     public static function hasEnoughStock(int $branchId, int $variantId, int $qty): bool
     {
         $available = self::query()
@@ -401,9 +377,6 @@ class ProductBatch extends Model
         return $available >= $qty;
     }
 
-    /**
-     * مجموع موجودی قابل فروش یک variant در یک شعبه
-     */
     public static function getAvailableQuantity(int $branchId, int $variantId): int
     {
         return (int) self::query()
@@ -413,5 +386,14 @@ class ProductBatch extends Model
             ->where('remaining_quantity', '>', 0)
             ->where('trash', false)
             ->sum('remaining_quantity');
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(function (ProductBatch $batch) {
+            if ($batch->quantity && $batch->unit_cost_afn !== null && $batch->unit_cost_afn !== '') {
+                $batch->total_cost_afn = bcmul((string) $batch->quantity, (string) $batch->unit_cost_afn, 2);
+            }
+        });
     }
 }

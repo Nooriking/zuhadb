@@ -44,7 +44,7 @@ class Supplier extends Model
 
     public function purchases(): HasMany
     {
-        return $this->hasMany(Product::class, 'supplier_id')->whereNotNull('variant_id');
+        return $this->hasMany(SupplierInvoice::class, 'supplier_id');
     }
 
     public function payments(): HasMany

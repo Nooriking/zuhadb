@@ -11,7 +11,6 @@ interface Brand {
     id: number;
     name: string;
     country: string | null;
-    logo: string | null;
     status: 'active' | 'inactive';
 }
 
@@ -79,19 +78,9 @@ export default function BrandsTrash({ brands }: Props) {
                                         <TableCell>{brands.from ? brands.from + index : index + 1}</TableCell>
                                         <TableCell>
                                             <div className="flex items-center gap-3">
-                                                {brand.logo ? (
-                                                    <img
-                                                        loading="lazy"
-                                                        decoding="async"
-                                                        src={`/storage/${brand.logo}`}
-                                                        alt={brand.name}
-                                                        className="h-8 w-8 rounded-md border object-contain"
-                                                    />
-                                                ) : (
-                                                    <div className="bg-muted flex h-8 w-8 items-center justify-center rounded-md border">
-                                                        <Tag className="text-muted-foreground h-4 w-4" />
-                                                    </div>
-                                                )}
+                                                <div className="bg-muted flex h-8 w-8 items-center justify-center rounded-md border">
+                                                    <Tag className="text-muted-foreground h-4 w-4" />
+                                                </div>
                                                 <span className="font-medium">{brand.name}</span>
                                             </div>
                                         </TableCell>

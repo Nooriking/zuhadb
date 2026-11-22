@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { ExpenseBearerToggle, type ExpenseBearer } from '@/components/expense-bearer-toggle';
+import { TransactionExchangeRateSection } from '@/components/transaction-exchange-rate-section';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
 import { formatOriginalAmount } from '@/lib/original-currency';
@@ -584,6 +585,13 @@ export default function SaleReturnsCreate({
                                 </div>
                             </CardContent>
                         </Card>
+
+                        <TransactionExchangeRateSection
+                            context={{
+                                policy:
+                                    'Display only. Return FX is snapshotted from ExchangeService at save time — original sale COGS is reversed separately.',
+                            }}
+                        />
 
                         <Card className="border-2 border-emerald-300">
                             <CardHeader>

@@ -53,7 +53,7 @@ export default function LowStock({ items }: Props) {
                         </div>
                         <div className="text-right">
                             <div className="font-mono text-sm font-bold text-yellow-700 dark:text-yellow-400">{item.quantity}</div>
-                            <div className="text-muted-foreground text-xs">min: {item.min_stock}</div>
+                            <div className="text-muted-foreground text-xs">threshold: ≤{item.min_stock}</div>
                         </div>
                     </Link>
                 ))}

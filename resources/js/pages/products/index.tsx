@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
+import { formatCatalogAmount, LOW_STOCK_THRESHOLD } from '@/lib/inventory';
 import { softDeleteItem } from '@/lib/trash-actions';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router, usePage } from '@inertiajs/react';
@@ -32,9 +33,15 @@ interface ProductVariant {
     volume_ml: number | null;
     concentration: string | null;
     stock_quantity: number | null;
+    catalog_currency_id?: number | null;
+    sale_amount?: string | null;
     sale_price_afn: string;
+    sale_amount_usd?: string | null;
+    sale_amount_aed?: string | null;
     wholesale_price_afn: string;
     wholesale_min_qty: number;
+    catalog_currency?: { id: number; code: string; symbol?: string | null } | null;
+    sale_currency?: { id: number; code: string; symbol?: string | null } | null;
     barcodes: Barcode[];
 }
 
@@ -106,8 +113,6 @@ const concentrationLabels: Record<string, string> = {
     other: 'Other',
 };
 
-const LOW_STOCK_THRESHOLD = 5;
-
 /* ═══════════════════════════════════════════════════════
  |  Component
  ═══════════════════════════════════════════════════════ */
@@ -169,10 +174,8 @@ export default function ProductsIndex({ products, brands, filters, monthlyRates 
 
     /* ═══════════ Helpers ═══════════ */
 
-    const formatPrice = (value: string | number | null | undefined) => {
-        const num = typeof value === 'string' ? parseFloat(value) : Number(value ?? 0);
-        return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(num || 0);
-    };
+    const formatPrice = (value: string | number | null | undefined, currencyCode?: string | null) =>
+        formatCatalogAmount(value, currencyCode);
 
     const formatDate = (dateStr: string) => {
         if (!dateStr) return '—';
@@ -396,7 +399,16 @@ export default function ProductsIndex({ products, brands, filters, monthlyRates 
                                                                 <div>
                                                                     <span className="font-medium">{getVariantDisplayName(v)}</span>
                                                                     <span className="text-muted-foreground ml-1">
-                                                                        ({formatPrice(v.sale_price_afn)} AFN)
+                                                                        ({formatPrice(
+                                                                            v.sale_amount ?? v.sale_price_afn,
+                                                                            v.sale_currency?.code || v.catalog_currency?.code || 'AFN',
+                                                                        )}{' '}
+                                                                        {v.sale_currency?.code || v.catalog_currency?.code || 'AFN'}
+                                                                        {(v.sale_currency?.code || v.catalog_currency?.code) &&
+                                                                        (v.sale_currency?.code || v.catalog_currency?.code) !== 'AFN'
+                                                                            ? ` · ${formatPrice(v.sale_price_afn, 'AFN')} AFN`
+                                                                            : ''}
+                                                                        )
                                                                     </span>
                                                                 </div>
                                                                 {primary && (
@@ -442,7 +454,7 @@ export default function ProductsIndex({ products, brands, filters, monthlyRates 
                                             {/* Avg Sale Price */}
                                             <TableCell className="text-right font-mono text-sm">
                                                 {avgPrice > 0 ? (
-                                                    <span className="font-semibold">{formatPrice(avgPrice)}</span>
+                                                    <span className="font-semibold">{formatPrice(avgPrice, 'AFN')}</span>
                                                 ) : (
                                                     <span className="text-muted-foreground">—</span>
                                                 )}

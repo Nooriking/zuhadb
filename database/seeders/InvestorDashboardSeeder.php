@@ -77,7 +77,6 @@ class InvestorDashboardSeeder extends Seeder
                 'sale_price_afn' => $unitAfn + 1200,
                 'profit_per_unit' => $profitAfn,
                 'stock_quantity' => $qty - $soldQty,
-                'minimum_stock' => 2,
             ]);
 
             ProductBarcode::create([

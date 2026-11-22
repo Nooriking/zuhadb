@@ -62,12 +62,6 @@ class Customer extends Model
         return $this->hasMany(SalePayment::class, 'customer_id');
     }
 
-    public function transactions(): HasMany
-    {
-        return $this->hasMany(CustomerTransaction::class, 'customer_id')
-            ->orderByDesc('id');
-    }
-
     public function receipts(): HasMany
     {
         return $this->hasMany(Receipt::class, 'customer_id');
@@ -131,5 +125,15 @@ class Customer extends Model
     public function updateCurrentDue(float $newBalance): void
     {
         $this->update(['current_due_afn' => $newBalance]);
+    }
+
+    /** Cash-only POS — customer_balances removed. */
+    public function adjustBalance(
+        string $currencyCode,
+        float $deltaCurrency,
+        float $deltaAfn,
+        ?float $rate = null,
+    ): null {
+        return null;
     }
 }

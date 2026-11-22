@@ -1,15 +1,16 @@
-// resources/js/pages/exchange-rates/index.tsx
-
 import { FilterField, IndexFilters } from '@/components/index-filters';
+import { EditAction, RowAction, RowActions, ViewAction } from '@/components/row-actions';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
+import { formatRate } from '@/lib/money';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
-import { AlertTriangle, Edit, Eye, Plus, RefreshCw, Trash2, X } from 'lucide-react';
+import { AlertTriangle, FileClock, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { useState } from 'react';
 
 interface Currency {
@@ -25,10 +26,12 @@ interface ExchangeRate {
     to_currency_id: number;
     rate: string;
     effective_at: string;
+    source: string | null;
     from_currency: Currency | null;
     to_currency: Currency | null;
     creator: { id: number; name: string } | null;
     created_at: string;
+    updated_at: string;
 }
 
 interface Props {
@@ -43,9 +46,13 @@ interface Props {
         links: { url: string | null; label: string; active: boolean }[];
     };
     currencies: Currency[];
+    currentRates: ExchangeRate[];
     filters: {
         from_currency_id: string | null;
         to_currency_id: string | null;
+        search: string | null;
+        sort: string;
+        direction: string;
     };
 }
 
@@ -54,21 +61,44 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Exchange Rates', href: '/exchange-rates' },
 ];
 
-export default function ExchangeRatesIndex({ exchangeRates, currencies, filters }: Props) {
+const formatDateTime = (date: string | null | undefined) => {
+    if (!date) return '—';
+    return new Date(date).toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    });
+};
+
+export default function ExchangeRatesIndex({ exchangeRates, currencies, currentRates, filters }: Props) {
     const { toast } = useToast();
     const [fromFilter, setFromFilter] = useState(filters.from_currency_id || 'all');
     const [toFilter, setToFilter] = useState(filters.to_currency_id || 'all');
+    const [search, setSearch] = useState(filters.search || '');
     const [rateToDelete, setRateToDelete] = useState<ExchangeRate | null>(null);
 
-    const handleSearch = () => {
+    const applyFilters = (overrides: Record<string, string | undefined> = {}) => {
         router.get(
             '/exchange-rates',
             {
                 from_currency_id: fromFilter === 'all' ? undefined : fromFilter,
                 to_currency_id: toFilter === 'all' ? undefined : toFilter,
+                search: search.trim() || undefined,
+                sort: filters.sort,
+                direction: filters.direction,
+                ...overrides,
             },
             { preserveState: true, preserveScroll: true },
         );
+    };
+
+    const clearFilters = () => {
+        setFromFilter('all');
+        setToFilter('all');
+        setSearch('');
+        router.get('/exchange-rates', {}, { preserveState: true, preserveScroll: true });
     };
 
     const confirmDelete = () => {
@@ -91,27 +121,25 @@ export default function ExchangeRatesIndex({ exchangeRates, currencies, filters 
         if (url) router.get(url, {}, { preserveState: true, preserveScroll: true });
     };
 
-    const formatDate = (date: string) => {
-        return new Date(date).toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-        });
-    };
+    const hasFilters = Boolean(filters.from_currency_id || filters.to_currency_id || filters.search);
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="Exchange Rates" />
 
             <div className="flex flex-col gap-6 p-6">
-                {/* Header */}
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-3">
                         <RefreshCw className="text-primary h-6 w-6" />
                         <h1 className="text-2xl font-bold tracking-tight">Exchange Rates</h1>
                         <Badge variant="outline">{exchangeRates.total} Rates</Badge>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
+                        <Link href="/exchange-rates/history">
+                            <Button variant="outline" className="gap-2">
+                                <FileClock className="h-4 w-4" /> History
+                            </Button>
+                        </Link>
                         <Link href="/exchange-rates/trash">
                             <Button variant="outline" className="gap-2">
                                 <Trash2 className="h-4 w-4" /> Trash
@@ -125,13 +153,59 @@ export default function ExchangeRatesIndex({ exchangeRates, currencies, filters 
                     </div>
                 </div>
 
-                <IndexFilters>
+                <Card>
+                    <CardHeader className="pb-3">
+                        <CardTitle className="text-base">Current active rates</CardTitle>
+                        <CardDescription>Latest effective rate for each currency pair.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        {currentRates.length === 0 ? (
+                            <p className="text-muted-foreground text-sm">No active exchange rates yet.</p>
+                        ) : (
+                            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                                {currentRates.map((rate) => (
+                                    <div key={rate.id} className="rounded-md border p-3">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div className="flex items-center gap-2 font-mono text-sm font-semibold">
+                                                <span>{rate.from_currency?.code || '—'}</span>
+                                                <span className="text-muted-foreground">→</span>
+                                                <span>{rate.to_currency?.code || '—'}</span>
+                                            </div>
+                                            <Badge variant="outline" className="capitalize">
+                                                {rate.source || 'manual'}
+                                            </Badge>
+                                        </div>
+                                        <p className="mt-2 font-mono text-xl font-bold">{formatRate(rate.rate)}</p>
+                                        <p className="text-muted-foreground mt-1 text-xs">
+                                            Effective {formatDateTime(rate.effective_at)}
+                                        </p>
+                                        <p className="text-muted-foreground text-xs">Updated {formatDateTime(rate.updated_at)}</p>
+                                        <div className="mt-2">
+                                            <Link href={`/exchange-rates/${rate.id}`} className="text-primary text-xs underline-offset-2 hover:underline">
+                                                View details
+                                            </Link>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+
+                <IndexFilters
+                    search={search}
+                    onSearchChange={setSearch}
+                    onSearch={() => applyFilters()}
+                    onClear={clearFilters}
+                    showClear={hasFilters}
+                    placeholder="Search by currency code, name, or source"
+                >
                     <FilterField label="From currency">
                         <Select
                             value={fromFilter}
                             onValueChange={(v) => {
                                 setFromFilter(v);
-                                setTimeout(handleSearch, 0);
+                                applyFilters({ from_currency_id: v === 'all' ? undefined : v });
                             }}
                         >
                             <SelectTrigger className="w-full">
@@ -152,7 +226,7 @@ export default function ExchangeRatesIndex({ exchangeRates, currencies, filters 
                             value={toFilter}
                             onValueChange={(v) => {
                                 setToFilter(v);
-                                setTimeout(handleSearch, 0);
+                                applyFilters({ to_currency_id: v === 'all' ? undefined : v });
                             }}
                         >
                             <SelectTrigger className="w-full">
@@ -170,7 +244,6 @@ export default function ExchangeRatesIndex({ exchangeRates, currencies, filters 
                     </FilterField>
                 </IndexFilters>
 
-                {/* Table */}
                 <div className="rounded-md border">
                     <Table>
                         <TableHeader>
@@ -179,15 +252,17 @@ export default function ExchangeRatesIndex({ exchangeRates, currencies, filters 
                                 <TableHead>From</TableHead>
                                 <TableHead className="text-center">Rate</TableHead>
                                 <TableHead>To</TableHead>
-                                <TableHead>Effective Date</TableHead>
+                                <TableHead>Effective</TableHead>
+                                <TableHead>Source</TableHead>
                                 <TableHead>Created By</TableHead>
+                                <TableHead>Updated</TableHead>
                                 <TableHead className="text-center">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {exchangeRates.data.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={7} className="text-muted-foreground h-24 text-center">
+                                    <TableCell colSpan={9} className="text-muted-foreground h-24 text-center">
                                         No exchange rates found.
                                     </TableCell>
                                 </TableRow>
@@ -206,7 +281,7 @@ export default function ExchangeRatesIndex({ exchangeRates, currencies, filters 
                                         <TableCell className="text-center">
                                             <div className="flex items-center justify-center gap-2">
                                                 <span className="text-muted-foreground text-xs">1 =</span>
-                                                <span className="font-mono text-base font-bold">{rate.rate}</span>
+                                                <span className="font-mono text-base font-bold">{formatRate(rate.rate)}</span>
                                             </div>
                                         </TableCell>
                                         <TableCell>
@@ -217,30 +292,22 @@ export default function ExchangeRatesIndex({ exchangeRates, currencies, filters 
                                                 <span className="text-sm">{rate.to_currency?.name}</span>
                                             </div>
                                         </TableCell>
-                                        <TableCell className="text-sm">{formatDate(rate.effective_at)}</TableCell>
-                                        <TableCell className="text-sm">{rate.creator?.name || 'System'}</TableCell>
+                                        <TableCell className="text-sm">{formatDateTime(rate.effective_at)}</TableCell>
                                         <TableCell>
-                                            <div className="flex items-center justify-center gap-1">
-                                                <Link href={`/exchange-rates/${rate.id}`}>
-                                                    <Button variant="ghost" size="icon" title="View">
-                                                        <Eye className="h-4 w-4" />
-                                                    </Button>
-                                                </Link>
-                                                <Link href={`/exchange-rates/${rate.id}/edit`}>
-                                                    <Button variant="ghost" size="icon" title="Edit">
-                                                        <Edit className="h-4 w-4" />
-                                                    </Button>
-                                                </Link>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    title="Delete"
-                                                    className="text-destructive hover:text-destructive"
-                                                    onClick={() => setRateToDelete(rate)}
-                                                >
+                                            <Badge variant="secondary" className="capitalize">
+                                                {rate.source || 'manual'}
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell className="text-sm">{rate.creator?.name || 'System'}</TableCell>
+                                        <TableCell className="text-muted-foreground text-sm">{formatDateTime(rate.updated_at)}</TableCell>
+                                        <TableCell>
+                                            <RowActions>
+                                                <ViewAction href={`/exchange-rates/${rate.id}`} />
+                                                <EditAction href={`/exchange-rates/${rate.id}/edit`} />
+                                                <RowAction title="Delete" destructive onClick={() => setRateToDelete(rate)}>
                                                     <Trash2 className="h-4 w-4" />
-                                                </Button>
-                                            </div>
+                                                </RowAction>
+                                            </RowActions>
                                         </TableCell>
                                     </TableRow>
                                 ))
@@ -249,13 +316,12 @@ export default function ExchangeRatesIndex({ exchangeRates, currencies, filters 
                     </Table>
                 </div>
 
-                {/* Pagination */}
                 {exchangeRates.last_page > 1 && (
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div className="text-muted-foreground text-sm">
                             Showing {exchangeRates.from || 0} to {exchangeRates.to || 0} of {exchangeRates.total} results
                         </div>
-                        <div className="flex gap-1">
+                        <div className="flex flex-wrap gap-1">
                             {exchangeRates.links.map((link, i) => (
                                 <Button
                                     key={i}
@@ -272,7 +338,6 @@ export default function ExchangeRatesIndex({ exchangeRates, currencies, filters 
                 )}
             </div>
 
-            {/* Delete Modal */}
             {rateToDelete && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setRateToDelete(null)}>
                     <div className="bg-background w-full max-w-md rounded-lg border shadow-lg" onClick={(e) => e.stopPropagation()}>
@@ -294,6 +359,7 @@ export default function ExchangeRatesIndex({ exchangeRates, currencies, filters 
                                 type="button"
                                 onClick={() => setRateToDelete(null)}
                                 className="text-muted-foreground hover:text-foreground transition-colors"
+                                aria-label="Close"
                             >
                                 <X className="h-5 w-5" />
                             </button>

@@ -8,18 +8,22 @@ use App\Models\Branch;
 use App\Models\Brand;
 use App\Models\Expense;
 use App\Models\Inventory;
+use App\Models\Investment;
+use App\Models\InvestorTransaction;
 use App\Models\Product;
 use App\Models\ProductBatch;
 use App\Models\ExchangeRateHistory;
 use App\Models\ProductBarcode;
+use App\Models\ProductPrice;
 use App\Models\ProductPriceHistory;
 use App\Models\ActivityNotification;
 use App\Models\ProductVariant;
 use App\Models\User;
 use App\Models\Currency;
+use App\Services\CatalogPriceConverter;
 use App\Services\CurrencyService;
+use App\Services\ExchangeService;
 use App\Services\InvestorMultiCurrencyDashboardService;
-use App\Services\ProductExchangeRateService;
 use App\Services\PurchaseService;
 use App\Support\Money;
 use App\Support\OriginalCurrencyMoney;
@@ -39,9 +43,10 @@ class ProductController extends Controller
     public function __construct(
         private readonly PurchaseService $purchases,
         private readonly CurrencyService $currencies,
-        private readonly ProductExchangeRateService $productRates,
+        private readonly ExchangeService $exchange,
         private readonly PurchaseValuation $purchaseValuation,
         private readonly InvestorMultiCurrencyDashboardService $inventoryFx,
+        private readonly CatalogPriceConverter $catalogPrices,
     ) {}
 
     /**
@@ -62,7 +67,7 @@ class ProductController extends Controller
 
         if (! $fallback) {
             throw ValidationException::withMessages([
-                'branch_id' => 'هیچ شعبه‌ای در سیستم وجود ندارد. لطفاً ابتدا یک شعبه ایجاد کنید.',
+                'branch_id' => 'No branch exists in the system. Please create a branch first.',
             ]);
         }
 
@@ -88,19 +93,20 @@ class ProductController extends Controller
         $gender  = $validated['gender']   ?? null;
 
         $products = Product::query()
-            ->whereNull('variant_id')
+            ->whereNull('purchase_date')
             ->with([
                 'brand:id,name',
                 'variants' => fn ($q) => $q
                     ->notTrashed()
                     ->select(
                         'id', 'product_id',
+                        'name', 'sku', 'image',
                         'volume_ml', 'concentration',
-                        'stock_quantity', 'sale_price_afn',
-                        'wholesale_price_afn', 'wholesale_min_qty'
+                        'stock_quantity'
                     )
                     ->with([
                         'barcodes:id,variant_id,barcode,barcode_type,is_primary,status,current_stock',
+                        'prices',
                     ]),
             ])
             ->withCount(['variants' => fn ($q) => $q->where('trash', false)])
@@ -131,37 +137,22 @@ class ProductController extends Controller
 
         $variantIds = $products->getCollection()->flatMap(fn ($product) => $product->variants->pluck('id'))->unique()->values();
 
-        $purchaseRows = Product::query()
+        $batchRows = ProductBatch::query()
             ->whereIn('variant_id', $variantIds)
             ->where('trash', false)
             ->where(function ($query) {
-                $query->whereNotNull('rate_to_ledger')->orWhereNotNull('exchange_rate');
+                $query->whereNotNull('exchange_rate')->orWhereNotNull('usd_to_afn_rate');
             })
-            ->get(['variant_id', 'rate_to_ledger', 'exchange_rate', 'purchase_line_amount', 'purchase_price_afn', 'purchase_currency_code']);
+            ->get(['variant_id', 'exchange_rate', 'unit_cost_currency', 'unit_cost_afn', 'quantity', 'total_cost_afn']);
 
-        // Weighted average FX is currency-specific. Never mix USD/AED/AFN rows or
-        // weight a foreign rate by an AFN ledger amount.
-        $weightedByVariant = $purchaseRows->groupBy('variant_id')->map(function ($rows) {
-            $byCode = $rows->groupBy(fn ($row) => strtoupper((string) ($row->purchase_currency_code ?: '')));
-
-            $preferred = null;
-            foreach (['USD', 'AED', 'AFN'] as $code) {
-                if ($byCode->has($code) && $byCode->get($code)->isNotEmpty()) {
-                    $preferred = $byCode->get($code);
-                    break;
-                }
-            }
-
-            if ($preferred === null) {
-                return null;
-            }
-
-            return $this->currencies->weightedAverageFxFromEquivalents($preferred->map(fn ($row) => [
-                'original_amount' => $row->purchase_line_amount,
-                'afn_amount' => $row->purchase_price_afn,
-            ])) ?? $this->currencies->weightedAverageRate($preferred->map(fn ($row) => [
-                'rate' => $row->rate_to_ledger ?: $row->exchange_rate,
-                'amount' => $row->purchase_line_amount,
+        // Weighted average FX from historical batch snapshots (unit cost original → AFN).
+        $weightedByVariant = $batchRows->groupBy('variant_id')->map(function ($rows) {
+            return $this->currencies->weightedAverageFxFromEquivalents($rows->map(fn ($row) => [
+                'original_amount' => (float) $row->unit_cost_currency * (int) $row->quantity,
+                'afn_amount' => $row->total_cost_afn ?: ((float) $row->unit_cost_afn * (int) $row->quantity),
+            ])) ?? $this->currencies->weightedAverageRate($rows->map(fn ($row) => [
+                'rate' => $row->exchange_rate,
+                'amount' => $row->total_cost_afn ?: ((float) $row->unit_cost_afn * (int) $row->quantity),
             ]));
         });
 
@@ -233,57 +224,43 @@ class ProductController extends Controller
                 ->orderBy('name')
                 ->get(),
             'currencies' => Currency::formOptions(),
-            'exchangeRateContext' => $this->productRates->formContext(),
-            'usd_to_afn_rate' => null,
-            'usd_to_aed_rate' => null,
+            'fxBoard' => $this->currencies->formBoardContext(now()),
         ]);
     }
 
     public function receive(): Response
     {
         $variants = ProductVariant::query()
-            ->with(['product:id,name,brand_id', 'product.brand:id,name', 'product.exchangeRates', 'barcodes:id,variant_id,barcode'])
+            ->with(['product:id,name,brand_id', 'product.brand:id,name', 'barcodes:id,variant_id,barcode'])
             ->where('trash', false)
             ->orderByDesc('id')
             ->limit(300)
             ->get()
             ->map(fn (ProductVariant $variant) => $this->receiveVariantPayload($variant));
 
-        $investments = \App\Models\Investment::query()
-            ->with('investor:id,name')
+        $investments = Investment::query()
+            ->with(['investor:id,name', 'currency:id,code'])
             ->where('trash', false)
-            ->whereIn('status', ['active', 'partially_used'])
-            ->where(function ($q) {
-                $q->where(function ($cash) {
-                    $cash->where('source_type', 'cash')
-                        ->where('available_amount_afn', '>', 0);
-                })->orWhere(function ($goods) {
-                    $goods->where('source_type', 'goods');
-                });
-            })
+            ->where('status', 'active')
             ->orderByDesc('id')
             ->limit(500)
             ->get()
-            ->map(function (\App\Models\Investment $investment) {
-                $available = $investment->isGoodsInvestment()
-                    ? $investment->remainingGoodsCapitalAfn()
-                    : (float) $investment->available_amount_afn;
+            ->map(function (Investment $investment) {
+                $amount = (float) $investment->amount_afn;
 
                 return [
                     'id' => $investment->id,
                     'investor_id' => $investment->investor_id,
-                    'investment_number' => $investment->investment_number,
-                    'source_type' => $investment->source_type,
-                    'currency_code' => $investment->currency_code,
-                    'available_amount_afn' => $available,
+                    'investment_number' => '#'.$investment->id,
+                    'source_type' => 'goods',
+                    'currency_code' => $investment->currency?->code,
+                    'available_amount_afn' => $amount,
                     'label' => trim(
-                        ($investment->investment_number ?: ('#'.$investment->id))
-                        .' · '.($investment->source_type === 'goods' ? 'Goods' : 'Cash')
-                        .' · '.number_format($available, 2).' AFN available'
+                        '#'.$investment->id
+                        .' · '.number_format($amount, 2).' AFN'
                     ),
                 ];
             })
-            ->filter(fn (array $row) => (float) $row['available_amount_afn'] > 0.01)
             ->values();
 
         return Inertia::render('products/receive', [
@@ -336,6 +313,18 @@ class ProductController extends Controller
             $data['profit_per_unit'] = 0;
         }
 
+        // Always seed board rates from exchange_rates; request overrides (if authorized) win.
+        $board = $this->boardRateOverridesFromExchangeService();
+        if (empty($data['usd_to_afn_rate']) || (float) $data['usd_to_afn_rate'] <= 0) {
+            $data['usd_to_afn_rate'] = $board['usd_to_afn'];
+        }
+        if (empty($data['aed_to_afn_rate']) || (float) $data['aed_to_afn_rate'] <= 0) {
+            $data['aed_to_afn_rate'] = $board['aed_to_afn'];
+        }
+        if (empty($data['rate_source'])) {
+            $data['rate_source'] = $board['source'];
+        }
+
         $this->getBranchId();
 
         $this->purchases->receiveStock($data, $request->user(), $this->getBranchId());
@@ -361,8 +350,8 @@ class ProductController extends Controller
 
             $variantsData  = $data['variants']  ?? [];
             $purchasesData = $data['purchases'] ?? [];
-            $usdToAfnRate  = $data['usd_to_afn_rate'] ?? null;
-            $usdToAedRate  = $data['usd_to_aed_rate'] ?? null;
+            // Purchase/catalog valuation uses Central Exchange Board (exchange_rates) only.
+            $rateOverrides = $this->boardRateOverridesFromExchangeService();
 
             unset(
                 $data['variants'],
@@ -374,7 +363,6 @@ class ProductController extends Controller
 
             /* ═══ 1) Create main product ═══ */
             $product = Product::create($data);
-            $this->productRates->sync($product, $usdToAfnRate, $usdToAedRate);
 
             /* ═══ 2) Create variants + barcodes ═══ */
             $variantIds     = [];
@@ -382,20 +370,26 @@ class ProductController extends Controller
 
             foreach ($variantsData as $index => $variantData) {
                 $barcodes = $variantData['barcodes'] ?? [];
-                unset($variantData['barcodes']);
+                $prices = $variantData['prices'] ?? [];
+                unset($variantData['barcodes'], $variantData['prices']);
 
                 $variantData = $this->normalizeVariantData($variantData);
-                $variantData = $this->applyVariantMoney($variantData, "variants.{$index}");
-                $variantData['product_id'] = $product->id;
-                $variantData['user_id']    = Auth::id();
+                $variantData = $this->applyVariantMoney($variantData, "variants.{$index}", $rateOverrides);
+                $moneyMap = $this->moneyMapFromArray($variantData);
+                $variantDataMap[$index] = $moneyMap;
 
-                $variant = ProductVariant::create($variantData);
+                $variant = ProductVariant::create(array_merge(
+                    $this->onlyVariantColumns($variantData),
+                    [
+                        'product_id' => $product->id,
+                        'user_id' => Auth::id(),
+                    ]
+                ));
                 $variantIds[$index] = $variant->id;
 
-                // ✅ اضافه شد: sale_price_afn در map
-                $variantDataMap[$index] = $this->variantMoneyMap($variant);
-
                 $this->syncBarcodes($variant, $barcodes);
+                $this->syncCatalogEquivalentPrices($product, $variant, $moneyMap);
+                $this->syncVariantPrices($product, $variant, is_array($prices) ? $prices : []);
             }
 
             /* ═══ 3) Create purchases + batch + inventory ═══ */
@@ -415,22 +409,29 @@ class ProductController extends Controller
                 }
 
                 $qty = (float) ($purchaseData['quantity'] ?? 1);
-                // Explicit per-purchase rate only. Product reference rates are estimates and
-                // must never become the purchase FX snapshot or overwrite the global FX board.
+                // Prefer explicit purchase exchange_rate; otherwise Central Exchange Board
+                // via PurchaseValuation (never invent a silent 1:1).
                 $exchangeRate = (float) ($purchaseData['exchange_rate'] ?? 0);
                 $purchaseDate = $purchaseData['purchase_date'] ?? now()->toDateString();
+                $rateAt = \Illuminate\Support\Carbon::parse($purchaseDate)->endOfDay();
 
                 $investorId = $purchaseData['investor_id'] ?? null;
                 if (empty($investorId) || $investorId === 'store' || $investorId === 'none') {
                     $investorId = null;
                 }
 
+                $variantInfo = $variantDataMap[$variantIndex] ?? $this->emptyVariantMoneyMap();
+                $profitCurrencyId = $purchaseData['profit_currency_id']
+                    ?? $variantInfo['purchase_currency_id']
+                    ?? null;
+
                 $profitSnap = $investorId
                     ? $this->profitViaBoard(
                         (float) ($purchaseData['profit_per_unit'] ?? 0),
-                        $purchaseData['profit_currency_id'] ?? null,
+                        $profitCurrencyId,
                         "purchases.{$index}.profit_currency_id",
-                        $purchaseDate,
+                        $rateAt,
+                        $rateOverrides,
                     )
                     : $this->profitViaBoard(0, null, "purchases.{$index}.profit_currency_id");
                 $profitUnit = $profitSnap['afn'];
@@ -440,12 +441,12 @@ class ProductController extends Controller
                     $supplierId = null;
                 }
 
-                $variantInfo = $variantDataMap[$variantIndex] ?? $this->emptyVariantMoneyMap();
                 $money = $this->purchaseMoneyFromVariant(
                     $variantInfo,
                     (int) $qty,
                     $exchangeRate > 0 ? (string) $exchangeRate : null,
-                    $purchaseDate,
+                    $rateAt,
+                    $rateOverrides,
                 );
                 $purchasePricePerUnit = (float) $money['unit_cost_afn'];
                 $salePricePerUnit = (float) ($variantInfo['sale_price_afn'] ?? 0);
@@ -456,71 +457,87 @@ class ProductController extends Controller
                 $storeProfitUnit = round($salePricePerUnit - $purchasePricePerUnit - $profitUnit, 2);
                 $lineStoreProfit = round($storeProfitUnit * $qty, 2);
 
-                $purchaseRow = Product::create(array_merge([
-                    'name' => $product->name,
-                    'brand_id' => $product->brand_id,
-                    'gender' => $product->gender,
-                    'status' => $product->status,
-                    'description' => $product->description,
-                    'user_id' => Auth::id(),
-                    'trash' => false,
-                    'variant_id' => $variantId,
-                    'investor_id' => $investorId,
-                    'supplier_id' => $supplierId,
-                    'invoice_number' => $purchaseData['invoice_number'] ?? null,
-                    'purchase_date' => $purchaseDate,
-                    'quantity' => (int) $qty,
-                    'remaining_quantity' => (int) $qty,
-                    'purchase_price_afn' => $purchasePriceAfn,
-                    'wholesale_price_afn' => $variantInfo['wholesale_price_afn'],
-                    'wholesale_min_qty' => $variantInfo['wholesale_min_qty'],
-                    'profit_per_unit' => $profitUnit,
-                    'profit_currency_id' => $profitSnap['currency_id'],
-                    'profit_currency_code' => $profitSnap['code'],
-                    'line_total' => $purchasePriceAfn,
-                    'line_profit' => $lineProfit,
-                    'store_profit_per_unit' => $storeProfitUnit,
-                    'line_store_profit' => $lineStoreProfit,
-                    'bill_image' => $billImage,
-                    'notes' => $purchaseData['notes'] ?? null,
-                    'payment_status' => $purchaseData['payment_status'] ?? 'unpaid',
-                ], $this->purchaseSnapshotColumns($money)));
-                $this->applyPaidNow($purchaseRow, (float) ($purchaseData['paid_now'] ?? 0));
+                $investmentId = null;
+                if ($investorId) {
+                    $investment = Investment::createFromPurchase([
+                        'investor_id' => (int) $investorId,
+                        'currency_id' => $money['purchase_currency_id'] ?? null,
+                        'amount_currency' => $money['purchase_line_amount'] ?? $purchasePriceAfn,
+                        'amount_afn' => $purchasePriceAfn,
+                        'exchange_rate' => $money['rate_to_ledger'] ?? null,
+                        'investment_date' => $purchaseDate,
+                        'notes' => 'Auto-created on product create',
+                        'created_by' => Auth::id(),
+                    ]);
+                    $investmentId = $investment->id;
 
-                $this->createProductBatch(
+                    InvestorTransaction::record(
+                        investorId: (int) $investorId,
+                        type: 'goods_deposit',
+                        amountAfn: $purchasePriceAfn,
+                        balanceType: 'capital',
+                        options: [
+                            'investment_id' => $investmentId,
+                            'currency_id' => $money['purchase_currency_id'] ?? null,
+                            'currency_code' => $money['purchase_currency_code'] ?? null,
+                            'amount_currency' => $money['purchase_line_amount'] ?? $purchasePriceAfn,
+                            'exchange_rate' => $money['rate_to_ledger'] ?? null,
+                            'description' => "Goods contribution — {$product->name}",
+                            'transaction_date' => $purchaseDate,
+                        ]
+                    );
+                }
+
+                $batch = $this->createProductBatch(
                     branchId: $branchId,
                     variantId: $variantId,
-                    purchaseRowId: $purchaseRow->id,
-                    investorId: $investorId,
+                    investmentId: $investmentId,
                     qty: (int) $qty,
                     unitCostAfn: $purchasePricePerUnit,
                     unitCostCurrency: (float) $money['purchase_unit_amount'],
                     salePriceAfn: $salePricePerUnit,
                     exchangeRate: (float) $money['rate_to_ledger'],
                     profitPerUnitAfn: $profitUnit,
-                    profitPerUnitOriginal: (float) $profitSnap['original'],
-                    profitCurrencyId: $profitSnap['currency_id'],
-                    profitCurrencyCode: (string) $profitSnap['code'],
-                    profitPerUnitUsd: (float) $profitSnap['usd'],
-                    profitPerUnitAed: (float) $profitSnap['aed'],
                     storeProfitPerUnit: $storeProfitUnit,
                     receivedDate: $purchaseDate,
+                    invoiceNumber: $purchaseData['invoice_number'] ?? null,
+                    purchaseDate: $purchaseDate,
+                    paymentStatus: $purchaseData['payment_status'] ?? ($supplierId ? 'unpaid' : 'paid'),
+                    billImage: $billImage,
+                    notes: $purchaseData['notes'] ?? null,
+                    purchaseCurrencyId: $money['purchase_currency_id'] ?? null,
+                    purchaseAmountCurrency: isset($money['purchase_line_amount'])
+                        ? (float) $money['purchase_line_amount']
+                        : null,
                 );
+
+                if ($supplierId) {
+                    $this->syncSupplierInvoiceForBatch(
+                        (int) $supplierId,
+                        $batch,
+                        $purchasePriceAfn,
+                        (float) ($money['rate_to_ledger'] ?? 0),
+                    );
+                    $this->applyPaidNowToBatch(
+                        $batch,
+                        (int) $supplierId,
+                        (float) ($purchaseData['paid_now'] ?? 0),
+                        (float) ($money['rate_to_ledger'] ?? 0),
+                    );
+                }
 
                 Inventory::increase(
                     branchId: $branchId,
                     variantId: $variantId,
                     qty: (int) $qty,
                     type: 'purchase',
-                    batchId: null,
-                    referenceType: Product::class,
-                    referenceId: $purchaseRow->id,
+                    batchId: $batch->id,
+                    referenceType: ProductBatch::class,
+                    referenceId: $batch->id,
                     notes: "New purchase — {$product->name}",
                     unitCostAfn: $purchasePricePerUnit
                 );
             }
-
-            $this->refreshVariantStock($product);
 
             return $product;
         });
@@ -549,42 +566,116 @@ class ProductController extends Controller
                 ->notTrashed()
                 ->with([
                     'barcodes:id,variant_id,barcode,barcode_type,is_primary,status,current_stock',
+                    'prices.currency:id,code,symbol,name',
                 ]),
         ]);
 
-        $purchases = Product::whereNotNull('variant_id')
-            ->where('name', $product->name)
-            ->where('brand_id', $product->brand_id)
+        $variantIds = $product->variants->pluck('id');
+
+        $batches = ProductBatch::query()
+            ->whereIn('variant_id', $variantIds)
             ->where('trash', false)
             ->with([
                 'variant:id,product_id,volume_ml,concentration',
-                'investor:id,name',
-                'supplier:id,name',
+                'investment:id,investor_id',
+                'investment.investor:id,name',
             ])
             ->orderByDesc('purchase_date')
+            ->orderByDesc('id')
             ->get();
 
+        $invoiceNumbers = $batches
+            ->map(fn (ProductBatch $batch) => mb_substr($batch->invoice_number ?: ('B-'.$batch->id), 0, 50))
+            ->unique()
+            ->values();
         $invoices = \App\Models\SupplierInvoice::query()
-            ->whereIn('supplier_id', $purchases->pluck('supplier_id')->filter()->unique())
+            ->whereIn('invoice_no', $invoiceNumbers)
             ->get();
 
-        $purchases->each(function (Product $row) use ($invoices) {
-            $number = mb_substr($row->invoice_number ?: ('P-'.$row->id), 0, 50);
-            $invoice = $invoices->first(fn ($item) => (int) $item->supplier_id === (int) $row->supplier_id && $item->invoice_no === $number);
-            $row->setAttribute('invoice_id', $invoice?->id);
-            $row->setAttribute('invoice_paid_afn', $invoice ? (float) $invoice->paid_afn : 0);
-            $row->setAttribute('invoice_due_afn', $invoice ? (float) $invoice->due_afn : 0);
+        $purchases = $batches->map(function (ProductBatch $batch) use ($invoices) {
+            $number = mb_substr($batch->invoice_number ?: ('B-'.$batch->id), 0, 50);
+            $invoice = $invoices->first(fn ($item) => $item->invoice_no === $number);
+
+            return [
+                'id' => $batch->id,
+                'invoice_number' => $batch->invoice_number,
+                'purchase_date' => optional($batch->purchase_date)->toDateString(),
+                'quantity' => $batch->quantity,
+                'remaining_quantity' => $batch->remaining_quantity,
+                'payment_status' => $batch->payment_status,
+                'notes' => $batch->notes,
+                'bill_image' => $batch->bill_image,
+                'variant_id' => $batch->variant_id,
+                'investor_id' => $batch->investment?->investor_id,
+                'investment_id' => $batch->investment_id,
+                'unit_cost_afn' => $batch->unit_cost_afn,
+                'total_cost_afn' => $batch->total_cost_afn,
+                'profit_per_unit_afn' => $batch->profit_per_unit_afn,
+                'sale_price_afn' => $batch->sale_price_afn,
+                'exchange_rate' => $batch->exchange_rate,
+                'invoice_id' => $invoice?->id,
+                'supplier_id' => $invoice?->supplier_id,
+                'invoice_paid_afn' => $invoice ? (float) $invoice->paid_afn : 0,
+                'invoice_due_afn' => $invoice ? (float) $invoice->due_afn : 0,
+                'variant' => $batch->variant,
+                'investor' => $batch->investment?->investor,
+            ];
         });
 
-        $inventoryValuation = $this->buildProductInventoryValuation($purchases);
-
         return Inertia::render('products/show', [
-            'product'   => $product,
+            'product' => $product,
             'purchases' => $purchases,
-            'inventoryValuation' => $inventoryValuation,
-            'exchangeRateContext' => $this->productRates->formContext(),
-            ...$this->productRates->payloadFor($product),
+            'inventoryValuation' => [
+                'remaining_cost_afn' => round((float) $batches->sum(fn (ProductBatch $b) => (float) $b->remaining_cost_afn), 2),
+                'remaining_qty' => (int) $batches->sum('remaining_quantity'),
+            ],
+            'fxBoard' => $this->currencies->formBoardContext(now()),
         ]);
+    }
+
+    /**
+     * Attach original-currency investor PPU from the related FIFO batch so edit/show
+     * do not display AFN ledger profit under a foreign currency label.
+     *
+     * @param  \Illuminate\Support\Collection<int, Product>  $purchases
+     */
+    private function attachOriginalProfitFromBatches($purchases): void
+    {
+        if ($purchases->isEmpty()) {
+            return;
+        }
+
+        $batches = ProductBatch::query()
+            ->whereIn('purchase_item_id', $purchases->pluck('id')->all())
+            ->where('trash', false)
+            ->get(['purchase_item_id', 'profit_per_unit_currency', 'profit_currency_id', 'profit_currency_code', 'profit_per_unit_afn', 'profit_per_unit_usd', 'profit_per_unit_aed'])
+            ->keyBy('purchase_item_id');
+
+        foreach ($purchases as $purchase) {
+            $batch = $batches->get($purchase->id);
+            if (! $batch) {
+                $purchase->setAttribute('profit_per_unit_original', null);
+                continue;
+            }
+
+            $original = $batch->profit_per_unit_currency;
+            if ($original === null || (float) $original <= 0) {
+                $code = strtoupper((string) ($batch->profit_currency_code ?? 'AFN'));
+                $original = match ($code) {
+                    'USD' => $batch->profit_per_unit_usd,
+                    'AED' => $batch->profit_per_unit_aed,
+                    default => $batch->profit_per_unit_afn,
+                };
+            }
+
+            $purchase->setAttribute('profit_per_unit_original', $original);
+            if ($batch->profit_currency_id) {
+                $purchase->setAttribute('profit_currency_id', $batch->profit_currency_id);
+            }
+            if ($batch->profit_currency_code) {
+                $purchase->setAttribute('profit_currency_code', $batch->profit_currency_code);
+            }
+        }
     }
 
     /**
@@ -612,34 +703,46 @@ class ProductController extends Controller
         $rowsByCurrency = ['USD' => [], 'AED' => [], 'AFN' => []];
 
         foreach ($purchases as $purchase) {
-            $code = strtoupper((string) ($purchase->purchase_currency_code ?? ''));
-            if (! in_array($code, OriginalCurrencyMoney::CODES, true)) {
-                continue;
-            }
+            $batches = $purchase->relationLoaded('purchaseBatches')
+                ? $purchase->purchaseBatches
+                : ProductBatch::query()->where('purchase_item_id', $purchase->id)->where('trash', false)->get();
 
-            $remaining = max(0, (int) $purchase->remaining_quantity);
-            if ($remaining <= 0) {
-                continue;
-            }
+            foreach ($batches as $batch) {
+                $remaining = max(0, (int) $batch->remaining_quantity);
+                if ($remaining <= 0) {
+                    continue;
+                }
 
-            $qty = max(1, (int) $purchase->quantity);
-            $unitOriginal = (string) ($purchase->purchase_unit_amount ?? '0');
-            if ((float) $unitOriginal <= 0 && $purchase->purchase_line_amount !== null) {
-                $unitOriginal = Money::div((string) $purchase->purchase_line_amount, (string) $qty, 8);
-            }
-            $unitAfn = Money::div((string) ($purchase->purchase_price_afn ?? $purchase->line_total ?? '0'), (string) $qty, 8);
-            $original = Money::round(Money::mul($unitOriginal, (string) $remaining, 8), 2);
-            $afn = Money::round(Money::mul($unitAfn, (string) $remaining, 8), 2);
+                $rate = (float) ($batch->exchange_rate ?? 0);
+                $code = match (true) {
+                    $rate == 1.0 => 'AFN',
+                    abs($rate - (float) ($batch->usd_to_afn_rate ?? 0)) < 0.0001 && (float) ($batch->usd_to_afn_rate ?? 0) > 0 => 'USD',
+                    abs($rate - (float) ($batch->aed_to_afn_rate ?? 0)) < 0.0001 && (float) ($batch->aed_to_afn_rate ?? 0) > 0 => 'AED',
+                    default => 'AFN',
+                };
 
-            $byCurrency[$code]['original_amount'] = Money::add($byCurrency[$code]['original_amount'], $original, 2);
-            $byCurrency[$code]['historical_afn'] = Money::add($byCurrency[$code]['historical_afn'], $afn, 2);
-            $byCurrency[$code]['units'] += $remaining;
-            $byCurrency[$code]['batches']++;
-            $rowsByCurrency[$code][] = [
-                'original_amount' => $original,
-                'afn_amount' => $afn,
-                'quantity' => $remaining,
-            ];
+                if (! in_array($code, OriginalCurrencyMoney::CODES, true)) {
+                    continue;
+                }
+
+                $unitOriginal = (string) ($batch->unit_cost_currency ?? '0');
+                if ((float) $unitOriginal <= 0) {
+                    $unitOriginal = (string) ($batch->unit_cost_afn ?? '0');
+                }
+                $unitAfn = (string) ($batch->unit_cost_afn ?? '0');
+                $original = Money::round(Money::mul($unitOriginal, (string) $remaining, 8), 2);
+                $afn = Money::round(Money::mul($unitAfn, (string) $remaining, 8), 2);
+
+                $byCurrency[$code]['original_amount'] = Money::add($byCurrency[$code]['original_amount'], $original, 2);
+                $byCurrency[$code]['historical_afn'] = Money::add($byCurrency[$code]['historical_afn'], $afn, 2);
+                $byCurrency[$code]['units'] += $remaining;
+                $byCurrency[$code]['batches']++;
+                $rowsByCurrency[$code][] = [
+                    'original_amount' => $original,
+                    'afn_amount' => $afn,
+                    'quantity' => $remaining,
+                ];
+            }
         }
 
         foreach (['USD', 'AED'] as $code) {
@@ -679,15 +782,40 @@ class ProductController extends Controller
                 ->notTrashed()
                 ->with([
                     'barcodes:id,variant_id,barcode,barcode_type,is_primary,status,current_stock',
+                    'prices.currency:id,code,symbol,name',
                 ]),
         ]);
 
-        $purchases = Product::whereNotNull('variant_id')
+        $variantIds = $product->variants->pluck('id');
+
+        $purchases = Product::whereNotNull('purchase_date')
             ->where('name', $product->name)
             ->where('brand_id', $product->brand_id)
             ->where('trash', false)
+            ->with([
+                'purchaseBatches' => fn ($q) => $q
+                    ->whereIn('variant_id', $variantIds)
+                    ->with(['investor:id,name', 'variant:id,product_id,volume_ml']),
+            ])
             ->orderByDesc('purchase_date')
             ->get();
+
+        $purchases->each(function (Product $row) {
+            $batch = $row->purchaseBatches->first();
+            $row->setAttribute('variant_id', $batch?->variant_id);
+            $row->setAttribute('investor_id', $batch?->investor_id);
+            $row->setAttribute('purchase_price_afn', $batch?->total_cost_afn);
+            $row->setAttribute('unit_cost_afn', $batch?->unit_cost_afn);
+            $row->setAttribute('profit_per_unit', $batch?->profit_per_unit_afn);
+            $row->setAttribute('store_profit_per_unit', $batch?->store_profit_per_unit_afn);
+            $row->setAttribute('sale_price_afn', $batch?->sale_price_afn);
+            $row->setAttribute('exchange_rate', $batch?->exchange_rate);
+            $row->setAttribute('usd_to_afn_rate', $batch?->usd_to_afn_rate);
+            $row->setAttribute('aed_to_afn_rate', $batch?->aed_to_afn_rate);
+            $row->setAttribute('usd_to_aed_rate', $batch?->usd_to_aed_rate);
+        });
+
+        $this->attachOriginalProfitFromBatches($purchases);
 
         return Inertia::render('products/edit', [
             'product'   => $product,
@@ -707,13 +835,13 @@ class ProductController extends Controller
                 ->get(),
             'currencies' => Currency::formOptions(
                 $product->variants->flatMap(fn ($variant) => [
+                    $variant->catalog_currency_id,
                     $variant->purchase_currency_id,
                     $variant->sale_currency_id,
                     $variant->wholesale_currency_id,
                 ])->merge($purchases->pluck('profit_currency_id'))->all()
             ),
-            'exchangeRateContext' => $this->productRates->formContext(),
-            ...$this->productRates->payloadFor($product),
+            'fxBoard' => $this->currencies->formBoardContext(now()),
         ]);
     }
 
@@ -735,8 +863,8 @@ class ProductController extends Controller
 
             $variantsData  = $data['variants']  ?? [];
             $purchasesData = $data['purchases'] ?? [];
-            $usdToAfnRate  = $data['usd_to_afn_rate'] ?? null;
-            $usdToAedRate  = $data['usd_to_aed_rate'] ?? null;
+            // Purchase/catalog valuation uses Central Exchange Board (exchange_rates) only.
+            $rateOverrides = $this->boardRateOverridesFromExchangeService();
 
             unset(
                 $data['variants'],
@@ -747,20 +875,23 @@ class ProductController extends Controller
             );
 
             $product->update($data);
-            $this->productRates->sync($product, $usdToAfnRate, $usdToAedRate);
 
             $variantIndexToId = [];
             $variantDataMap   = [];
 
             foreach ($variantsData as $index => $variantData) {
                 $barcodes = $variantData['barcodes'] ?? [];
-                unset($variantData['barcodes']);
+                $prices = $variantData['prices'] ?? [];
+                unset($variantData['barcodes'], $variantData['prices']);
 
                 $variantId = $variantData['id'] ?? null;
                 unset($variantData['id']);
 
                 $variantData = $this->normalizeVariantData($variantData);
-                $variantData = $this->applyVariantMoney($variantData, "variants.{$index}");
+                $variantData = $this->applyVariantMoney($variantData, "variants.{$index}", $rateOverrides);
+
+                $moneyMap = $this->moneyMapFromArray($variantData);
+                $variantDataMap[$index] = $moneyMap;
 
                 if ($variantId) {
                     $variant = ProductVariant::where('id', $variantId)
@@ -768,18 +899,22 @@ class ProductController extends Controller
                         ->first();
 
                     if ($variant) {
-                        $oldPurchasePrice = (float) $variant->purchase_price_afn;
-                        $oldSalePrice     = (float) $variant->sale_price_afn;
+                        $oldPurchasePrice = $variant->activePriceAmount('purchase', 'AFN');
+                        $oldSalePrice     = $variant->activePriceAmount('sale', 'AFN');
 
-                        $variantData['user_id'] = Auth::id();
-                        $variant->update($variantData);
+                        $variant->update(array_merge(
+                            $this->onlyVariantColumns($variantData),
+                            ['user_id' => Auth::id()]
+                        ));
 
                         $variantIndexToId[$index] = $variant->id;
 
                         $this->syncBarcodes($variant, $barcodes);
+                        $this->syncCatalogEquivalentPrices($product, $variant, $moneyMap);
+                        $this->syncVariantPrices($product, $variant, is_array($prices) ? $prices : []);
 
-                        $newPurchasePrice = (float) ($variantData['purchase_price_afn'] ?? $oldPurchasePrice);
-                        $newSalePrice     = (float) ($variantData['sale_price_afn'] ?? $oldSalePrice);
+                        $newPurchasePrice = (float) ($moneyMap['purchase_price_afn'] ?? $oldPurchasePrice);
+                        $newSalePrice     = (float) ($moneyMap['sale_price_afn'] ?? $oldSalePrice);
 
                         $this->recordPriceDropLoss($variant, $oldPurchasePrice, $newPurchasePrice);
 
@@ -791,19 +926,20 @@ class ProductController extends Controller
                             newSale: $newSalePrice,
                             reason: 'Product update'
                         );
-
-                        $variantDataMap[$index] = $this->variantMoneyMap($variant);
                     }
                 } else {
-                    $variantData['product_id'] = $product->id;
-                    $variantData['user_id']    = Auth::id();
-
-                    $variant = ProductVariant::create($variantData);
+                    $variant = ProductVariant::create(array_merge(
+                        $this->onlyVariantColumns($variantData),
+                        [
+                            'product_id' => $product->id,
+                            'user_id' => Auth::id(),
+                        ]
+                    ));
                     $variantIndexToId[$index] = $variant->id;
 
                     $this->syncBarcodes($variant, $barcodes);
-
-                    $variantDataMap[$index] = $this->variantMoneyMap($variant);
+                    $this->syncCatalogEquivalentPrices($product, $variant, $moneyMap);
+                    $this->syncVariantPrices($product, $variant, is_array($prices) ? $prices : []);
                 }
             }
 
@@ -811,7 +947,7 @@ class ProductController extends Controller
                 ->whereNotIn('id', array_values($variantIndexToId))
                 ->update(['trash' => true, 'user_id' => Auth::id()]);
 
-            $this->syncPurchases($product, $purchasesData, $variantIndexToId, $variantDataMap);
+            $this->syncPurchases($product, $purchasesData, $variantIndexToId, $variantDataMap, $rateOverrides);
 
             $this->refreshVariantStock($product);
         });
@@ -839,15 +975,17 @@ class ProductController extends Controller
 
             $variantIds = $product->variants()->pluck('id')->all();
             if (! empty($variantIds)) {
-                $purchaseIds = Product::whereIn('variant_id', $variantIds)
-                    ->whereNotNull('variant_id')
-                    ->pluck('id')
+                $purchaseIds = ProductBatch::query()
+                    ->whereIn('variant_id', $variantIds)
+                    ->whereNotNull('purchase_item_id')
+                    ->pluck('purchase_item_id')
+                    ->unique()
                     ->all();
 
                 Product::whereIn('id', $purchaseIds)
                     ->update(['trash' => true, 'user_id' => Auth::id()]);
 
-                ProductBatch::whereIn('purchase_item_id', $purchaseIds)
+                ProductBatch::whereIn('variant_id', $variantIds)
                     ->update(['trash' => true, 'user_id' => Auth::id()]);
 
                 Inventory::whereIn('variant_id', $variantIds)
@@ -864,7 +1002,7 @@ class ProductController extends Controller
 
     public function restore(int $id): RedirectResponse
     {
-        $product = Product::onlyTrash()->whereNull('variant_id')->findOrFail($id);
+        $product = Product::onlyTrash()->whereNull('purchase_date')->findOrFail($id);
 
         DB::transaction(function () use ($product) {
             $product->update(['trash' => false, 'user_id' => Auth::id()]);
@@ -872,15 +1010,17 @@ class ProductController extends Controller
 
             $variantIds = $product->variants()->pluck('id')->all();
             if (! empty($variantIds)) {
-                $purchaseIds = Product::whereIn('variant_id', $variantIds)
-                    ->whereNotNull('variant_id')
-                    ->pluck('id')
+                $purchaseIds = ProductBatch::query()
+                    ->whereIn('variant_id', $variantIds)
+                    ->whereNotNull('purchase_item_id')
+                    ->pluck('purchase_item_id')
+                    ->unique()
                     ->all();
 
                 Product::whereIn('id', $purchaseIds)
                     ->update(['trash' => false, 'user_id' => Auth::id()]);
 
-                ProductBatch::whereIn('purchase_item_id', $purchaseIds)
+                ProductBatch::whereIn('variant_id', $variantIds)
                     ->update(['trash' => false, 'user_id' => Auth::id()]);
 
                 Inventory::whereIn('variant_id', $variantIds)
@@ -896,18 +1036,21 @@ class ProductController extends Controller
     public function forceDelete(int $id): RedirectResponse
     {
         $product = Product::onlyTrash()
-            ->whereNull('variant_id')
+            ->whereNull('purchase_date')
             ->with(['variants.barcodes', 'variants'])
             ->findOrFail($id);
 
         DB::transaction(function () use ($product) {
             $variantIds = $product->variants->pluck('id')->all();
 
-            $purchaseRows = Product::whereIn('variant_id', $variantIds)
-                ->whereNotNull('variant_id')
-                ->get();
+            $purchaseIds = ProductBatch::query()
+                ->whereIn('variant_id', $variantIds)
+                ->whereNotNull('purchase_item_id')
+                ->pluck('purchase_item_id')
+                ->unique()
+                ->all();
 
-            $purchaseIds = $purchaseRows->pluck('id')->all();
+            $purchaseRows = Product::whereIn('id', $purchaseIds)->get();
 
             foreach ($purchaseRows as $row) {
                 if ($row->bill_image && Storage::disk('public')->exists($row->bill_image)) {
@@ -938,7 +1081,7 @@ class ProductController extends Controller
    public function trash(): Response
 {
     $products = Product::onlyTrash()          // ✅ اصلاح شد (قبلاً trashed بود)
-        ->whereNull('variant_id')
+        ->whereNull('purchase_date')
         ->with([
             'brand:id,name',
             'creator:id,name',
@@ -1023,45 +1166,32 @@ class ProductController extends Controller
             'name' => trim(($product?->brand?->name ? $product->brand->name.' — ' : '').($product?->name ?? 'Product')),
             'volume_ml' => $variant->volume_ml,
             'concentration' => $variant->concentration,
-            'purchase_price_afn' => $variant->purchase_price_afn,
-            'sale_price_afn' => $variant->sale_price_afn,
-            'stock_quantity' => $variant->stock_quantity,
+            'purchase_price_afn' => $variant->activePriceAmount('purchase', 'AFN'),
+            'sale_price_afn' => $variant->activePriceAmount('sale', 'AFN'),
+            'stock_quantity' => $variant->availableQuantity(),
             'barcodes' => $variant->barcodes->pluck('barcode')->filter()->values(),
-            'usd_to_afn_rate' => $product ? $this->productRates->rate($product, ProductExchangeRateService::USD, ProductExchangeRateService::AFN) : null,
-            'usd_to_aed_rate' => $product ? $this->productRates->rate($product, ProductExchangeRateService::USD, ProductExchangeRateService::AED) : null,
         ];
     }
 
-    /**
-     * ⭐ ساخت ProductBatch از یک purchase row — ✅ نسخه با سود دوکان
-     */
-    /**
-     * @param  array{
-     *     original?: float,
-     *     currency_id?: int|null,
-     *     code?: string,
-     *     usd?: float,
-     *     aed?: float
-     * }  $profitSnap
-     */
     private function createProductBatch(
         int $branchId,
         int $variantId,
-        int $purchaseRowId,
-        ?int $investorId,
+        ?int $investmentId,
         int $qty,
         float $unitCostAfn,
         float $unitCostCurrency,
         float $salePriceAfn,
         float $exchangeRate,
         float $profitPerUnitAfn,
-        float $profitPerUnitOriginal,
-        ?int $profitCurrencyId,
-        string $profitCurrencyCode,
-        float $profitPerUnitUsd,
-        float $profitPerUnitAed,
         float $storeProfitPerUnit,
         string $receivedDate,
+        ?string $invoiceNumber = null,
+        ?string $purchaseDate = null,
+        ?string $paymentStatus = null,
+        ?string $billImage = null,
+        ?string $notes = null,
+        ?int $purchaseCurrencyId = null,
+        ?float $purchaseAmountCurrency = null,
     ): ProductBatch {
         if (! Branch::where('id', $branchId)->exists()) {
             throw ValidationException::withMessages([
@@ -1069,49 +1199,37 @@ class ProductController extends Controller
             ]);
         }
 
-        $payload = [
+        if ($exchangeRate <= 0) {
+            throw ValidationException::withMessages([
+                'exchange_rate' => 'Batch exchange_rate must come from the exchange_rates board (or an explicit purchase override) and be greater than zero.',
+            ]);
+        }
+
+        return ProductBatch::create([
             'branch_id' => $branchId,
             'variant_id' => $variantId,
-            'purchase_item_id' => $purchaseRowId,
-            'investor_id' => $investorId,
+            'investment_id' => $investmentId,
             'batch_code' => ProductBatch::generateBatchCode(),
+            'invoice_number' => $invoiceNumber,
+            'purchase_date' => $purchaseDate ?? $receivedDate,
+            'payment_status' => $paymentStatus,
+            'bill_image' => $billImage,
+            'notes' => $notes,
+            'purchase_currency_id' => $purchaseCurrencyId,
+            'purchase_amount_currency' => $purchaseAmountCurrency,
             'quantity' => $qty,
             'remaining_quantity' => $qty,
+            'unit_cost_currency' => $unitCostCurrency,
+            'exchange_rate' => $exchangeRate,
             'unit_cost_afn' => $unitCostAfn,
             'sale_price_afn' => $salePriceAfn,
-            'total_cost_afn' => $unitCostAfn * $qty,
             'profit_per_unit_afn' => $profitPerUnitAfn,
             'store_profit_per_unit_afn' => $storeProfitPerUnit,
             'received_date' => $receivedDate,
             'status' => 'active',
             'user_id' => Auth::id(),
             'trash' => false,
-        ];
-
-        if (\Illuminate\Support\Facades\Schema::hasColumn('product_batches', 'exchange_rate')) {
-            $payload['exchange_rate'] = $exchangeRate;
-        }
-        if (\Illuminate\Support\Facades\Schema::hasColumn('product_batches', 'unit_cost_currency')) {
-            // Original purchase currency unit cost — never overwrite with AFN ledger cost.
-            $payload['unit_cost_currency'] = $unitCostCurrency;
-        }
-        if (\Illuminate\Support\Facades\Schema::hasColumn('product_batches', 'profit_per_unit_currency')) {
-            $payload['profit_per_unit_currency'] = $profitPerUnitOriginal;
-        }
-        if (\Illuminate\Support\Facades\Schema::hasColumn('product_batches', 'profit_currency_id')) {
-            $payload['profit_currency_id'] = $profitCurrencyId;
-        }
-        if (\Illuminate\Support\Facades\Schema::hasColumn('product_batches', 'profit_currency_code')) {
-            $payload['profit_currency_code'] = $profitCurrencyCode;
-        }
-        if (\Illuminate\Support\Facades\Schema::hasColumn('product_batches', 'profit_per_unit_usd')) {
-            $payload['profit_per_unit_usd'] = $profitPerUnitUsd;
-        }
-        if (\Illuminate\Support\Facades\Schema::hasColumn('product_batches', 'profit_per_unit_aed')) {
-            $payload['profit_per_unit_aed'] = $profitPerUnitAed;
-        }
-
-        return ProductBatch::create($payload);
+        ]);
     }
 
     /**
@@ -1122,11 +1240,16 @@ class ProductController extends Controller
      *     usd: float,
      *     aed: float
      * }  $profitSnap
+     * @param  array{
+     *     usd_to_afn_rate?: mixed,
+     *     aed_to_afn_rate?: mixed,
+     *     usd_to_aed_rate?: mixed,
+     *     rate_effective_at?: mixed,
+     *     rate_source?: mixed
+     * }  $fxSnapshot
      */
-    private function updateProductBatchForPurchase(
-        int $purchaseRowId,
-        int $variantId,
-        int $branchId,
+    private function updateProductBatch(
+        ProductBatch $batch,
         int $newQty,
         int $oldQty,
         float $unitCostAfn,
@@ -1134,75 +1257,43 @@ class ProductController extends Controller
         float $salePriceAfn,
         float $exchangeRate,
         float $profitPerUnitAfn,
-        array $profitSnap,
         float $storeProfitPerUnit,
-        ?int $investorId,
+        ?int $investmentId,
         string $receivedDate,
+        ?string $invoiceNumber = null,
+        ?string $purchaseDate = null,
+        ?string $paymentStatus = null,
+        ?string $billImage = null,
+        ?string $notes = null,
+        ?int $purchaseCurrencyId = null,
+        ?float $purchaseAmountCurrency = null,
     ): void {
-        $batch = ProductBatch::where('purchase_item_id', $purchaseRowId)->first();
-
-        if (! $batch) {
-            if ($newQty > 0) {
-                $this->createProductBatch(
-                    branchId: $branchId,
-                    variantId: $variantId,
-                    purchaseRowId: $purchaseRowId,
-                    investorId: $investorId,
-                    qty: $newQty,
-                    unitCostAfn: $unitCostAfn,
-                    unitCostCurrency: $unitCostCurrency,
-                    salePriceAfn: $salePriceAfn,
-                    exchangeRate: $exchangeRate,
-                    profitPerUnitAfn: $profitPerUnitAfn,
-                    profitPerUnitOriginal: (float) ($profitSnap['original'] ?? 0),
-                    profitCurrencyId: $profitSnap['currency_id'] ?? null,
-                    profitCurrencyCode: (string) ($profitSnap['code'] ?? 'AFN'),
-                    profitPerUnitUsd: (float) ($profitSnap['usd'] ?? 0),
-                    profitPerUnitAed: (float) ($profitSnap['aed'] ?? 0),
-                    storeProfitPerUnit: $storeProfitPerUnit,
-                    receivedDate: $receivedDate,
-                );
-            }
-
-            return;
-        }
-
         $diff = $newQty - $oldQty;
         $newRemaining = max(0, $batch->remaining_quantity + $diff);
 
         $payload = [
             'quantity' => $newQty,
             'remaining_quantity' => $newRemaining,
-            'investor_id' => $investorId,
+            'investment_id' => $investmentId,
             'unit_cost_afn' => $unitCostAfn,
+            'unit_cost_currency' => $unitCostCurrency,
+            'exchange_rate' => $exchangeRate,
             'sale_price_afn' => $salePriceAfn,
-            'total_cost_afn' => $unitCostAfn * $newQty,
             'profit_per_unit_afn' => $profitPerUnitAfn,
             'store_profit_per_unit_afn' => $storeProfitPerUnit,
+            'received_date' => $receivedDate,
+            'purchase_date' => $purchaseDate ?? $receivedDate,
+            'invoice_number' => $invoiceNumber ?? $batch->invoice_number,
+            'payment_status' => $paymentStatus ?? $batch->payment_status,
+            'notes' => $notes ?? $batch->notes,
+            'purchase_currency_id' => $purchaseCurrencyId ?? $batch->purchase_currency_id,
+            'purchase_amount_currency' => $purchaseAmountCurrency ?? $batch->purchase_amount_currency,
             'status' => $newRemaining > 0 ? 'active' : 'depleted',
             'user_id' => Auth::id(),
         ];
 
-        if (\Illuminate\Support\Facades\Schema::hasColumn('product_batches', 'exchange_rate')) {
-            $payload['exchange_rate'] = $exchangeRate;
-        }
-        if (\Illuminate\Support\Facades\Schema::hasColumn('product_batches', 'unit_cost_currency')) {
-            $payload['unit_cost_currency'] = $unitCostCurrency;
-        }
-        if (\Illuminate\Support\Facades\Schema::hasColumn('product_batches', 'profit_per_unit_currency')) {
-            $payload['profit_per_unit_currency'] = (float) ($profitSnap['original'] ?? 0);
-        }
-        if (\Illuminate\Support\Facades\Schema::hasColumn('product_batches', 'profit_currency_id')) {
-            $payload['profit_currency_id'] = $profitSnap['currency_id'] ?? null;
-        }
-        if (\Illuminate\Support\Facades\Schema::hasColumn('product_batches', 'profit_currency_code')) {
-            $payload['profit_currency_code'] = (string) ($profitSnap['code'] ?? 'AFN');
-        }
-        if (\Illuminate\Support\Facades\Schema::hasColumn('product_batches', 'profit_per_unit_usd')) {
-            $payload['profit_per_unit_usd'] = (float) ($profitSnap['usd'] ?? 0);
-        }
-        if (\Illuminate\Support\Facades\Schema::hasColumn('product_batches', 'profit_per_unit_aed')) {
-            $payload['profit_per_unit_aed'] = (float) ($profitSnap['aed'] ?? 0);
+        if ($billImage) {
+            $payload['bill_image'] = $billImage;
         }
 
         $batch->update($payload);
@@ -1273,16 +1364,21 @@ class ProductController extends Controller
 
     private function normalizeVariantData(array $variantData): array
     {
+        // Legacy clients may still post this; column was removed.
+        unset($variantData['minimum_stock']);
+
         $defaults = [
             'volume_ml'           => null,
             'concentration'       => null,
             'purchase_price_afn'  => 0,
+            'purchase_amount'     => 0,
             'sale_price_afn'      => 0,
+            'sale_amount'         => 0,
             'wholesale_price_afn' => 0,
+            'wholesale_amount'    => 0,
             'wholesale_min_qty'   => 0,
             'profit_per_unit'     => 0,
             'stock_quantity'      => 0,
-            'minimum_stock'       => 0,
         ];
 
         foreach ($defaults as $key => $default) {
@@ -1295,10 +1391,27 @@ class ProductController extends Controller
             }
         }
 
+        // Keep entered original amounts aligned when only ledger-named fields are posted.
         foreach ([
-            'volume_ml', 'purchase_price_afn',
-            'sale_price_afn', 'wholesale_price_afn', 'wholesale_min_qty',
-            'profit_per_unit', 'stock_quantity', 'minimum_stock',
+            'purchase' => ['amount' => 'purchase_amount', 'ledger' => 'purchase_price_afn'],
+            'sale' => ['amount' => 'sale_amount', 'ledger' => 'sale_price_afn'],
+            'wholesale' => ['amount' => 'wholesale_amount', 'ledger' => 'wholesale_price_afn'],
+        ] as $pair) {
+            $amount = $variantData[$pair['amount']] ?? null;
+            $ledger = $variantData[$pair['ledger']] ?? null;
+            if (($amount === null || $amount === '' || $amount === 0) && $ledger !== null && $ledger !== '') {
+                $variantData[$pair['amount']] = $ledger;
+            }
+            if (($ledger === null || $ledger === '' || $ledger === 0) && $amount !== null && $amount !== '') {
+                $variantData[$pair['ledger']] = $amount;
+            }
+        }
+
+        foreach ([
+            'volume_ml', 'purchase_price_afn', 'purchase_amount',
+            'sale_price_afn', 'sale_amount',
+            'wholesale_price_afn', 'wholesale_amount', 'wholesale_min_qty',
+            'profit_per_unit', 'stock_quantity',
         ] as $numericField) {
             if (isset($variantData[$numericField]) && $variantData[$numericField] !== null) {
                 $variantData[$numericField] = is_numeric($variantData[$numericField])
@@ -1315,13 +1428,36 @@ class ProductController extends Controller
      */
     private function variantMoneyMap(ProductVariant $variant): array
     {
+        $variant->loadMissing('prices');
+
+        $purchase = $variant->prices->firstWhere(fn ($p) => $p->price_type === 'purchase' && $p->is_active && (int) $p->min_qty === 0)
+            ?? $variant->prices->firstWhere(fn ($p) => $p->price_type === 'purchase' && $p->is_active);
+        $sale = $variant->prices->firstWhere(fn ($p) => $p->price_type === 'sale' && $p->is_active && (int) $p->min_qty === 0)
+            ?? $variant->prices->firstWhere(fn ($p) => $p->price_type === 'sale' && $p->is_active);
+        $wholesale = $variant->prices->where('price_type', 'wholesale')->where('is_active', true)->sortByDesc('min_qty')->first();
+
+        $purchaseAfn = $variant->activePriceAmount('purchase', 'AFN');
+        $saleAfn = $variant->activePriceAmount('sale', 'AFN');
+        $wholesaleAfn = $variant->activePriceAmount('wholesale', 'AFN', max(1, (int) ($wholesale?->min_qty ?? 1)));
+
         return [
-            'purchase_price_afn' => (float) $variant->purchase_price_afn,
-            'purchase_amount' => $variant->purchase_amount ?? $variant->purchase_price_afn,
-            'purchase_currency_id' => $variant->purchase_currency_id,
-            'wholesale_price_afn' => (float) $variant->wholesale_price_afn,
-            'wholesale_min_qty' => (int) $variant->wholesale_min_qty,
-            'sale_price_afn' => (float) $variant->sale_price_afn,
+            'purchase_price_afn' => $purchaseAfn,
+            'purchase_amount' => (float) ($purchase?->amount ?? $purchaseAfn),
+            'purchase_amount_usd' => $variant->activePriceAmount('purchase', 'USD') ?: null,
+            'purchase_amount_aed' => $variant->activePriceAmount('purchase', 'AED') ?: null,
+            'purchase_currency_id' => $purchase?->currency_id,
+            'sale_price_afn' => $saleAfn,
+            'sale_amount' => (float) ($sale?->amount ?? $saleAfn),
+            'sale_amount_usd' => $variant->activePriceAmount('sale', 'USD') ?: null,
+            'sale_amount_aed' => $variant->activePriceAmount('sale', 'AED') ?: null,
+            'sale_currency_id' => $sale?->currency_id,
+            'wholesale_price_afn' => $wholesaleAfn,
+            'wholesale_amount' => (float) ($wholesale?->amount ?? $wholesaleAfn),
+            'wholesale_amount_usd' => $variant->activePriceAmount('wholesale', 'USD', max(1, (int) ($wholesale?->min_qty ?? 1))) ?: null,
+            'wholesale_amount_aed' => $variant->activePriceAmount('wholesale', 'AED', max(1, (int) ($wholesale?->min_qty ?? 1))) ?: null,
+            'wholesale_currency_id' => $wholesale?->currency_id,
+            'wholesale_min_qty' => (int) ($wholesale?->min_qty ?? 0),
+            'catalog_currency_id' => $sale?->currency_id ?? $purchase?->currency_id,
         ];
     }
 
@@ -1396,47 +1532,351 @@ class ProductController extends Controller
     }
 
     /**
-     * Store entered amounts in their currencies and write AFN ledger snapshots.
-     *
-     * @param  array<string, mixed>  $variantData
-     * @return array<string, mixed>
-     */
-    /**
-     * Catalog estimate AFN fields only (current/catalog rates via CurrencyService::toLedger).
+     * Unified catalog pricing: one currency for purchase/sale/wholesale, then AFN/USD/AED via FxBoard.
      *
      * Never substitutes for:
      * - historical purchase cost snapshots (PurchaseValuation / purchase FX board)
      * - sale transaction FX snapshots
      * - investor profit configuration FX (profitViaBoard / batch profit columns)
      * - reporting equivalents built from remaining inventory weighted averages
+     *
+     * @param  array<string, mixed>  $variantData
+     * @param  array{usd_to_afn?: string|float|null, usd_to_aed?: string|float|null, aed_to_afn?: string|float|null, source?: string|null}  $rateOverrides
+     * @return array<string, mixed>
      */
-    private function applyVariantMoney(array $variantData, string $errorPrefix): array
+    private function applyVariantMoney(array $variantData, string $errorPrefix, array $rateOverrides = []): array
     {
-        $pairs = [
-            'purchase' => ['amount' => 'purchase_amount', 'currency' => 'purchase_currency_id', 'ledger' => 'purchase_price_afn'],
-            'sale' => ['amount' => 'sale_amount', 'currency' => 'sale_currency_id', 'ledger' => 'sale_price_afn'],
-            'wholesale' => ['amount' => 'wholesale_amount', 'currency' => 'wholesale_currency_id', 'ledger' => 'wholesale_price_afn'],
-        ];
+        $ledger = Currency::ledger();
+        $fallbackId = $variantData['catalog_currency_id']
+            ?? $variantData['sale_currency_id']
+            ?? $variantData['purchase_currency_id']
+            ?? $variantData['wholesale_currency_id']
+            ?? $ledger?->id;
 
-        foreach ($pairs as $pair) {
-            $entered = $variantData[$pair['amount']] ?? $variantData[$pair['ledger']] ?? 0;
-            $variantData[$pair['amount']] = $entered === '' || $entered === null ? 0 : $entered;
-            $currencyId = $variantData[$pair['currency']] ?? null;
+        $purchaseCurrencyId = $variantData['purchase_currency_id'] ?? $fallbackId;
+        $saleCurrencyId = $variantData['sale_currency_id'] ?? $fallbackId;
+        $wholesaleCurrencyId = $variantData['wholesale_currency_id'] ?? $fallbackId ?? $saleCurrencyId;
 
-            if (empty($currencyId)) {
-                $variantData[$pair['ledger']] = $variantData[$pair['amount']];
-                $variantData[$pair['currency']] = null;
+        if (empty($purchaseCurrencyId) || empty($saleCurrencyId) || empty($wholesaleCurrencyId)) {
+            throw ValidationException::withMessages([
+                $errorPrefix.'.sale_currency_id' => 'Select a pricing currency (AFN, USD, or AED) for each price field.',
+            ]);
+        }
 
-                continue;
+        foreach (
+            [
+                'purchase_currency_id' => $purchaseCurrencyId,
+                'sale_currency_id' => $saleCurrencyId,
+                'wholesale_currency_id' => $wholesaleCurrencyId,
+            ] as $field => $currencyId
+        ) {
+            $currency = $this->currencies->requireActive((int) $currencyId, $errorPrefix.'.'.$field);
+            $code = strtoupper((string) $currency->code);
+            if (! in_array($code, CatalogPriceConverter::SUPPORTED, true)) {
+                throw ValidationException::withMessages([
+                    $errorPrefix.'.'.$field => 'Pricing currency must be AFN, USD, or AED.',
+                ]);
             }
+        }
 
-            $currency = $this->currencies->requireActive((int) $currencyId, $errorPrefix.'.'.$pair['currency']);
-            // Catalog estimate AFN — not a historical purchase/sale snapshot.
-            $variantData[$pair['ledger']] = $this->currencies->toLedger((string) $variantData[$pair['amount']], $currency);
-            $variantData[$pair['currency']] = $currency->id;
+        $converted = $this->catalogPrices->convertIndependentSet(
+            [
+                'purchase' => [
+                    'amount' => $variantData['purchase_amount'] ?? $variantData['purchase_price_afn'] ?? 0,
+                    'currency' => (int) $purchaseCurrencyId,
+                ],
+                'sale' => [
+                    'amount' => $variantData['sale_amount'] ?? $variantData['sale_price_afn'] ?? 0,
+                    'currency' => (int) $saleCurrencyId,
+                ],
+                'wholesale' => [
+                    'amount' => $variantData['wholesale_amount'] ?? $variantData['wholesale_price_afn'] ?? 0,
+                    'currency' => (int) $wholesaleCurrencyId,
+                ],
+            ],
+            $rateOverrides,
+            2,
+            $errorPrefix,
+        );
+
+        // Keep catalog_currency_id as the sale/display currency for legacy list/show consumers.
+        $variantData['catalog_currency_id'] = $converted['sale']['currency_id'];
+        $variantData['purchase_currency_id'] = $converted['purchase']['currency_id'];
+        $variantData['sale_currency_id'] = $converted['sale']['currency_id'];
+        $variantData['wholesale_currency_id'] = $converted['wholesale']['currency_id'];
+
+        $variantData['purchase_amount'] = $converted['purchase']['amount'];
+        $variantData['purchase_price_afn'] = $converted['purchase']['afn'];
+        $variantData['purchase_amount_usd'] = $converted['purchase']['usd'];
+        $variantData['purchase_amount_aed'] = $converted['purchase']['aed'];
+
+        $variantData['sale_amount'] = $converted['sale']['amount'];
+        $variantData['sale_price_afn'] = $converted['sale']['afn'];
+        $variantData['sale_amount_usd'] = $converted['sale']['usd'];
+        $variantData['sale_amount_aed'] = $converted['sale']['aed'];
+
+        $variantData['wholesale_amount'] = $converted['wholesale']['amount'];
+        $variantData['wholesale_price_afn'] = $converted['wholesale']['afn'];
+        $variantData['wholesale_amount_usd'] = $converted['wholesale']['usd'];
+        $variantData['wholesale_amount_aed'] = $converted['wholesale']['aed'];
+
+        foreach ($converted['snapshot'] as $key => $value) {
+            $variantData[$key] = $value;
         }
 
         return $variantData;
+    }
+
+    /**
+     * Persist AFN/USD/AED catalog equivalents into product_prices for PriceResolver.
+     * Reference prices only — never historical transaction amounts.
+     *
+     * @param  array<string, mixed>  $moneyMap
+     */
+    private function syncCatalogEquivalentPrices(Product $product, ProductVariant $variant, array $moneyMap = []): void
+    {
+        $currencyIds = Currency::query()
+            ->notTrashed()
+            ->whereIn('code', CatalogPriceConverter::SUPPORTED)
+            ->where('status', 'active')
+            ->get()
+            ->keyBy(fn (Currency $currency) => strtoupper((string) $currency->code));
+
+        if ($currencyIds->count() < 3) {
+            return;
+        }
+
+        if ($moneyMap === []) {
+            $moneyMap = $this->variantMoneyMap($variant);
+        }
+
+        $minQty = max(0, (int) ($moneyMap['wholesale_min_qty'] ?? 0));
+
+        $matrix = [
+            'purchase' => [
+                'AFN' => $moneyMap['purchase_price_afn'] ?? null,
+                'USD' => $moneyMap['purchase_amount_usd'] ?? null,
+                'AED' => $moneyMap['purchase_amount_aed'] ?? null,
+            ],
+            'sale' => [
+                'AFN' => $moneyMap['sale_price_afn'] ?? null,
+                'USD' => $moneyMap['sale_amount_usd'] ?? null,
+                'AED' => $moneyMap['sale_amount_aed'] ?? null,
+            ],
+            'wholesale' => [
+                'AFN' => $moneyMap['wholesale_price_afn'] ?? null,
+                'USD' => $moneyMap['wholesale_amount_usd'] ?? null,
+                'AED' => $moneyMap['wholesale_amount_aed'] ?? null,
+            ],
+        ];
+
+        foreach ($matrix as $priceType => $byCode) {
+            foreach ($byCode as $code => $amount) {
+                if ($amount === null || $amount === '') {
+                    continue;
+                }
+
+                $currency = $currencyIds->get($code);
+                if (! $currency) {
+                    continue;
+                }
+
+                $qty = $priceType === 'wholesale' ? $minQty : 0;
+
+                ProductPrice::query()->updateOrCreate(
+                    [
+                        'product_id' => $product->id,
+                        'variant_id' => $variant->id,
+                        'price_type' => $priceType,
+                        'currency_id' => $currency->id,
+                        'min_qty' => $qty,
+                    ],
+                    [
+                        'currency_code' => $currency->code,
+                        'amount' => Money::round((string) $amount, 4),
+                        'is_active' => true,
+                        'valid_from' => null,
+                        'valid_to' => null,
+                    ]
+                );
+            }
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $variantData
+     * @return array<string, mixed>
+     */
+    private function onlyVariantColumns(array $variantData): array
+    {
+        return array_intersect_key($variantData, array_flip([
+            'product_id',
+            'user_id',
+            'name',
+            'sku',
+            'image',
+            'volume_ml',
+            'concentration',
+            'trash',
+        ]));
+    }
+
+    /**
+     * @param  array<string, mixed>  $variantData
+     * @return array<string, mixed>
+     */
+    private function moneyMapFromArray(array $variantData): array
+    {
+        return [
+            'purchase_price_afn' => (float) ($variantData['purchase_price_afn'] ?? 0),
+            'purchase_amount' => $variantData['purchase_amount'] ?? ($variantData['purchase_price_afn'] ?? 0),
+            'purchase_amount_usd' => $variantData['purchase_amount_usd'] ?? null,
+            'purchase_amount_aed' => $variantData['purchase_amount_aed'] ?? null,
+            'purchase_currency_id' => $variantData['purchase_currency_id'] ?? null,
+            'sale_price_afn' => (float) ($variantData['sale_price_afn'] ?? 0),
+            'sale_amount' => $variantData['sale_amount'] ?? ($variantData['sale_price_afn'] ?? 0),
+            'sale_amount_usd' => $variantData['sale_amount_usd'] ?? null,
+            'sale_amount_aed' => $variantData['sale_amount_aed'] ?? null,
+            'sale_currency_id' => $variantData['sale_currency_id'] ?? null,
+            'wholesale_price_afn' => (float) ($variantData['wholesale_price_afn'] ?? 0),
+            'wholesale_amount' => $variantData['wholesale_amount'] ?? ($variantData['wholesale_price_afn'] ?? 0),
+            'wholesale_amount_usd' => $variantData['wholesale_amount_usd'] ?? null,
+            'wholesale_amount_aed' => $variantData['wholesale_amount_aed'] ?? null,
+            'wholesale_currency_id' => $variantData['wholesale_currency_id'] ?? null,
+            'wholesale_min_qty' => (int) ($variantData['wholesale_min_qty'] ?? 0),
+            'catalog_currency_id' => $variantData['catalog_currency_id'] ?? null,
+        ];
+    }
+
+    private function syncSupplierInvoiceForBatch(
+        int $supplierId,
+        ProductBatch $batch,
+        float $totalAfn,
+        float $exchangeRate,
+    ): void {
+        $invoiceNo = mb_substr($batch->invoice_number ?: ('B-'.$batch->id), 0, 50);
+        $date = optional($batch->purchase_date)->toDateString() ?: now()->toDateString();
+        $existing = \App\Models\SupplierInvoice::query()
+            ->where('supplier_id', $supplierId)
+            ->where('invoice_no', $invoiceNo)
+            ->whereDate('purchase_date', $date)
+            ->first();
+        $paid = min($totalAfn, round((float) ($existing->paid_afn ?? 0), 2));
+
+        \App\Models\SupplierInvoice::query()->updateOrCreate(
+            [
+                'supplier_id' => $supplierId,
+                'invoice_no' => $invoiceNo,
+                'purchase_date' => $date,
+            ],
+            [
+                'exchange_rate' => round($exchangeRate, 2),
+                'total_afn' => round($totalAfn, 2),
+                'paid_afn' => $paid,
+                'due_afn' => round(max(0, $totalAfn - $paid), 2),
+                'notes' => $batch->notes,
+                'bill_image' => $existing->bill_image ?? $batch->bill_image,
+                'created_by' => $existing->created_by ?? Auth::id(),
+            ]
+        );
+    }
+
+    private function applyPaidNowToBatch(
+        ProductBatch $batch,
+        int $supplierId,
+        float $paidNow,
+        float $exchangeRate = 0,
+    ): void {
+        if ($paidNow <= 0) {
+            return;
+        }
+
+        $invoiceNo = mb_substr($batch->invoice_number ?: ('B-'.$batch->id), 0, 50);
+        $invoice = \App\Models\SupplierInvoice::query()
+            ->where('supplier_id', $supplierId)
+            ->where('invoice_no', $invoiceNo)
+            ->first();
+
+        $invoice?->takePayment(
+            $paidNow,
+            optional($batch->purchase_date)->toDateString() ?: now()->toDateString(),
+            $exchangeRate,
+            'Paid on purchase',
+            Auth::id(),
+        );
+    }
+
+    /**
+     * Snapshot board rates from the central exchange_rates table for purchase/catalog valuation.
+     * Never silently falls back to 1:1 or an empty board — missing rates must fail loudly.
+     *
+     * @return array{usd_to_afn: string, aed_to_afn: string, usd_to_aed: string, source: string, effective_at?: string|null}
+     */
+    private function boardRateOverridesFromExchangeService(): array
+    {
+        try {
+            $usd = $this->exchange->snapshot('USD', 'AFN');
+            $aed = $this->exchange->snapshot('AED', 'AFN');
+            $current = $this->exchange->getCurrentRates();
+
+            $usdRate = (string) $usd['rate'];
+            $aedRate = (string) $aed['rate'];
+            $usdToAed = (string) $current['usd_to_aed'];
+
+            if ((float) $usdRate <= 0 || (float) $aedRate <= 0 || (float) $usdToAed <= 0) {
+                throw ValidationException::withMessages([
+                    'exchange_rate' => 'Exchange board rates must be greater than zero. Post USD→AFN and AED→AFN on the Exchange Rates page.',
+                ]);
+            }
+
+            return [
+                'usd_to_afn' => $usdRate,
+                'aed_to_afn' => $aedRate,
+                'usd_to_aed' => $usdToAed,
+                'source' => (string) ($usd['source'] ?? 'exchange_rates'),
+                'effective_at' => $usd['effective_at'] ?? $aed['effective_at'] ?? null,
+            ];
+        } catch (ValidationException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('Failed to load exchange board rates for product valuation.', [
+                'error' => $e->getMessage(),
+            ]);
+
+            throw ValidationException::withMessages([
+                'exchange_rate' => 'Could not load exchange rates from the exchange_rates table. Post rates on the Exchange Rates page and try again.',
+            ]);
+        }
+    }
+
+    /**
+     * Convert a catalog money amount to AFN using catalog rates, falling back to board overrides.
+     *
+     * @param  array{usd_to_afn?: string|float|null, usd_to_aed?: string|float|null, aed_to_afn?: string|float|null, source?: string|null}  $rateOverrides
+     */
+    private function catalogAmountToLedger(
+        string $amount,
+        \App\Models\Currency $currency,
+        string $field,
+        array $rateOverrides = [],
+    ): string {
+        try {
+            return $this->currencies->toLedger($amount, $currency);
+        } catch (\Illuminate\Validation\ValidationException $catalogError) {
+            if ($rateOverrides === [] || empty($rateOverrides['usd_to_afn'])) {
+                throw $catalogError;
+            }
+
+            $ledger = \App\Models\Currency::ledger();
+            $board = $this->currencies->boardAt(null, $rateOverrides, allowCatalogFallback: false);
+            $eq = $board->equivalents(
+                \App\Support\Money::round($amount, 4),
+                strtoupper((string) $currency->code),
+                (int) ($ledger?->decimal_places ?? 2),
+            );
+
+            return $eq['afn'];
+        }
     }
 
     /**
@@ -1468,7 +1908,7 @@ class ProductController extends Controller
             ? $this->currencies->requireActive((int) $currencyId, $field)
             : $ledger;
 
-        $board = $this->currencies->boardAt($at, $rateOverrides, allowCatalogFallback: true);
+        $board = $this->currencies->boardAt($at, $rateOverrides, allowCatalogFallback: false);
         $code = strtoupper((string) ($currency?->code ?? 'AFN'));
         $eq = $board->equivalents(\App\Support\Money::round((string) $amount, 4), $code, 4);
 
@@ -1486,6 +1926,67 @@ class ProductController extends Controller
     private function profitToLedger(float $amount, mixed $currencyId, string $field): float
     {
         return $this->profitViaBoard($amount, $currencyId, $field)['afn'];
+    }
+
+    /**
+     * Sync per-currency product_prices rows for a variant.
+     * Rows submitted with _delete / is_active=0 are deactivated (not hard-deleted).
+     * Rows omitted from the form are left untouched.
+     *
+     * @param  list<array<string, mixed>>  $prices
+     */
+    private function syncVariantPrices(Product $product, ProductVariant $variant, array $prices): void
+    {
+        if ($prices === []) {
+            return;
+        }
+
+        foreach ($prices as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
+            $currencyId = (int) ($row['currency_id'] ?? 0);
+            if ($currencyId <= 0) {
+                continue;
+            }
+
+            $currency = Currency::query()->notTrashed()->find($currencyId);
+            if (! $currency) {
+                continue;
+            }
+
+            $priceType = (string) ($row['price_type'] ?? 'sale');
+            if (! in_array($priceType, ['purchase', 'sale', 'wholesale'], true)) {
+                $priceType = 'sale';
+            }
+
+            $minQty = max(0, (int) ($row['min_qty'] ?? 0));
+            $delete = ! empty($row['_delete']) || (isset($row['is_active']) && filter_var($row['is_active'], FILTER_VALIDATE_BOOLEAN) === false && ! empty($row['id']));
+            $isActive = $delete ? false : filter_var($row['is_active'] ?? true, FILTER_VALIDATE_BOOLEAN);
+            $amount = round((float) ($row['amount'] ?? 0), 4);
+
+            if ($amount < 0) {
+                continue;
+            }
+
+            ProductPrice::query()->updateOrCreate(
+                [
+                    'product_id' => $product->id,
+                    'variant_id' => $variant->id,
+                    'price_type' => $priceType,
+                    'currency_id' => $currency->id,
+                    'min_qty' => $minQty,
+                ],
+                [
+                    'currency_code' => $currency->code,
+                    'amount' => $amount,
+                    'is_active' => $isActive,
+                    'valid_from' => $row['valid_from'] ?? null,
+                    'valid_to' => $row['valid_to'] ?? null,
+                ]
+            );
+        }
     }
 
     private function syncBarcodes(ProductVariant $variant, array $barcodes): void
@@ -1543,76 +2044,60 @@ class ProductController extends Controller
                 'barcode_type'  => $data['barcode_type'] ?? 'EAN13',
                 'is_primary'    => ! empty($data['is_primary']),
                 'status'        => $data['status'] ?? 'active',
-                'current_stock' => (int) ($data['current_stock'] ?? 0),
             ];
 
             if ($existing->has($barcode)) {
+                // Inventory / batches are authoritative — never rewrite stock from product CRUD.
                 $existing->get($barcode)->update($payload);
             } else {
                 ProductBarcode::create(array_merge($payload, [
-                    'variant_id' => $variant->id,
-                    'barcode'    => $barcode,
+                    'variant_id'    => $variant->id,
+                    'barcode'       => $barcode,
+                    'current_stock' => 0,
                 ]));
             }
         }
     }
 
     /**
-     * ⭐ Sync purchases + batch + inventory — ✅ با سود دوکان
+     * Sync purchase batches + inventory for product update.
+     *
+     * @param  array{usd_to_afn?: string|float|null, aed_to_afn?: string|float|null, usd_to_aed?: string|float|null, source?: string|null}  $rateOverrides
      */
     private function syncPurchases(
         Product $product,
         array $purchasesData,
         array $variantIndexToId,
-        array $variantDataMap = []
+        array $variantDataMap = [],
+        array $rateOverrides = [],
     ): void {
-        $existingIds = [];
-        $branchId    = $this->getBranchId();
+        $keptBatchIds = [];
+        $branchId = $this->getBranchId();
 
         foreach ($purchasesData as $index => $purchaseData) {
             $variantIndex = $purchaseData['variant_index'] ?? null;
             $variantIndex = is_numeric($variantIndex) ? (int) $variantIndex : null;
-
-            $variantId = $variantIndex !== null
-                ? ($variantIndexToId[$variantIndex] ?? null)
-                : null;
-
+            $variantId = $variantIndex !== null ? ($variantIndexToId[$variantIndex] ?? null) : null;
             if (! $variantId) {
                 continue;
             }
 
             $billImage = null;
             if (request()->hasFile("purchases.{$index}.bill_image")) {
-                $billImage = request()->file("purchases.{$index}.bill_image")
-                    ->store('bills', 'public');
+                $billImage = request()->file("purchases.{$index}.bill_image")->store('bills', 'public');
             }
 
-            $purchaseId = $purchaseData['id'] ?? null;
+            $batchId = $purchaseData['id'] ?? null;
             $profitCurrencyId = $purchaseData['profit_currency_id'] ?? null;
-            unset(
-                $purchaseData['id'],
-                $purchaseData['variant_index'],
-                $purchaseData['profit_currency_id']
-            );
-
             $qty = (float) ($purchaseData['quantity'] ?? 1);
             $exchangeRate = (float) ($purchaseData['exchange_rate'] ?? 0);
             $purchaseDate = $purchaseData['purchase_date'] ?? now()->toDateString();
+            $rateAt = \Illuminate\Support\Carbon::parse($purchaseDate)->endOfDay();
 
             $investorId = $purchaseData['investor_id'] ?? null;
             if (empty($investorId) || $investorId === 'store' || $investorId === 'none') {
                 $investorId = null;
             }
-
-            $profitSnap = $investorId
-                ? $this->profitViaBoard(
-                    (float) ($purchaseData['profit_per_unit'] ?? 0),
-                    $profitCurrencyId,
-                    "purchases.{$index}.profit_currency_id",
-                    $purchaseDate,
-                )
-                : $this->profitViaBoard(0, null, "purchases.{$index}.profit_currency_id");
-            $profitUnit = $profitSnap['afn'];
 
             $supplierId = $purchaseData['supplier_id'] ?? null;
             if (empty($supplierId) || $supplierId === 'none') {
@@ -1620,7 +2105,6 @@ class ProductController extends Controller
             }
 
             $variantInfo = $variantDataMap[$variantIndex] ?? $this->emptyVariantMoneyMap();
-
             if (($variantInfo['purchase_price_afn'] ?? 0) <= 0) {
                 $variant = ProductVariant::find($variantId);
                 if ($variant) {
@@ -1628,219 +2112,201 @@ class ProductController extends Controller
                 }
             }
 
+            $profitCurrencyId = $profitCurrencyId ?: ($variantInfo['purchase_currency_id'] ?? null);
+            $profitSnap = $investorId
+                ? $this->profitViaBoard(
+                    (float) ($purchaseData['profit_per_unit'] ?? 0),
+                    $profitCurrencyId,
+                    "purchases.{$index}.profit_currency_id",
+                    $rateAt,
+                    $rateOverrides,
+                )
+                : $this->profitViaBoard(0, null, "purchases.{$index}.profit_currency_id");
+            $profitUnit = $profitSnap['afn'];
+
             $money = $this->purchaseMoneyFromVariant(
                 $variantInfo,
                 (int) $qty,
                 $exchangeRate > 0 ? (string) $exchangeRate : null,
-                $purchaseDate,
+                $rateAt,
+                $rateOverrides,
             );
             $purchasePricePerUnit = (float) $money['unit_cost_afn'];
             $salePricePerUnit = (float) ($variantInfo['sale_price_afn'] ?? 0);
             $purchasePriceAfn = (float) $money['line_cost_afn'];
-
-            $lineProfit = $profitUnit * $qty;
             $storeProfitUnit = round($salePricePerUnit - $purchasePricePerUnit - $profitUnit, 2);
-            $lineStoreProfit = round($storeProfitUnit * $qty, 2);
 
-            $rowData = array_merge([
-                'name' => $product->name,
-                'brand_id' => $product->brand_id,
-                'gender' => $product->gender,
-                'status' => $product->status,
-                'description' => $product->description,
-                'user_id' => Auth::id(),
-                'variant_id' => $variantId,
-                'investor_id' => $investorId,
-                'supplier_id' => $supplierId,
-                'invoice_number' => $purchaseData['invoice_number'] ?? null,
-                'purchase_date' => $purchaseData['purchase_date'] ?? now()->toDateString(),
-                'quantity' => (int) $qty,
-                'remaining_quantity' => (int) $qty,
-                'purchase_price_afn' => $purchasePriceAfn,
-                'wholesale_price_afn' => $variantInfo['wholesale_price_afn'],
-                'wholesale_min_qty' => $variantInfo['wholesale_min_qty'],
-
-                // ✅ Investor profit
-                'profit_per_unit' => $profitUnit,
-                'profit_currency_id' => $profitSnap['currency_id'],
-                'profit_currency_code' => $profitSnap['code'],
-                'line_total'      => $purchasePriceAfn,
-                'line_profit'     => $lineProfit,
-
-                // ✅ Store profit (جدید)
-                'store_profit_per_unit' => $storeProfitUnit,
-                'line_store_profit'     => $lineStoreProfit,
-
-                'notes' => $purchaseData['notes'] ?? null,
-                'payment_status' => $purchaseData['payment_status'] ?? 'unpaid',
-            ], $this->purchaseSnapshotColumns($money));
-
-            if ($billImage) {
-                $rowData['bill_image'] = $billImage;
+            $investmentId = null;
+            if ($investorId) {
+                $existingBatch = $batchId ? ProductBatch::query()->find($batchId) : null;
+                $investmentId = $existingBatch?->investment_id;
+                if (! $investmentId) {
+                    $investment = Investment::createFromPurchase([
+                        'investor_id' => (int) $investorId,
+                        'currency_id' => $money['purchase_currency_id'] ?? null,
+                        'amount_currency' => $money['purchase_line_amount'] ?? $purchasePriceAfn,
+                        'amount_afn' => $purchasePriceAfn,
+                        'exchange_rate' => $money['rate_to_ledger'] ?? null,
+                        'investment_date' => $purchaseDate,
+                        'notes' => 'Auto-created on product update',
+                        'created_by' => Auth::id(),
+                    ]);
+                    $investmentId = $investment->id;
+                }
             }
 
-            if ($purchaseId) {
-                /* ═══ Update existing ═══ */
-                $existing = Product::where('id', $purchaseId)
-                    ->whereNotNull('variant_id')
-                    ->first();
+            $existing = $batchId
+                ? ProductBatch::query()->whereKey($batchId)->where('trash', false)->first()
+                : null;
 
-                if ($existing) {
-                    $oldQty = (int) $existing->quantity;
-                    $newQty = (int) $qty;
-                    $diff   = $newQty - $oldQty;
+            if ($existing) {
+                $oldQty = (int) $existing->quantity;
+                $newQty = (int) $qty;
+                $diff = $newQty - $oldQty;
 
-                    if ($billImage && $existing->bill_image && Storage::disk('public')->exists($existing->bill_image)) {
-                        Storage::disk('public')->delete($existing->bill_image);
-                    }
+                if ($billImage && $existing->bill_image && Storage::disk('public')->exists($existing->bill_image)) {
+                    Storage::disk('public')->delete($existing->bill_image);
+                }
 
-                    $existing->update($rowData);
-                    $existingIds[] = $existing->id;
+                $this->updateProductBatch(
+                    batch: $existing,
+                    newQty: $newQty,
+                    oldQty: $oldQty,
+                    unitCostAfn: $purchasePricePerUnit,
+                    unitCostCurrency: (float) $money['purchase_unit_amount'],
+                    salePriceAfn: $salePricePerUnit,
+                    exchangeRate: (float) $money['rate_to_ledger'],
+                    profitPerUnitAfn: $profitUnit,
+                    storeProfitPerUnit: $storeProfitUnit,
+                    investmentId: $investmentId,
+                    receivedDate: $purchaseDate,
+                    invoiceNumber: $purchaseData['invoice_number'] ?? $existing->invoice_number,
+                    purchaseDate: $purchaseDate,
+                    paymentStatus: $purchaseData['payment_status'] ?? $existing->payment_status,
+                    billImage: $billImage,
+                    notes: $purchaseData['notes'] ?? $existing->notes,
+                    purchaseCurrencyId: $money['purchase_currency_id'] ?? null,
+                    purchaseAmountCurrency: isset($money['purchase_line_amount'])
+                        ? (float) $money['purchase_line_amount']
+                        : null,
+                );
+                $keptBatchIds[] = $existing->id;
 
-                    $this->updateProductBatchForPurchase(
-                        purchaseRowId: $existing->id,
-                        variantId: $variantId,
+                if ($diff > 0) {
+                    Inventory::increase(
                         branchId: $branchId,
-                        newQty: $newQty,
-                        oldQty: $oldQty,
-                        unitCostAfn: $purchasePricePerUnit,
-                        unitCostCurrency: (float) $money['purchase_unit_amount'],
-                        salePriceAfn: $salePricePerUnit,
-                        exchangeRate: (float) $money['rate_to_ledger'],
-                        profitPerUnitAfn: $profitUnit,
-                        profitSnap: $profitSnap,
-                        storeProfitPerUnit: $storeProfitUnit,
-                        investorId: $investorId,
-                        receivedDate: $purchaseDate,
+                        variantId: $variantId,
+                        qty: $diff,
+                        type: 'adjustment',
+                        batchId: $existing->id,
+                        notes: "Purchase updated: qty {$oldQty} → {$newQty}",
+                        unitCostAfn: $purchasePricePerUnit
                     );
-
-                    /* ⭐ آپدیت inventory */
-                    if ($diff !== 0) {
-                        if ($diff > 0) {
-                            Inventory::increase(
-                                branchId: $branchId,
-                                variantId: $variantId,
-                                qty: $diff,
-                                type: 'adjustment',
-                                referenceType: Product::class,
-                                referenceId: $existing->id,
-                                notes: "Purchase updated: qty {$oldQty} → {$newQty}",
-                                unitCostAfn: $purchasePricePerUnit
-                            );
-                        } else {
-                            Inventory::decrease(
-                                branchId: $branchId,
-                                variantId: $variantId,
-                                qty: abs($diff),
-                                type: 'adjustment',
-                                referenceType: Product::class,
-                                referenceId: $existing->id,
-                                notes: "Purchase updated: qty {$oldQty} → {$newQty}"
-                            );
-                        }
-                    }
+                } elseif ($diff < 0) {
+                    Inventory::decrease(
+                        branchId: $branchId,
+                        variantId: $variantId,
+                        qty: abs($diff),
+                        type: 'adjustment',
+                        batchId: $existing->id,
+                        notes: "Purchase updated: qty {$oldQty} → {$newQty}"
+                    );
                 }
             } else {
-                /* ═══ Create new ═══ */
-                $variant = ProductVariant::find($variantId);
-
-                if ($variant) {
-                    $oldPurchasePrice = (float) $variant->purchase_price_afn;
-                    $newPurchasePrice = (float) $variantInfo['purchase_price_afn'];
-
-                    if ($oldPurchasePrice > 0 && $oldPurchasePrice != $newPurchasePrice) {
-                        $this->recordPriceChange(
-                            variant:     $variant,
-                            oldPurchase: $oldPurchasePrice,
-                            newPurchase: $newPurchasePrice,
-                            oldSale:     (float) $variant->sale_price_afn,
-                            newSale:     (float) $variant->sale_price_afn,
-                            reason:      'New purchase with different price',
-                        );
-                    }
-                }
-
-                $row = Product::create($rowData);
-                $this->applyPaidNow($row, (float) ($purchaseData['paid_now'] ?? 0));
-                $existingIds[] = $row->id;
-
-                $this->createProductBatch(
+                $batch = $this->createProductBatch(
                     branchId: $branchId,
                     variantId: $variantId,
-                    purchaseRowId: $row->id,
-                    investorId: $investorId,
+                    investmentId: $investmentId,
                     qty: (int) $qty,
                     unitCostAfn: $purchasePricePerUnit,
                     unitCostCurrency: (float) $money['purchase_unit_amount'],
                     salePriceAfn: $salePricePerUnit,
                     exchangeRate: (float) $money['rate_to_ledger'],
                     profitPerUnitAfn: $profitUnit,
-                    profitPerUnitOriginal: (float) $profitSnap['original'],
-                    profitCurrencyId: $profitSnap['currency_id'],
-                    profitCurrencyCode: (string) $profitSnap['code'],
-                    profitPerUnitUsd: (float) $profitSnap['usd'],
-                    profitPerUnitAed: (float) $profitSnap['aed'],
                     storeProfitPerUnit: $storeProfitUnit,
                     receivedDate: $purchaseDate,
+                    invoiceNumber: $purchaseData['invoice_number'] ?? null,
+                    purchaseDate: $purchaseDate,
+                    paymentStatus: $purchaseData['payment_status'] ?? ($supplierId ? 'unpaid' : 'paid'),
+                    billImage: $billImage,
+                    notes: $purchaseData['notes'] ?? null,
+                    purchaseCurrencyId: $money['purchase_currency_id'] ?? null,
+                    purchaseAmountCurrency: isset($money['purchase_line_amount'])
+                        ? (float) $money['purchase_line_amount']
+                        : null,
                 );
+                $keptBatchIds[] = $batch->id;
+
+                if ($supplierId) {
+                    $this->syncSupplierInvoiceForBatch(
+                        (int) $supplierId,
+                        $batch,
+                        $purchasePriceAfn,
+                        (float) ($money['rate_to_ledger'] ?? 0),
+                    );
+                    $this->applyPaidNowToBatch(
+                        $batch,
+                        (int) $supplierId,
+                        (float) ($purchaseData['paid_now'] ?? 0),
+                        (float) ($money['rate_to_ledger'] ?? 0),
+                    );
+                }
 
                 Inventory::increase(
                     branchId: $branchId,
                     variantId: $variantId,
                     qty: (int) $qty,
                     type: 'purchase',
-                    referenceType: Product::class,
-                    referenceId: $row->id,
+                    batchId: $batch->id,
+                    referenceType: ProductBatch::class,
+                    referenceId: $batch->id,
                     notes: "New purchase — {$product->name}",
                     unitCostAfn: $purchasePricePerUnit
                 );
             }
         }
 
-        /* ⭐ حذف purchase های حذف‌شده + batch + inventory */
         $variantIds = array_values($variantIndexToId);
-
-        if (! empty($variantIds)) {
-            Product::whereIn('variant_id', $variantIds)
-                ->whereNotIn('id', $existingIds)
+        if ($variantIds !== []) {
+            ProductBatch::query()
+                ->whereIn('variant_id', $variantIds)
+                ->where('trash', false)
+                ->when($keptBatchIds !== [], fn ($q) => $q->whereNotIn('id', $keptBatchIds))
+                ->when($keptBatchIds === [], fn ($q) => $q)
                 ->get()
-                ->each(function ($p) use ($branchId) {
-                    if ((int) $p->remaining_quantity > 0) {
+                ->each(function (ProductBatch $batch) use ($branchId) {
+                    if ((int) $batch->remaining_quantity > 0) {
                         Inventory::decrease(
                             branchId: $branchId,
-                            variantId: $p->variant_id,
-                            qty: (int) $p->remaining_quantity,
+                            variantId: (int) $batch->variant_id,
+                            qty: (int) $batch->remaining_quantity,
                             type: 'adjustment',
-                            referenceType: Product::class,
-                            referenceId: $p->id,
-                            notes: "Purchase removed (remaining: {$p->remaining_quantity})"
+                            batchId: $batch->id,
+                            notes: "Purchase removed (remaining: {$batch->remaining_quantity})"
                         );
                     }
-
-                    ProductBatch::where('purchase_item_id', $p->id)
-                        ->update(['trash' => true, 'user_id' => Auth::id()]);
-
-                    $p->update(['trash' => true, 'user_id' => Auth::id()]);
+                    $batch->update(['trash' => true, 'user_id' => Auth::id()]);
                 });
         }
     }
 
-    private function applyPaidNow(Product $purchase, float $paidNow): void
+    /** @deprecated Use applyPaidNowToBatch */
+    private function applyPaidNow(ProductBatch $purchase, ?int $supplierId, float $paidNow, float $exchangeRate = 0): void
     {
-        if ($paidNow <= 0 || ! $purchase->supplier_id) {
+        if ($paidNow <= 0 || ! $supplierId) {
             return;
         }
 
         $invoiceNo = mb_substr($purchase->invoice_number ?: ('P-'.$purchase->id), 0, 50);
         $invoice = \App\Models\SupplierInvoice::query()
-            ->where('supplier_id', $purchase->supplier_id)
+            ->where('supplier_id', $supplierId)
             ->where('invoice_no', $invoiceNo)
             ->first();
 
         $invoice?->takePayment(
             $paidNow,
             optional($purchase->purchase_date)->toDateString() ?: now()->toDateString(),
-            (float) ($purchase->exchange_rate ?? 0),
+            $exchangeRate,
             'Paid on purchase',
             Auth::id(),
         );
@@ -1872,19 +2338,86 @@ class ProductController extends Controller
             });
     }
 
-    /**
-     * ⭐ Refresh cached stock_quantity
-     */
+    /** Inventories is the stock source of truth — no variant cache to refresh. */
     private function refreshVariantStock(Product $product): void
     {
-        $product->variants()->get()->each(function (ProductVariant $variant) {
-            $totalStock = Product::where('variant_id', $variant->id)
-                ->where('trash', false)
-                ->sum('remaining_quantity');
+        // no-op
+    }
 
-            $variant->update([
-                'stock_quantity' => (int) $totalStock,
-            ]);
-        });
+    /**
+     * Map product_prices onto familiar catalog money keys for Inertia UI.
+     */
+    private function attachVariantCatalogMoney(ProductVariant $variant): void
+    {
+        $money = $this->variantMoneyMap($variant);
+        foreach ($money as $key => $value) {
+            $variant->setAttribute($key, $value);
+        }
+    }
+
+    /**
+     * Map batch cost/FX/profit onto a purchase shell for Inertia UI.
+     */
+    private function attachPurchaseBatchMoney(Product $row, ?ProductBatch $batch): void
+    {
+        $row->setAttribute('variant_id', $batch?->variant_id);
+        $row->setAttribute('investor_id', $batch?->investor_id);
+        $row->setAttribute('purchase_price_afn', $batch?->total_cost_afn);
+        $row->setAttribute('unit_cost_afn', $batch?->unit_cost_afn);
+        $row->setAttribute('total_cost_afn', $batch?->total_cost_afn);
+        $row->setAttribute('profit_per_unit', $batch?->profit_per_unit_afn);
+        $row->setAttribute('store_profit_per_unit', $batch?->store_profit_per_unit_afn);
+        $row->setAttribute('sale_price_afn', $batch?->sale_price_afn);
+        $row->setAttribute('exchange_rate', $batch?->exchange_rate);
+        $row->setAttribute('usd_to_afn_rate', $batch?->usd_to_afn_rate);
+        $row->setAttribute('aed_to_afn_rate', $batch?->aed_to_afn_rate);
+        $row->setAttribute('usd_to_aed_rate', $batch?->usd_to_aed_rate);
+        $row->setAttribute('rate_effective_at', $batch?->rate_effective_at);
+        $row->setAttribute('rate_source', $batch?->rate_source);
+        $row->setAttribute('purchase_unit_amount', $batch?->unit_cost_currency);
+        $row->setAttribute('profit_currency_id', $batch?->profit_currency_id);
+        $row->setAttribute('profit_currency_code', $batch?->profit_currency_code);
+        $row->setRelation('variant', $batch?->variant);
+        $row->setRelation('investor', $batch?->investor);
+    }
+
+    /**
+     * Purchase shells linked to this catalog product via product_batches.variant_id.
+     *
+     * @param  \Illuminate\Support\Collection<int, int>|array<int, int>  $variantIds
+     * @return \Illuminate\Support\Collection<int, Product>
+     */
+    private function purchasesForVariants($variantIds, array $with = [])
+    {
+        $ids = collect($variantIds)->filter()->unique()->values();
+        if ($ids->isEmpty()) {
+            return collect();
+        }
+
+        $purchaseIds = ProductBatch::query()
+            ->whereIn('variant_id', $ids->all())
+            ->whereNotNull('purchase_item_id')
+            ->where('trash', false)
+            ->pluck('purchase_item_id')
+            ->unique()
+            ->all();
+
+        if ($purchaseIds === []) {
+            return collect();
+        }
+
+        $relations = array_merge([
+            'purchaseBatches' => fn ($q) => $q
+                ->whereIn('variant_id', $ids->all())
+                ->where('trash', false),
+        ], $with);
+
+        return Product::query()
+            ->whereIn('id', $purchaseIds)
+            ->whereNotNull('purchase_date')
+            ->where('trash', false)
+            ->with($relations)
+            ->orderByDesc('purchase_date')
+            ->get();
     }
 }

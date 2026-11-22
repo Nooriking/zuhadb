@@ -125,7 +125,6 @@ class FullScenarioSeeder extends Seeder
                 'wholesale_min_qty' => 6,
                 'profit_per_unit' => 200,
                 'stock_quantity' => $qty,
-                'minimum_stock' => 2,
                 'trash' => false,
             ]);
 

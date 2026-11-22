@@ -16,60 +16,33 @@ class ProductVariant extends Model
 
     protected $fillable = [
         'product_id',
-        // ❌ 'description' حذف شد
+        'user_id',
+        'name',
+        'sku',
         'image',
         'volume_ml',
         'concentration',
-        'name',
-        'sku',
-
-        // Prices
-        'purchase_price_afn',
-        'purchase_amount',
-        'purchase_currency_id',
-        'sale_price_afn',
-        'sale_amount',
-        'sale_currency_id',
-        'wholesale_price_afn',
-        'wholesale_amount',
-        'wholesale_currency_id',
-        'wholesale_min_qty',
-        'profit_per_unit',
-        'stock_quantity',
-        'minimum_stock',
-
         'trash',
-        'user_id',
     ];
 
     protected $casts = [
-        'volume_ml'            => 'integer',
-        'purchase_price_afn'   => 'decimal:2',
-        'purchase_amount'      => 'decimal:2',
-        'sale_price_afn'       => 'decimal:2',
-        'sale_amount'          => 'decimal:2',
-        'wholesale_price_afn'  => 'decimal:2',
-        'wholesale_amount'     => 'decimal:2',
-        'wholesale_min_qty'    => 'integer',
-        'profit_per_unit'      => 'decimal:2',
-        'stock_quantity'       => 'integer',
-        'minimum_stock'        => 'integer',
-        'trash'                => 'boolean',
-        'created_at'           => 'datetime',
-        'updated_at'           => 'datetime',
-        'deleted_at'           => 'datetime',
+        'volume_ml' => 'integer',
+        'trash' => 'boolean',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+        'deleted_at' => 'datetime',
     ];
 
     public const CONCENTRATIONS = [
-        'parfum'     => 'Parfum',
-        'edp'        => 'Eau de Parfum (EDP)',
-        'edt'        => 'Eau de Toilette (EDT)',
-        'edc'        => 'Eau de Cologne (EDC)',
+        'parfum' => 'Parfum',
+        'edp' => 'Eau de Parfum (EDP)',
+        'edt' => 'Eau de Toilette (EDT)',
+        'edc' => 'Eau de Cologne (EDC)',
         'edt_legere' => 'EDT Légère',
-        'body_mist'  => 'Body Mist',
-        'attar'      => 'Attar',
-        'oud'        => 'Oud',
-        'other'      => 'Other',
+        'body_mist' => 'Body Mist',
+        'attar' => 'Attar',
+        'oud' => 'Oud',
+        'other' => 'Other',
     ];
 
     /* =========================================================
@@ -81,37 +54,29 @@ class ProductVariant extends Model
         return $this->belongsTo(Product::class, 'product_id');
     }
 
-    public function purchaseCurrency(): BelongsTo
-    {
-        return $this->belongsTo(Currency::class, 'purchase_currency_id');
-    }
-
-    public function saleCurrency(): BelongsTo
-    {
-        return $this->belongsTo(Currency::class, 'sale_currency_id');
-    }
-
-    public function wholesaleCurrency(): BelongsTo
-    {
-        return $this->belongsTo(Currency::class, 'wholesale_currency_id');
-    }
-
     public function barcodes(): HasMany
     {
         return $this->hasMany(ProductBarcode::class, 'variant_id');
     }
 
+    public function prices(): HasMany
+    {
+        return $this->hasMany(ProductPrice::class, 'variant_id');
+    }
+
+    public function batches(): HasMany
+    {
+        return $this->hasMany(ProductBatch::class, 'variant_id');
+    }
+
+    public function inventories(): HasMany
+    {
+        return $this->hasMany(Inventory::class, 'variant_id');
+    }
+
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'user_id');
-    }
-
-    /**
-     * Purchases (each Product row with this variant_id is a purchase batch).
-     */
-    public function purchases(): HasMany
-    {
-        return $this->hasMany(Product::class, 'variant_id');
     }
 
     /* =========================================================
@@ -129,7 +94,34 @@ class ProductVariant extends Model
     }
 
     /* =========================================================
-     |  Accessors
+     |  Stock (inventories is the source of truth)
+     ========================================================= */
+
+    public function availableQuantity(?int $branchId = null): int
+    {
+        return (int) $this->inventories()
+            ->when($branchId, fn ($q) => $q->where('branch_id', $branchId))
+            ->sum('available_quantity');
+    }
+
+    public function getAvailableQuantityAttribute(): int
+    {
+        return $this->availableQuantity();
+    }
+
+    public function getTotalStockAttribute(): int
+    {
+        return $this->availableQuantity();
+    }
+
+    /** @deprecated Use availableQuantity() — inventories is the source of truth. */
+    public function getStockQuantityAttribute(): int
+    {
+        return $this->availableQuantity();
+    }
+
+    /* =========================================================
+     |  Accessors / pricing helpers (via product_prices)
      ========================================================= */
 
     public function getFullNameAttribute(): string
@@ -140,20 +132,13 @@ class ProductVariant extends Model
             $parts[] = $this->product->name;
         }
         if ($this->volume_ml) {
-            $parts[] = $this->volume_ml . 'ml';
+            $parts[] = $this->volume_ml.'ml';
         }
         if ($this->concentration) {
             $parts[] = strtoupper($this->concentration);
         }
 
-        return implode(' · ', $parts) ?: 'Variant #' . $this->id;
-    }
-
-    public function getTotalStockAttribute(): int
-    {
-        return (int) $this->purchases()
-            ->where('trash', false)
-            ->sum('remaining_quantity');
+        return implode(' · ', $parts) ?: 'Variant #'.$this->id;
     }
 
     public function getPrimaryBarcodeAttribute(): ?ProductBarcode
@@ -162,21 +147,148 @@ class ProductVariant extends Model
             ?? $this->barcodes()->first();
     }
 
-    public function getPriceForQuantity(int $qty): float
+    public function activePriceAmount(string $type = 'sale', string $currencyCode = 'AFN', int $qty = 1): float
     {
-        if (
-            $this->wholesale_min_qty > 0
-            && $qty >= $this->wholesale_min_qty
-            && $this->wholesale_price_afn > 0
-        ) {
-            return (float) $this->wholesale_price_afn;
+        $today = now()->toDateString();
+        $code = strtoupper($currencyCode);
+
+        $query = $this->prices()
+            ->where('price_type', $type)
+            ->where('currency_code', $code)
+            ->where('is_active', true)
+            ->where(function ($q) use ($today) {
+                $q->whereNull('valid_from')->orWhere('valid_from', '<=', $today);
+            })
+            ->where(function ($q) use ($today) {
+                $q->whereNull('valid_to')->orWhere('valid_to', '>=', $today);
+            });
+
+        if ($type === 'wholesale') {
+            $wholesale = (clone $query)
+                ->where('min_qty', '>', 0)
+                ->where('min_qty', '<=', $qty)
+                ->orderByDesc('min_qty')
+                ->first();
+
+            if ($wholesale) {
+                return (float) $wholesale->amount;
+            }
         }
 
-        return (float) $this->sale_price_afn;
+        $row = $query->orderBy('min_qty')->first();
+
+        return $row ? (float) $row->amount : 0.0;
+    }
+
+    public function getPriceForQuantity(int $qty): float
+    {
+        $wholesale = $this->activePriceAmount('wholesale', 'AFN', $qty);
+        if ($wholesale > 0) {
+            $minQty = (int) ($this->prices()
+                ->where('price_type', 'wholesale')
+                ->where('currency_code', 'AFN')
+                ->where('is_active', true)
+                ->where('min_qty', '>', 0)
+                ->where('min_qty', '<=', $qty)
+                ->orderByDesc('min_qty')
+                ->value('min_qty') ?? 0);
+
+            if ($minQty > 0 && $qty >= $minQty) {
+                return $wholesale;
+            }
+        }
+
+        return $this->activePriceAmount('sale', 'AFN', $qty);
     }
 
     public function hasWholesalePrice(): bool
     {
-        return $this->wholesale_price_afn > 0 && $this->wholesale_min_qty > 0;
+        return $this->prices()
+            ->where('price_type', 'wholesale')
+            ->where('is_active', true)
+            ->where('amount', '>', 0)
+            ->where('min_qty', '>', 0)
+            ->exists();
+    }
+
+    /**
+     * @return \Illuminate\Support\Collection<int, ProductPrice>
+     */
+    protected function activePriceRows(string $type, string $currencyCode = 'AFN')
+    {
+        $this->loadMissing('prices');
+
+        $today = now()->toDateString();
+        $code = strtoupper($currencyCode);
+
+        return $this->prices
+            ->filter(function (ProductPrice $p) use ($type, $code, $today) {
+                if ($p->price_type !== $type || strtoupper((string) $p->currency_code) !== $code || ! $p->is_active) {
+                    return false;
+                }
+                if ($p->valid_from && $p->valid_from->toDateString() > $today) {
+                    return false;
+                }
+                if ($p->valid_to && $p->valid_to->toDateString() < $today) {
+                    return false;
+                }
+
+                return true;
+            })
+            ->values();
+    }
+
+    public function getSalePriceAfnAttribute(): float
+    {
+        $row = $this->activePriceRows('sale', 'AFN')->sortBy('min_qty')->first();
+
+        return $row ? (float) $row->amount : 0.0;
+    }
+
+    public function getPurchasePriceAfnAttribute(): float
+    {
+        $row = $this->activePriceRows('purchase', 'AFN')->sortBy('min_qty')->first();
+
+        return $row ? (float) $row->amount : 0.0;
+    }
+
+    public function getWholesalePriceAfnAttribute(): float
+    {
+        $row = $this->activePriceRows('wholesale', 'AFN')
+            ->where('min_qty', '>', 0)
+            ->sortBy('min_qty')
+            ->first();
+
+        return $row ? (float) $row->amount : 0.0;
+    }
+
+    public function getWholesaleMinQtyAttribute(): int
+    {
+        $row = $this->activePriceRows('wholesale', 'AFN')
+            ->where('min_qty', '>', 0)
+            ->sortBy('min_qty')
+            ->first();
+
+        return $row ? (int) $row->min_qty : 0;
+    }
+
+    public function resolvedCatalogCurrencyId(): ?int
+    {
+        $sale = $this->prices()
+            ->where('price_type', 'sale')
+            ->where('is_active', true)
+            ->orderByDesc('id')
+            ->first();
+
+        if ($sale?->currency_id) {
+            return (int) $sale->currency_id;
+        }
+
+        $any = $this->prices()
+            ->where('is_active', true)
+            ->orderByDesc('id')
+            ->first();
+
+        return $any?->currency_id ? (int) $any->currency_id : null;
     }
 }

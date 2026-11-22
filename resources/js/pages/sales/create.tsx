@@ -14,6 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { useExchange } from '@/hooks/useExchange';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
@@ -67,10 +68,23 @@ interface Variant {
     name: string | null;
     volume_ml: number | null;
     concentration: string | null;
-    sale_price_afn: string;
-    wholesale_price_afn: string;
+    sale_price_afn: string | number;
+    sale_amount?: number | null;
+    sale_currency_id?: number | null;
+    sale_currency_code?: string | null;
+    sale_currency_symbol?: string | null;
+    sale_prices?: Record<string, { amount: number; source: string } | null>;
+    live_equivalents?: {
+        afn: number;
+        usd: number;
+        aed: number;
+        rate_source?: string;
+        rate_kind?: string;
+        rate_effective_at?: string | null;
+    } | null;
+    wholesale_price_afn: string | number;
     wholesale_min_qty: number;
-    purchase_price_afn: string;
+    purchase_price_afn: string | number;
     product: {
         id: number;
         name: string;
@@ -91,6 +105,8 @@ interface LineItem {
     quantity: string;
     sale_unit_amount: string;
     discount_amount: string;
+    /** True when the cashier manually overrode the catalog-initialized unit price. */
+    price_manual?: boolean;
 }
 
 interface StockError {
@@ -109,7 +125,6 @@ interface Props {
     nextNumber: string;
     currencies?: CurrencyOption[];
     fxBoard?: FxBoardContext;
-    canManageRates?: boolean;
     supplierCredits?: {
         total: number;
         suppliers: { supplier: string; amount: number; count: number }[];
@@ -128,6 +143,7 @@ const newLine = (): LineItem => ({
     quantity: '1',
     sale_unit_amount: '',
     discount_amount: '0',
+    price_manual: false,
 });
 
 const breadcrumbs: BreadcrumbItem[] = [
@@ -156,6 +172,73 @@ const round2 = (value: number): number => {
     return Math.round((value + Number.EPSILON) * 100) / 100;
 };
 
+/** Catalog original amount + currency for a variant (never silently assume AFN). */
+function catalogOriginal(variant: Variant): { amount: number; code: string } {
+    const code = (variant.sale_currency_code || 'AFN').toUpperCase();
+    const amount = Number(variant.sale_amount ?? 0);
+    if (amount > 0) {
+        return { amount, code };
+    }
+    return { amount: parseFloat(String(variant.sale_price_afn || 0)) || 0, code: 'AFN' };
+}
+
+/**
+ * Initialize sale unit price in the document currency from the product's original
+ * catalog price, converting with the live Central Exchange Board rates when needed.
+ * Prefers a direct product_prices row only when its source is "direct"/"original".
+ */
+function resolveSaleUnitAmount(
+    variant: Variant,
+    saleCurrencyCode: string,
+    usdToAfn: number,
+    aedToAfn: number,
+): number {
+    const code = (saleCurrencyCode || 'AFN').toUpperCase();
+    const original = catalogOriginal(variant);
+
+    const direct = variant.sale_prices?.[code];
+    if (
+        direct != null &&
+        Number(direct.amount) > 0 &&
+        (direct.source === 'direct' || direct.source === 'original')
+    ) {
+        return round2(Number(direct.amount));
+    }
+
+    if (original.amount > 0) {
+        if (original.code === code) {
+            return round2(original.amount);
+        }
+        const eq = threeCurrencyEquivalents(original.amount, original.code, usdToAfn, aedToAfn);
+        return round2(code === 'USD' ? eq.usd : code === 'AED' ? eq.aed : eq.afn);
+    }
+
+    const afnPrice = parseFloat(String(variant.sale_price_afn || 0)) || 0;
+    if (afnPrice <= 0) return 0;
+    if (code === 'AFN') return round2(afnPrice);
+    const converted = threeCurrencyEquivalents(afnPrice, 'AFN', usdToAfn, aedToAfn);
+    return round2(code === 'USD' ? converted.usd : converted.aed);
+}
+
+/** Live board equivalents for a catalog original (form rates override payload snapshot). */
+function liveCatalogEquivalents(
+    variant: Variant,
+    usdToAfn: number,
+    aedToAfn: number,
+): { afn: number; usd: number; aed: number } | null {
+    const original = catalogOriginal(variant);
+    if (!(original.amount > 0) || !(usdToAfn > 0) || !(aedToAfn > 0)) {
+        return variant.live_equivalents
+            ? {
+                  afn: variant.live_equivalents.afn,
+                  usd: variant.live_equivalents.usd,
+                  aed: variant.live_equivalents.aed,
+              }
+            : null;
+    }
+    return threeCurrencyEquivalents(original.amount, original.code, usdToAfn, aedToAfn);
+}
+
 /* ═══════════════════════════════════════════════════════
  |  Main Component
  ═══════════════════════════════════════════════════════ */
@@ -167,11 +250,11 @@ export default function SalesCreate({
     nextNumber,
     currencies = [],
     fxBoard,
-    canManageRates = false,
     supplierCredits,
     errors: initialErrors,
 }: Props) {
     const { toast } = useToast();
+    const { usdToAfn, aedToAfn } = useExchange();
 
     const ledgerCurrency = useMemo(() => currencies.find((c) => c.code === 'AFN') || currencies[0], [currencies]);
 
@@ -181,8 +264,6 @@ export default function SalesCreate({
         customer_id: 'new' as string,
         sale_date: new Date().toISOString().slice(0, 10),
         sale_currency_id: ledgerCurrency ? String(ledgerCurrency.id) : '',
-        usd_to_afn_rate: fxBoard?.board?.usd_to_afn_rate ? String(fxBoard.board.usd_to_afn_rate) : '',
-        aed_to_afn_rate: fxBoard?.board?.aed_to_afn_rate ? String(fxBoard.board.aed_to_afn_rate) : '',
         payment_method: 'cash' as 'cash' | 'card' | 'bank' | 'mobile' | 'credit' | 'other',
         notes: '',
         discount_amount: '0',
@@ -343,8 +424,8 @@ export default function SalesCreate({
         () => currencies.find((c) => String(c.id) === form.sale_currency_id) || ledgerCurrency,
         [currencies, form.sale_currency_id, ledgerCurrency],
     );
-    const usdRate = parseFloat(form.usd_to_afn_rate) || 0;
-    const aedRate = parseFloat(form.aed_to_afn_rate) || 0;
+    const usdRate = usdToAfn || 0;
+    const aedRate = aedToAfn || 0;
 
     const totals = useMemo(() => {
         let subtotalAfn = 0;
@@ -416,6 +497,26 @@ export default function SalesCreate({
         };
     }, [items, form, paidAmount, previousDueAfn, creditLimitAfn, saleCurrency, usdRate, aedRate, variants]);
 
+    /* Re-init non-manual line prices when live board rates change (catalog original stays intact). */
+    useEffect(() => {
+        if (!(usdRate > 0) || !(aedRate > 0)) return;
+        const code = (saleCurrency?.code || 'AFN').toUpperCase();
+        setItems((prev) => {
+            let changed = false;
+            const next = prev.map((item) => {
+                if (!item.variant_id || item.price_manual) return item;
+                const variant = variants.find((v) => String(v.id) === item.variant_id);
+                if (!variant) return item;
+                const unit = String(resolveSaleUnitAmount(variant, code, usdRate, aedRate));
+                if (unit === item.sale_unit_amount) return item;
+                changed = true;
+                return { ...item, sale_unit_amount: unit };
+            });
+            return changed ? next : prev;
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- only reprice when board rates change
+    }, [usdRate, aedRate]);
+
     /* ⭐ Auto-fill Paid Amount — با مبلغ فروش فعلی */
     useEffect(() => {
         if (!paidAmountEdited && totals.totalAfn > 0) {
@@ -442,17 +543,37 @@ export default function SalesCreate({
             if (field === 'variant_id' && value) {
                 const variant = variants.find((v) => v.id === parseInt(value));
                 if (variant) {
-                    const afnPrice = parseFloat(variant.sale_price_afn || '0') || 0;
-                    const code = saleCurrency?.code || 'AFN';
-                    const converted = threeCurrencyEquivalents(afnPrice, 'AFN', usdRate, aedRate);
-                    const unit =
-                        code === 'USD' ? converted.usd : code === 'AED' ? converted.aed : converted.afn;
-                    copy[index].sale_unit_amount = String(round2(unit));
+                    const code = (saleCurrency?.code || 'AFN').toUpperCase();
+                    copy[index].sale_unit_amount = String(
+                        resolveSaleUnitAmount(variant, code, usdRate, aedRate),
+                    );
+                    copy[index].price_manual = false;
                 }
+            }
+
+            if (field === 'sale_unit_amount') {
+                copy[index].price_manual = true;
             }
 
             return copy;
         });
+    };
+
+    const changeSaleCurrency = (currencyId: string) => {
+        const next = currencies.find((c) => String(c.id) === currencyId);
+        const nextCode = (next?.code || 'AFN').toUpperCase();
+        setForm((prev) => ({ ...prev, sale_currency_id: currencyId }));
+        setItems((prev) =>
+            prev.map((item) => {
+                if (!item.variant_id || item.price_manual) return item;
+                const variant = variants.find((v) => String(v.id) === item.variant_id);
+                if (!variant) return item;
+                return {
+                    ...item,
+                    sale_unit_amount: String(resolveSaleUnitAmount(variant, nextCode, usdRate, aedRate)),
+                };
+            }),
+        );
     };
 
     const setItemQuantity = (variantId: string, newQty: number) => {
@@ -572,16 +693,15 @@ export default function SalesCreate({
                 setItemQuantity(String(v.id), (parseInt(existingItem.quantity) || 0) + 1);
             } else {
                 setItems((prev) => {
-                    const afnPrice = parseFloat(String(v.sale_price_afn || 0)) || 0;
-                    const code = saleCurrency?.code || 'AFN';
-                    const converted = threeCurrencyEquivalents(afnPrice, 'AFN', usdRate, aedRate);
-                    const unit = code === 'USD' ? converted.usd : code === 'AED' ? converted.aed : converted.afn;
+                    const code = (saleCurrency?.code || 'AFN').toUpperCase();
+                    const unit = resolveSaleUnitAmount(v as Variant, code, usdRate, aedRate);
                     const newItem: LineItem = {
                         _key: Math.random().toString(36).slice(2),
                         variant_id: String(v.id),
                         quantity: '1',
-                        sale_unit_amount: String(round2(unit)),
+                        sale_unit_amount: String(unit),
                         discount_amount: '0',
+                        price_manual: false,
                     };
                     if (prev.length === 1 && !prev[0].variant_id) return [newItem];
                     return [...prev, newItem];
@@ -722,13 +842,9 @@ export default function SalesCreate({
             payments,
             due_date: totals.remainingDueAfn > 0 ? dueDate || null : null,
         };
-        if (!canManageRates) {
-            delete payload.usd_to_afn_rate;
-            delete payload.aed_to_afn_rate;
-            delete payload.rate_source;
-        } else {
-            payload.rate_source = 'transaction';
-        }
+        delete payload.usd_to_afn_rate;
+        delete payload.aed_to_afn_rate;
+        delete payload.rate_source;
         return payload;
     };
 
@@ -802,6 +918,20 @@ export default function SalesCreate({
         setLoading(true);
         setErrors({});
         setCreatedSale(null);
+
+        if (!(usdRate > 0) || !(aedRate > 0)) {
+            setErrors({
+                exchange_rate:
+                    'Central exchange rate board is unavailable. Please add USD/AED rates in Exchange Rates first.',
+            });
+            toast({
+                title: 'Exchange rates',
+                description: 'Central exchange rate board is unavailable. Add USD/AED rates first.',
+                variant: 'destructive',
+            });
+            setLoading(false);
+            return;
+        }
 
         if (form.payment_method === 'credit' && (isNoCustomer || form.customer_id === 'none' || !form.customer_id)) {
             setErrors({ customer_id: 'A customer is required when the sale is on credit.' });
@@ -963,14 +1093,7 @@ export default function SalesCreate({
                     </div>
                 </div>
 
-                <TransactionExchangeRateSection
-                    usdToAfn={form.usd_to_afn_rate}
-                    aedToAfn={form.aed_to_afn_rate}
-                    onChange={(field, value) => setForm((prev) => ({ ...prev, [field]: value }))}
-                    context={fxBoard}
-                    canManageRates={canManageRates}
-                    errors={errors}
-                />
+                <TransactionExchangeRateSection context={fxBoard} />
 
                 <div className="rounded-lg border p-4">
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -986,7 +1109,7 @@ export default function SalesCreate({
                             <Label>Sale currency</Label>
                             <Select
                                 value={form.sale_currency_id}
-                                onValueChange={(v) => setForm((prev) => ({ ...prev, sale_currency_id: v }))}
+                                onValueChange={changeSaleCurrency}
                             >
                                 <SelectTrigger>
                                     <SelectValue placeholder="Currency" />
@@ -1293,8 +1416,11 @@ export default function SalesCreate({
                             const discount = parseFloat(item.discount_amount) || 0;
                             const lineTotal = round2(qty * price - discount);
                             const lineEq = threeCurrencyEquivalents(lineTotal, saleCurrency?.code || 'AFN', usdRate, aedRate);
+                            const unitEq = threeCurrencyEquivalents(price, saleCurrency?.code || 'AFN', usdRate, aedRate);
 
                             const variantInfo = item.variant_id ? variants.find((v) => String(v.id) === item.variant_id) : null;
+                            const catalog = variantInfo ? catalogOriginal(variantInfo) : null;
+                            const catalogEq = variantInfo ? liveCatalogEquivalents(variantInfo, usdRate, aedRate) : null;
 
                             return (
                                 <div key={item._key} className="bg-muted/10 rounded-lg border p-3">
@@ -1333,6 +1459,22 @@ export default function SalesCreate({
                                                     ))}
                                                 </SelectContent>
                                             </Select>
+                                            {catalog && catalog.amount > 0 && (
+                                                <div className="text-muted-foreground space-y-0.5 text-[11px] leading-tight">
+                                                    <p>
+                                                        Catalog:{' '}
+                                                        <span className="text-foreground font-mono font-medium">
+                                                            {formatPrice(catalog.amount)} {catalog.code}
+                                                        </span>
+                                                    </p>
+                                                    {catalogEq && (
+                                                        <p className="font-mono">
+                                                            ≈ {formatPrice(catalogEq.afn)} AFN · ≈ ${formatPrice(catalogEq.usd)}{' '}
+                                                            USD · ≈ {formatPrice(catalogEq.aed)} AED
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
 
                                         <div className="space-y-1.5 md:col-span-2">
@@ -1347,14 +1489,7 @@ export default function SalesCreate({
                                         </div>
 
                                         <div className="space-y-1.5 md:col-span-2">
-                                            <Label className="text-xs">
-                                                Price ({saleCurrency?.code || 'AFN'}){' '}
-                                                {variantInfo && (
-                                                    <span className="text-muted-foreground font-mono">
-                                                        (catalog {formatPrice(parseFloat(variantInfo.sale_price_afn))} AFN)
-                                                    </span>
-                                                )}
-                                            </Label>
+                                            <Label className="text-xs">Price ({saleCurrency?.code || 'AFN'})</Label>
                                             <Input
                                                 type="number"
                                                 step="0.01"
@@ -1363,6 +1498,12 @@ export default function SalesCreate({
                                                 onChange={(e) => updateItem(index, 'sale_unit_amount', e.target.value)}
                                                 className="font-mono"
                                             />
+                                            {price > 0 && (
+                                                <p className="text-muted-foreground font-mono text-[10px] leading-tight">
+                                                    ≈ {formatPrice(unitEq.afn)} AFN · ≈ ${formatPrice(unitEq.usd)} USD · ≈{' '}
+                                                    {formatPrice(unitEq.aed)} AED
+                                                </p>
+                                            )}
                                         </div>
 
                                         <div className="space-y-1.5 md:col-span-2">
@@ -1380,8 +1521,9 @@ export default function SalesCreate({
                                         <div className="flex items-end justify-end gap-1 md:col-span-2">
                                             <div className="flex-1 rounded border bg-gray-50 px-2 py-1.5 text-center font-mono text-xs font-semibold">
                                                 {formatPrice(lineTotal)} {saleCurrency?.code || 'AFN'}
-                                                <div className="text-muted-foreground text-[10px] font-normal">
-                                                    {formatPrice(lineEq.afn)} AFN
+                                                <div className="text-muted-foreground text-[10px] font-normal leading-tight">
+                                                    ≈ {formatPrice(lineEq.afn)} AFN
+                                                    <br />≈ ${formatPrice(lineEq.usd)} USD · ≈ {formatPrice(lineEq.aed)} AED
                                                 </div>
                                             </div>
                                             <Button

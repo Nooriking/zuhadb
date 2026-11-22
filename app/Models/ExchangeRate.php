@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\Money;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -29,6 +30,80 @@ class ExchangeRate extends Model
         'created_at'   => 'datetime',
         'updated_at'   => 'datetime',
     ];
+
+    protected static function booted(): void
+    {
+        static::created(function (ExchangeRate $rate) {
+            static::syncCurrencyCache($rate);
+            static::recordHistory($rate);
+        });
+
+        static::updated(function (ExchangeRate $rate) {
+            static::syncCurrencyCache($rate);
+            static::recordHistory($rate);
+        });
+    }
+
+    /**
+     * Keep currencies.rate_to_default as a convenience cache of the board rate
+     * into the ledger/default currency. exchange_rates remains the source of truth.
+     */
+    protected static function syncCurrencyCache(ExchangeRate $rate): void
+    {
+        if ((float) $rate->rate <= 0 || $rate->trash) {
+            return;
+        }
+
+        $ledger = Currency::ledger();
+        $default = Currency::getDefault();
+        $toId = (int) $rate->to_currency_id;
+
+        $targetsLedger = $ledger && $toId === (int) $ledger->id;
+        $targetsDefault = $default && $toId === (int) $default->id;
+
+        if (! $targetsLedger && ! $targetsDefault) {
+            return;
+        }
+
+        Currency::query()->whereKey($rate->from_currency_id)->update([
+            'rate_to_default' => Money::round((string) $rate->rate, 8),
+        ]);
+    }
+
+    /**
+     * Append/refresh exchange_rate_history whenever a USD→AFN board rate changes.
+     */
+    protected static function recordHistory(ExchangeRate $rate): void
+    {
+        if ((float) $rate->rate <= 0 || $rate->trash) {
+            return;
+        }
+
+        $from = $rate->relationLoaded('fromCurrency')
+            ? $rate->fromCurrency
+            : Currency::query()->find($rate->from_currency_id);
+        $to = $rate->relationLoaded('toCurrency')
+            ? $rate->toCurrency
+            : Currency::query()->find($rate->to_currency_id);
+
+        if (! $from || ! $to) {
+            return;
+        }
+
+        if (strtoupper((string) $from->code) !== 'USD' || strtoupper((string) $to->code) !== 'AFN') {
+            return;
+        }
+
+        $rateDate = optional($rate->effective_at)?->toDateString() ?? now()->toDateString();
+
+        ExchangeRateHistory::query()->updateOrCreate(
+            ['rate_date' => $rateDate],
+            [
+                'usd_to_afn' => Money::round((string) $rate->rate, 4),
+                'created_by' => $rate->created_by,
+            ]
+        );
+    }
 
     /* =========================================================
      |  Relationships

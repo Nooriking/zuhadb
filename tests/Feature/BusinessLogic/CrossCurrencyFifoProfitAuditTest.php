@@ -17,7 +17,7 @@ use App\Models\ProductVariant;
 use App\Models\SaleItem;
 use App\Models\User;
 use App\Services\CurrencyService;
-use App\Services\ProductExchangeRateService;
+use App\Services\ExchangeService;
 use App\Services\PurchaseService;
 use App\Services\SaleService;
 use App\Support\Money;
@@ -129,7 +129,6 @@ test('1+2: store-owned AFN purchase sold in USD — no investor profit; correct 
         ->and((float) $sale->total_profit_afn)->toBe(224.0)
         ->and((float) $sale->total_investor_profit_afn)->toBe(0.0)
         ->and((float) $sale->store_profit_afn)->toBe(224.0)
-        ->and((float) $item->sale_unit_amount)->toBe(80.0)
         ->and((float) $item->sale_price_afn)->toBe(5224.0)
         ->and((float) $item->cost_price_afn)->toBe(5000.0)
         ->and(InvestorProfitEntry::query()->where('sale_id', $sale->id)->count())->toBe(0);
@@ -566,7 +565,7 @@ test('14: weighted average FX uses original amounts and remaining qty only', fun
         ->and(round((float) $avg, 2))->toBe(65.20);
 });
 
-test('15: product reference rates do not overwrite purchase FX snapshots', function () {
+test('15: later board rate changes do not overwrite purchase FX snapshots', function () {
     ['afn' => $afn, 'usd' => $usd, 'aed' => $aed] = ccfEnsureCurrencies();
     $fx = app(CurrencyService::class);
     ccfPostRates($fx, $usd, $aed, $afn, '65', '17.7', '2026-01-01 08:00:00');
@@ -578,9 +577,6 @@ test('15: product reference rates do not overwrite purchase FX snapshots', funct
         'purchase_price_afn' => 6500,
         'sale_price_afn' => 8000,
     ]);
-    $product = $variant->product;
-
-    app(ProductExchangeRateService::class)->sync($product, '99', '4');
 
     $purchase = app(PurchaseService::class)->receiveStock([
         'variant_id' => $variant->id,
@@ -595,8 +591,13 @@ test('15: product reference rates do not overwrite purchase FX snapshots', funct
     ], $admin, $branch->id);
 
     expect((float) $purchase->usd_to_afn_rate)->toBe(65.0)
-        ->and((float) $purchase->purchase_price_afn)->toBe(6500.0)
-        ->and(app(ProductExchangeRateService::class)->rate($product, 'USD', 'AFN'))->toBe('99');
+        ->and((float) $purchase->purchase_price_afn)->toBe(6500.0);
+
+    // New board rate is live; historical purchase snapshot stays at 65.
+    ccfPostRates($fx, $usd, $aed, $afn, '99', '17.7', '2026-01-02 08:00:00');
+
+    expect((float) app(ExchangeService::class)->getRate('USD', 'AFN'))->toBe(99.0)
+        ->and((float) $purchase->fresh()->usd_to_afn_rate)->toBe(65.0);
 
     $board = $fx->boardAt('2026-01-01 09:00:00');
     expect((float) $board->usdToAfn)->toBe(65.0);

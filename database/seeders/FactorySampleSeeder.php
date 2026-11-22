@@ -208,7 +208,6 @@ class FactorySampleSeeder extends Seeder
             'full_name' => 'Factory Investor',
             'phone' => '0703334455',
             'email' => 'factory-investor@zuha.test',
-            'created_by' => $user?->id,
         ]);
         $investment = Investment::factory()->create([
             'investor_id' => $investor->id,
@@ -312,6 +311,56 @@ class FactorySampleSeeder extends Seeder
         $batchId = $item?->batch_id;
         $purchase = Product::query()->where('variant_id', $variantId)->latest('id')->first();
 
+        $investor = Investor::query()->firstOrCreate(
+            ['email' => 'factory-investor@zuha.test'],
+            [
+                'name' => 'Factory Investor',
+                'username' => 'factory_investor',
+                'phone' => '0703334455',
+                'password' => bcrypt('FactoryInvestor@123'),
+                'status' => 'active',
+                'trash' => false,
+            ]
+        );
+        $investment = Investment::query()->firstOrCreate(
+            ['investment_number' => 'FACTORY-INV-0001'],
+            [
+                'investor_id' => $investor->id,
+                'capital_amount_afn' => 10000,
+                'available_amount_afn' => 10000,
+                'allocated_amount_afn' => 0,
+                'profit_amount_afn' => 0,
+                'withdrawn_amount_afn' => 0,
+                'investment_date' => now()->toDateString(),
+                'status' => 'active',
+                'notes' => 'Sample investor capital',
+                'user_id' => $user?->id,
+            ]
+        );
+        $investor->getOrCreateWallet();
+
+        InvestorTransaction::query()->firstOrCreate(
+            ['description' => 'Factory capital deposit'],
+            [
+                'investor_id' => $investor->id,
+                'investment_id' => $investment->id,
+                'type' => 'capital_deposit',
+                'amount_afn' => 10000,
+                'balance_type' => 'capital',
+                'balance_before_afn' => 0,
+                'balance_after_afn' => 10000,
+                'transaction_date' => now()->toDateString(),
+            ]
+        );
+
+        if (! InvestorWithdrawal::query()->where('withdrawal_number', 'FACTORY-WD-0001')->exists()) {
+            InvestorWithdrawal::factory()->create([
+                'investor_id' => $investor->id,
+                'withdrawal_number' => 'FACTORY-WD-0001',
+                'created_by' => $user?->id,
+            ]);
+        }
+
         if ($investment && $variantId && $batchId && Schema::hasTable('investment_product_allocations')) {
             $this->insertRow(InvestmentProductAllocation::class, [
                 'investment_id' => $investment->id,
@@ -341,6 +390,23 @@ class FactorySampleSeeder extends Seeder
                 'sale_id' => $sale->id,
                 'sale_item_id' => $item->id,
             ])->only(Schema::getColumnListing('investor_profit_entries')));
+        }
+
+        if ($sale && $item) {
+            InvestorProfitEntry::query()->firstOrCreate([
+                'sale_id' => $sale->id,
+                'sale_item_id' => $item->id,
+            ], [
+                'investor_id' => $investor->id,
+                'investment_id' => $investment->id,
+                'quantity' => 1,
+                'profit_per_unit_afn' => 10,
+                'profit_amount_afn' => 10,
+                'entry_type' => 'profit',
+                'status' => 'pending',
+                'earned_at' => now(),
+                'notes' => 'Sample sale profit',
+            ]);
         }
 
         if ($supplier) {

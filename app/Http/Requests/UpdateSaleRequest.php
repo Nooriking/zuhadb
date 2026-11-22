@@ -4,6 +4,7 @@ namespace App\Http\Requests;
 
 use App\Http\Requests\Concerns\SanitizesInput;
 use App\Models\ProductVariant;
+use App\Models\Sale;
 use App\Support\Validation\SafeData;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -35,21 +36,38 @@ class UpdateSaleRequest extends FormRequest
             'items.*.variant_id' => ['required', 'integer', 'exists:product_variants,id'],
             'items.*.quantity' => SafeData::quantity(true, 1),
             'items.*.sale_price_afn' => SafeData::money(true, 0),
+            'items.*.sale_unit_amount' => SafeData::money(false, 0),
             'items.*.discount_afn' => SafeData::money(false, 0),
+            'items.*.discount_amount' => SafeData::money(false, 0),
         ];
     }
 
     public function withValidator($validator): void
     {
         $validator->after(function ($validator) {
+            /** @var Sale|null $sale */
+            $sale = $this->route('sale');
+            if ($sale instanceof Sale) {
+                $usd = (float) ($sale->usd_to_afn_rate ?? 0);
+                $aed = (float) ($sale->aed_to_afn_rate ?? 0);
+                if ($usd <= 0 || $aed <= 0) {
+                    $validator->errors()->add(
+                        'exchange_rate',
+                        'This sale is missing a Central Exchange Board snapshot. Cannot update without stored USD/AED rates.'
+                    );
+                }
+            }
+
             $items = $this->input('items', []);
-            $costs = ProductVariant::query()
+            $variants = ProductVariant::query()
                 ->whereIn('id', collect($items)->pluck('variant_id')->filter())
-                ->pluck('purchase_price_afn', 'id');
+                ->get()
+                ->keyBy('id');
 
             foreach ($items as $index => $item) {
                 $price = (float) ($item['sale_price_afn'] ?? 0);
-                $cost = (float) ($costs[$item['variant_id'] ?? null] ?? 0);
+                $variant = $variants->get($item['variant_id'] ?? null);
+                $cost = $variant ? (float) $variant->purchase_price_afn : 0;
 
                 if ($price < $cost) {
                     $validator->errors()->add("items.{$index}.sale_price_afn", 'Sale price cannot be less than the purchase price.');

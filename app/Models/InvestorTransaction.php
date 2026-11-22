@@ -167,15 +167,16 @@ class InvestorTransaction extends Model
         $investor = Investor::find($investorId);
 
         $balanceBeforeAfn = 0;
-        $balanceAfterAfn  = $amountAfn;
+        $balanceAfterAfn = $amountAfn;
 
         if ($investor) {
-            $wallet = $investor->getOrCreateWallet();
+            $currencyCode = strtoupper((string) ($options['currency_code'] ?? 'AFN'));
+            $wallet = $investor->balanceFor($currencyCode);
 
             $balanceBeforeAfn = match ($balanceType) {
                 'capital' => (float) $wallet->capital_balance_afn,
-                'profit'  => (float) $wallet->profit_balance_afn,
-                default   => (float) ($wallet->balance_afn ?? 0),
+                'profit' => (float) $wallet->profit_balance_afn,
+                default => (float) $wallet->total_balance_afn,
             };
 
             $isIncoming = in_array($type, [
@@ -184,6 +185,7 @@ class InvestorTransaction extends Model
                 'reinvestment',
             ], true);
 
+            // Callers adjust wallet balances; this only snapshots before/after for the ledger row.
             $balanceAfterAfn = $isIncoming
                 ? $balanceBeforeAfn + $amountAfn
                 : max(0, $balanceBeforeAfn - $amountAfn);

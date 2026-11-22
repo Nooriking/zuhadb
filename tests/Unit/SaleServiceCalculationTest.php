@@ -2,6 +2,8 @@
 
 use App\Services\CurrencyService;
 use App\Services\CustomerLedgerService;
+use App\Services\ExchangeService;
+use App\Services\PriceResolver;
 use App\Services\SaleNotifier;
 use App\Services\SaleService;
 
@@ -10,6 +12,8 @@ test('SaleService calculateTotal subtracts discount and floors at zero', functio
         app(CustomerLedgerService::class),
         app(SaleNotifier::class),
         app(CurrencyService::class),
+        app(ExchangeService::class),
+        app(PriceResolver::class),
     );
 
     expect($service->calculateTotal(5000, 500))->toBe(4500.0)

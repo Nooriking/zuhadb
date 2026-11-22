@@ -6,7 +6,7 @@ import {
 
 type Props = {
     amounts?: OriginalCurrencyTotal[] | null;
-    /** Prefix each line, e.g. "فروش" / "برگشت" */
+    /** Prefix each line, e.g. "Sales" / "Returns" */
     titlePrefix?: string;
     className?: string;
     valueClassName?: string;

@@ -24,6 +24,13 @@ class SaleReturn extends Model
         // Amounts
         'subtotal_afn',
         'total_afn',
+        'return_currency_id',
+        'return_currency_code',
+        'return_currency_symbol',
+        'return_amount_currency',
+        'exchange_rate_to_afn',
+        'rate_effective_at',
+        'rate_source',
 
         // Customer Due Impact
         'previous_due_afn',
@@ -44,16 +51,19 @@ class SaleReturn extends Model
     ];
 
     protected $casts = [
-        'subtotal_afn'       => 'decimal:2',
-        'total_afn'          => 'decimal:2',
-        'previous_due_afn'   => 'decimal:2',
-        'new_due_afn'        => 'decimal:2',
-        'refund_amount_afn'  => 'decimal:2',
-        'return_date'        => 'date',
-        'trash'              => 'boolean',
-        'created_at'         => 'datetime',
-        'updated_at'         => 'datetime',
-        'deleted_at'         => 'datetime',
+        'subtotal_afn'            => 'decimal:2',
+        'total_afn'               => 'decimal:2',
+        'return_amount_currency'  => 'decimal:2',
+        'exchange_rate_to_afn'    => 'decimal:8',
+        'rate_effective_at'       => 'datetime',
+        'previous_due_afn'        => 'decimal:2',
+        'new_due_afn'             => 'decimal:2',
+        'refund_amount_afn'       => 'decimal:2',
+        'return_date'             => 'date',
+        'trash'                   => 'boolean',
+        'created_at'              => 'datetime',
+        'updated_at'              => 'datetime',
+        'deleted_at'              => 'datetime',
     ];
 
     /* =========================================================
@@ -90,6 +100,11 @@ class SaleReturn extends Model
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class, 'customer_id');
+    }
+
+    public function returnCurrency(): BelongsTo
+    {
+        return $this->belongsTo(Currency::class, 'return_currency_id');
     }
 
     public function items(): HasMany

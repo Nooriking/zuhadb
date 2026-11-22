@@ -294,6 +294,33 @@ class Sale extends Model
         return (float) $this->remaining_due_afn > 0;
     }
 
+    /**
+     * Historical rate of this sale: 1 unit of sale currency = X AFN.
+     * Never invents a silent 1:1 — missing snapshot rates throw.
+     */
+    public function rateToAfn(): float
+    {
+        $code = strtoupper(trim((string) ($this->sale_currency_code ?? 'AFN')));
+
+        if ($code === 'AFN' || $code === '') {
+            return 1.0;
+        }
+
+        $rate = match ($code) {
+            'USD' => $this->usd_to_afn_rate ?: $this->usd_to_ledger_rate,
+            'AED' => $this->aed_to_afn_rate,
+            default => null,
+        };
+
+        if ($rate === null || $rate === '' || (float) $rate <= 0) {
+            throw new \RuntimeException(
+                "Missing {$code}→AFN rate snapshot on sale #{$this->id}. Central board rates must be stored at sale time."
+            );
+        }
+
+        return (float) $rate;
+    }
+
     public function isPrinted(): bool
     {
         return $this->printed_count > 0;

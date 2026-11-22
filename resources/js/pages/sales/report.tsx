@@ -361,7 +361,7 @@ export default function SalesReport({
                             </div>
                             <ByCurrencyAmounts
                                 amounts={summary.gross_sales_by_currency}
-                                titlePrefix="فروش"
+                                titlePrefix="Sales"
                                 valueClassName="font-mono text-sm font-bold"
                                 digits={2}
                             />
@@ -376,7 +376,7 @@ export default function SalesReport({
                             </div>
                             <ByCurrencyAmounts
                                 amounts={summary.total_returns_by_currency}
-                                titlePrefix="برگشت"
+                                titlePrefix="Returns"
                                 valueClassName="font-mono text-sm font-bold text-amber-700"
                                 digits={2}
                             />
@@ -391,7 +391,7 @@ export default function SalesReport({
                             </div>
                             <ByCurrencyAmounts
                                 amounts={summary.net_sales_by_currency}
-                                titlePrefix="خالص"
+                                titlePrefix="Net"
                                 valueClassName="font-mono text-sm font-bold text-emerald-700"
                                 digits={2}
                             />

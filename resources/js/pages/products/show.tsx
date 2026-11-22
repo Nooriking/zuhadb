@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import AppLayout from '@/layouts/app-layout';
+import { formatCatalogAmount, LOW_STOCK_THRESHOLD } from '@/lib/inventory';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link } from '@inertiajs/react';
 import {
@@ -43,13 +44,29 @@ interface ProductVariant {
     volume_ml: number | null;
     concentration: string | null;
     stock_quantity: number;
+    catalog_currency_id?: number | null;
+    purchase_amount?: string | null;
     purchase_price_afn: string;
+    purchase_amount_usd?: string | null;
+    purchase_amount_aed?: string | null;
+    purchase_currency_id?: number | null;
+    sale_amount?: string | null;
     sale_price_afn: string;
+    sale_amount_usd?: string | null;
+    sale_amount_aed?: string | null;
+    sale_currency_id?: number | null;
+    wholesale_amount?: string | null;
     wholesale_price_afn: string;
+    wholesale_amount_usd?: string | null;
+    wholesale_amount_aed?: string | null;
+    wholesale_currency_id?: number | null;
     wholesale_min_qty: number;
-    minimum_stock: number;
     profit_per_unit: string;
     status: 'active' | 'inactive';
+    catalog_currency?: { id: number; code: string; symbol?: string | null; name?: string } | null;
+    purchase_currency?: { id: number; code: string; symbol?: string | null; name?: string } | null;
+    sale_currency?: { id: number; code: string; symbol?: string | null; name?: string } | null;
+    wholesale_currency?: { id: number; code: string; symbol?: string | null; name?: string } | null;
     barcodes: Barcode[];
 }
 
@@ -78,6 +95,7 @@ interface Purchase {
     payment_status: string | null;
     exchange_rate: string | null;
     profit_per_unit: string;
+    profit_per_unit_original?: string | number | null;
     profit_currency_code?: string | null;
     line_total: string;
     line_profit: string;
@@ -137,15 +155,6 @@ interface Props {
     product: Product;
     purchases?: Purchase[];
     inventoryValuation?: InventoryValuation | null;
-    usd_to_afn_rate?: string | null;
-    usd_to_aed_rate?: string | null;
-    exchangeRateContext?: {
-        usd?: { code: string } | null;
-        afn?: { code: string } | null;
-        aed?: { code: string } | null;
-        catalog_usd_to_afn?: string | null;
-        catalog_usd_to_aed?: string | null;
-    };
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -184,8 +193,6 @@ const paymentStatusLabels: Record<string, string> = {
     credit: 'Credit',
 };
 
-const LOW_STOCK_THRESHOLD = 5;
-
 /* ═══════════════════════════════════════════════════════
  |  Helpers
  ═══════════════════════════════════════════════════════ */
@@ -195,12 +202,15 @@ const toNum = (value: string | number | null | undefined): number => {
     return Number.isFinite(n) ? n : 0;
 };
 
-const formatPrice = (value: string | number | null | undefined) => {
-    return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(toNum(value));
-};
+const formatPrice = (value: string | number | null | undefined, currencyCode: string = 'AFN') =>
+    formatCatalogAmount(value, currencyCode);
 
 const formatRate = (value: string | number | null | undefined) => {
-    return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 }).format(toNum(value));
+    // No thousand separators — exchange rates must not look scaled (e.g. 56,000 vs 56000).
+    const n = toNum(value);
+    if (!Number.isFinite(n) || n <= 0) return '—';
+    const fixed = n.toFixed(8).replace(/\.?0+$/, '');
+    return fixed || '0';
 };
 
 const formatDate = (dateStr: string | null | undefined) => {
@@ -229,9 +239,6 @@ export default function ProductShow({
     product,
     purchases = [],
     inventoryValuation = null,
-    usd_to_afn_rate = null,
-    usd_to_aed_rate = null,
-    exchangeRateContext,
 }: Props) {
     const breadcrumbs: BreadcrumbItem[] = [
         { title: 'Dashboard', href: '/dashboard' },
@@ -343,42 +350,6 @@ export default function ProductShow({
                         </CardHeader>
                     </Card>
                 </div>
-
-                {(usd_to_afn_rate || usd_to_aed_rate) && (
-                    <Card>
-                        <CardHeader className="pb-2">
-                            <CardTitle className="text-base">Product exchange rates</CardTitle>
-                            <CardDescription>
-                                Catalog rates for this product. Direction: units of the target currency per 1 USD. These are not applied to
-                                historical purchase or sale amounts on this page.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                            <div>
-                                <p className="text-muted-foreground text-xs">USD to AFN (AFN per 1 USD)</p>
-                                <p className="font-mono text-2xl font-semibold">
-                                    {usd_to_afn_rate ? formatRate(usd_to_afn_rate) : '—'}
-                                </p>
-                                {exchangeRateContext?.catalog_usd_to_afn ? (
-                                    <p className="text-muted-foreground text-xs">
-                                        System catalog currently implies {exchangeRateContext.catalog_usd_to_afn} AFN per 1 USD
-                                    </p>
-                                ) : null}
-                            </div>
-                            <div>
-                                <p className="text-muted-foreground text-xs">USD to AED (AED per 1 USD)</p>
-                                <p className="font-mono text-2xl font-semibold">
-                                    {usd_to_aed_rate ? formatRate(usd_to_aed_rate) : '—'}
-                                </p>
-                                {exchangeRateContext?.catalog_usd_to_aed ? (
-                                    <p className="text-muted-foreground text-xs">
-                                        System catalog currently implies {exchangeRateContext.catalog_usd_to_aed} AED per 1 USD
-                                    </p>
-                                ) : null}
-                            </div>
-                        </CardContent>
-                    </Card>
-                )}
 
                 {/* ═══════════ Purchase snapshot rates (historical, not rewritten) ═══════════ */}
                 {ratesWithValue.length > 0 && (
@@ -635,33 +606,61 @@ export default function ProductShow({
                                             )}
                                         </div>
 
-                                        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                                        <div className="mb-2">
+                                            <p className="text-muted-foreground text-[10px]">
+                                                Catalog reference prices with independent currencies — not historical purchase/sale FX.
+                                            </p>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                                            {[
+                                                {
+                                                    label: 'Purchase (catalog)',
+                                                    original: v.purchase_amount,
+                                                    code: v.purchase_currency?.code || v.catalog_currency?.code || 'AFN',
+                                                    afn: v.purchase_price_afn,
+                                                    usd: v.purchase_amount_usd,
+                                                    aed: v.purchase_amount_aed,
+                                                },
+                                                {
+                                                    label: 'Sale (catalog)',
+                                                    original: v.sale_amount,
+                                                    code: v.sale_currency?.code || v.catalog_currency?.code || 'AFN',
+                                                    afn: v.sale_price_afn,
+                                                    usd: v.sale_amount_usd,
+                                                    aed: v.sale_amount_aed,
+                                                    emphasize: true,
+                                                },
+                                                {
+                                                    label: 'Wholesale (catalog)',
+                                                    original: v.wholesale_amount,
+                                                    code: v.wholesale_currency?.code || v.catalog_currency?.code || 'AFN',
+                                                    afn: v.wholesale_price_afn,
+                                                    usd: v.wholesale_amount_usd,
+                                                    aed: v.wholesale_amount_aed,
+                                                    minQty: v.wholesale_min_qty,
+                                                },
+                                            ].map((row) => {
+                                                return (
+                                                    <div key={row.label} className="bg-muted/30 rounded-md p-2">
+                                                        <div className="text-muted-foreground text-xs">{row.label}</div>
+                                                        <div className={`font-mono text-sm font-semibold ${row.emphasize ? 'text-green-700' : ''}`}>
+                                                            {formatPrice(row.original ?? row.afn, row.code)}{' '}
+                                                            <span className="text-muted-foreground text-xs">{row.code} · entered</span>
+                                                        </div>
+                                                        <div className="text-muted-foreground mt-1 space-y-0.5 font-mono text-[10px]">
+                                                            <div>AFN: {formatPrice(row.afn, 'AFN')}</div>
+                                                            <div>USD: {formatPrice(row.usd ?? 0, 'USD')}</div>
+                                                            <div>AED: {formatPrice(row.aed ?? 0, 'AED')}</div>
+                                                        </div>
+                                                        {row.minQty && row.minQty > 0 ? (
+                                                            <div className="text-muted-foreground mt-1 text-[10px]">Min qty: {row.minQty}</div>
+                                                        ) : null}
+                                                    </div>
+                                                );
+                                            })}
                                             <div className="bg-muted/30 rounded-md p-2">
-                                                <div className="text-muted-foreground text-xs">Purchase Price</div>
-                                                <div className="font-mono text-sm font-semibold">
-                                                    {formatPrice(v.purchase_price_afn)}
-                                                    <span className="text-muted-foreground ml-1 text-xs">AFN</span>
-                                                </div>
-                                            </div>
-                                            <div className="bg-muted/30 rounded-md p-2">
-                                                <div className="text-muted-foreground text-xs">Sale Price</div>
-                                                <div className="font-mono text-sm font-semibold text-green-700">
-                                                    {formatPrice(v.sale_price_afn)}
-                                                    <span className="text-muted-foreground ml-1 text-xs">AFN</span>
-                                                </div>
-                                            </div>
-                                            <div className="bg-muted/30 rounded-md p-2">
-                                                <div className="text-muted-foreground text-xs">Wholesale Price</div>
-                                                <div className="font-mono text-sm font-semibold">
-                                                    {formatPrice(v.wholesale_price_afn)}
-                                                    <span className="text-muted-foreground ml-1 text-xs">AFN</span>
-                                                </div>
-                                                {v.wholesale_min_qty > 0 && (
-                                                    <div className="text-muted-foreground text-[10px]">Min qty: {v.wholesale_min_qty}</div>
-                                                )}
-                                            </div>
-                                            <div className="bg-muted/30 rounded-md p-2">
-                                                <div className="text-muted-foreground text-xs">Profit / Unit</div>
+                                                <div className="text-muted-foreground text-xs">Ledger profit / unit</div>
                                                 <div className="font-mono text-sm font-semibold text-emerald-700">
                                                     {formatPrice(toNum(v.sale_price_afn) - toNum(v.purchase_price_afn))}
                                                     <span className="text-muted-foreground ml-1 text-xs">AFN</span>
@@ -782,6 +781,9 @@ export default function ProductShow({
                                             const rate = toNum(p.exchange_rate);
                                             const investorProfit = toNum(p.line_profit);
                                             const storeProfit = toNum(p.line_store_profit);
+                                            const profitCode = p.profit_currency_code || p.purchase_currency_code || 'AFN';
+                                            const profitUnitOriginal = toNum(p.profit_per_unit_original ?? p.profit_per_unit);
+                                            const profitLineOriginal = profitUnitOriginal * (p.quantity || 0);
 
                                             return (
                                                 <TableRow key={p.id}>
@@ -906,14 +908,18 @@ export default function ProductShow({
                                                         </div>
                                                     </TableCell>
 
-                                                    {/* ✅ Investor profit */}
+                                                    {/* ✅ Investor profit — original purchase/profit currency + AFN ledger */}
                                                     <TableCell className="bg-blue-50 text-right font-mono text-xs">
-                                                        {investorProfit > 0 ? (
+                                                        {investorProfit > 0 || profitUnitOriginal > 0 ? (
                                                             <div className="space-y-0.5">
-                                                                <span className="font-semibold text-blue-700">{formatPrice(investorProfit)} AFN</span>
+                                                                <span className="font-semibold text-blue-700">
+                                                                    {formatPrice(profitLineOriginal)} {profitCode}
+                                                                </span>
                                                                 <div className="text-[10px] text-blue-600">
-                                                                    {formatPrice(p.profit_per_unit)} / unit
-                                                                    {p.profit_currency_code ? ` (${p.profit_currency_code} cfg)` : ''}
+                                                                    {formatPrice(profitUnitOriginal)} {profitCode} / unit
+                                                                </div>
+                                                                <div className="text-muted-foreground text-[10px]">
+                                                                    {formatPrice(investorProfit)} AFN ledger
                                                                 </div>
                                                             </div>
                                                         ) : (

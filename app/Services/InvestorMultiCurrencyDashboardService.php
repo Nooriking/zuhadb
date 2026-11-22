@@ -303,40 +303,39 @@ class InvestorMultiCurrencyDashboardService
      */
     private function accumulateInventoryFromPurchases(array &$sections, ?int $investorId, array &$legacy, array &$limitations): void
     {
-        $purchases = Product::query()
+        $purchases = ProductBatch::query()
             ->where('trash', false)
-            ->whereNotNull('variant_id')
             ->when($investorId, fn ($q) => $q->where('investor_id', $investorId), fn ($q) => $q->whereNotNull('investor_id'))
             ->get([
                 'id',
                 'quantity',
                 'remaining_quantity',
-                'purchase_currency_code',
-                'purchase_unit_amount',
-                'purchase_line_amount',
-                'purchase_price_afn',
-                'line_total',
+                'unit_cost_currency',
+                'unit_cost_afn',
+                'total_cost_afn',
+                'profit_currency_code',
+                'exchange_rate',
             ]);
 
         foreach ($purchases as $purchase) {
-            $code = $this->normalizeKnownCode($purchase->purchase_currency_code);
+            $code = $this->normalizeKnownCode($purchase->profit_currency_code)
+                ?? ((float) ($purchase->exchange_rate ?? 0) == 1.0 ? 'AFN' : null);
             if ($code === null) {
-                $legacy['purchases_without_currency'] = (int) $legacy['purchases_without_currency'] + 1;
-                $limitations[] = 'Some purchase rows lack purchase_currency_code and are excluded from original-currency sections.';
-
-                continue;
+                // Prefer AFN ledger when original currency was not snapshotted on the batch.
+                $code = 'AFN';
             }
 
             $qty = max(0, (int) $purchase->quantity);
             $remaining = max(0, (int) $purchase->remaining_quantity);
             $sold = max(0, $qty - $remaining);
-            $unitOriginal = (string) ($purchase->purchase_unit_amount ?? '0');
-            if ((float) $unitOriginal <= 0 && $qty > 0 && $purchase->purchase_line_amount !== null) {
-                $unitOriginal = Money::div((string) $purchase->purchase_line_amount, (string) $qty, 8);
+            $unitOriginal = (string) ($purchase->unit_cost_currency ?? '0');
+            if ((float) $unitOriginal <= 0 && $qty > 0 && $purchase->total_cost_afn !== null) {
+                $unitOriginal = Money::div((string) $purchase->total_cost_afn, (string) $qty, 8);
             }
-            $unitAfn = $qty > 0
-                ? Money::div((string) ($purchase->purchase_price_afn ?? $purchase->line_total ?? '0'), (string) $qty, 8)
-                : '0';
+            $unitAfn = (string) ($purchase->unit_cost_afn ?? '0');
+            if ((float) $unitAfn <= 0 && $qty > 0 && $purchase->total_cost_afn !== null) {
+                $unitAfn = Money::div((string) $purchase->total_cost_afn, (string) $qty, 8);
+            }
 
             $sections[$code]['inventory_value'] = Money::add(
                 $sections[$code]['inventory_value'],

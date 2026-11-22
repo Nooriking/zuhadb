@@ -2,56 +2,96 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-
-class InvestorWallet extends Model
+/**
+ * Compatibility façade over investor_wallet_balances.
+ * The investor_wallets table has been dropped; callers keep using this API.
+ */
+class InvestorWallet
 {
-    use HasFactory;
+    public function __construct(
+        public readonly int $investor_id,
+    ) {}
 
-    protected $table = 'investor_wallets';
-
-    protected $fillable = [
-        'investor_id',
-        'currency_id',
-        'capital_balance_currency',
-        'capital_balance_afn',
-        'profit_balance_currency',
-        'profit_balance_afn',
-        'total_invested_afn',
-        'total_profit_earned_afn',
-        'total_withdrawn_afn',
-        'last_transaction_at',
-    ];
-
-    protected $casts = [
-        'capital_balance_currency' => 'decimal:2',
-        'capital_balance_afn'      => 'decimal:2',
-        'profit_balance_currency'  => 'decimal:2',
-        'profit_balance_afn'       => 'decimal:2',
-        'total_invested_afn'       => 'decimal:2',
-        'total_profit_earned_afn'  => 'decimal:2',
-        'total_withdrawn_afn'      => 'decimal:2',
-        'last_transaction_at'      => 'datetime',
-        'created_at'               => 'datetime',
-        'updated_at'               => 'datetime',
-    ];
-
-    /* Relationships */
-
-    public function investor(): BelongsTo
+    public static function forInvestor(int $investorId): self
     {
-        return $this->belongsTo(Investor::class, 'investor_id');
+        return new self($investorId);
     }
 
-    public function currency(): BelongsTo
+    public function balanceFor(string $currencyCode): InvestorWalletBalance
     {
-        return $this->belongsTo(Currency::class, 'currency_id');
+        return InvestorWalletBalance::forInvestor($this->investor_id, $currencyCode);
+    }
+
+    public function getCapitalBalanceAfnAttribute(): float
+    {
+        return (float) InvestorWalletBalance::query()
+            ->where('investor_id', $this->investor_id)
+            ->sum('capital_balance_afn');
+    }
+
+    public function getProfitBalanceAfnAttribute(): float
+    {
+        return (float) InvestorWalletBalance::query()
+            ->where('investor_id', $this->investor_id)
+            ->sum('profit_balance_afn');
+    }
+
+    public function __get(string $key): mixed
+    {
+        return match ($key) {
+            'capital_balance_afn' => $this->getCapitalBalanceAfnAttribute(),
+            'profit_balance_afn' => $this->getProfitBalanceAfnAttribute(),
+            'total_invested_afn' => $this->getCapitalBalanceAfnAttribute(),
+            'total_profit_earned_afn' => $this->getProfitBalanceAfnAttribute(),
+            'total_withdrawn_afn' => 0.0,
+            'investor_id' => $this->investor_id,
+            default => null,
+        };
     }
 
     public function getTotalBalanceAfnAttribute(): float
     {
-        return (float) $this->capital_balance_afn + (float) $this->profit_balance_afn;
+        return $this->capital_balance_afn + $this->profit_balance_afn;
+    }
+
+    public function update(array $attributes): void
+    {
+        // Legacy AFN-only updates → ledger AFN wallet row.
+        $row = $this->balanceFor('AFN');
+        $payload = [];
+
+        if (array_key_exists('capital_balance_afn', $attributes)) {
+            $payload['capital_balance_afn'] = $attributes['capital_balance_afn'];
+            $payload['capital_balance_currency'] = $attributes['capital_balance_afn'];
+        }
+        if (array_key_exists('profit_balance_afn', $attributes)) {
+            $payload['profit_balance_afn'] = $attributes['profit_balance_afn'];
+            $payload['profit_balance_currency'] = $attributes['profit_balance_afn'];
+        }
+        if (array_key_exists('last_transaction_at', $attributes)) {
+            $payload['last_rate_at'] = $attributes['last_transaction_at'];
+        }
+
+        if ($payload !== []) {
+            $row->fill($payload)->save();
+        }
+    }
+
+    public function adjustCapital(
+        string $currencyCode,
+        float $deltaCurrency,
+        float $deltaAfn,
+        ?float $rate = null,
+    ): InvestorWalletBalance {
+        return $this->balanceFor($currencyCode)->adjustCapital($deltaCurrency, $deltaAfn, $rate);
+    }
+
+    public function adjustProfit(
+        string $currencyCode,
+        float $deltaCurrency,
+        float $deltaAfn,
+        ?float $rate = null,
+    ): InvestorWalletBalance {
+        return $this->balanceFor($currencyCode)->adjustProfit($deltaCurrency, $deltaAfn, $rate);
     }
 }

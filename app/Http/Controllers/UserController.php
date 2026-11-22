@@ -163,15 +163,11 @@ class UserController extends Controller
             return back()->withErrors(['branch_id' => $e->getMessage()])->withInput();
         }
 
-        if ($user->role === User::ROLE_INVESTOR) {
-            return redirect()
-                ->route('investors.show', $user->id)
-                ->with('success', "Investor \"{$user->name}\" was created. Manage capital and goods from this page — do not register identity again.");
-        }
-
         return redirect()
             ->route('users.index')
-            ->with('success', "User \"{$user->name}\" was created successfully.");
+            ->with('success', $user->role === User::ROLE_INVESTOR
+                ? "Investor \"{$user->name}\" was created successfully."
+                : "User \"{$user->name}\" was created successfully.");
     }
 
     /* =========================================================
@@ -202,7 +198,7 @@ class UserController extends Controller
             'total_sales'     => (int) Sale::query()->where('created_by', $user->id)->count(),
             'total_purchases' => (int) Product::query()
                 ->where('user_id', $user->id)
-                ->whereNotNull('variant_id')
+                ->whereNotNull('purchase_date')
                 ->count(),
             'total_expenses'  => (int) Expense::query()->where('created_by', $user->id)->count(),
         ];

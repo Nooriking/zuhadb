@@ -63,9 +63,16 @@ class SupplierInvoice extends Model
         ]);
     }
 
-    public static function syncFromProduct(Product $product): void
-    {
-        if (! $product->supplier_id || ! $product->variant_id) {
+    /**
+     * Sync AP from a purchase shell + explicit supplier / total (products no longer store these).
+     */
+    public static function syncFromPurchase(
+        int $supplierId,
+        Product $product,
+        float $totalAfn,
+        float $exchangeRate = 0,
+    ): void {
+        if (! $product->is_purchase) {
             return;
         }
 
@@ -74,7 +81,7 @@ class SupplierInvoice extends Model
 
         if ($product->trash) {
             static::query()
-                ->where('supplier_id', $product->supplier_id)
+                ->where('supplier_id', $supplierId)
                 ->where('invoice_no', $invoiceNo)
                 ->whereDate('purchase_date', $date)
                 ->where('paid_afn', '<=', 0)
@@ -83,9 +90,9 @@ class SupplierInvoice extends Model
             return;
         }
 
-        $total = round((float) $product->line_total, 2);
+        $total = round($totalAfn, 2);
         $existing = static::query()
-            ->where('supplier_id', $product->supplier_id)
+            ->where('supplier_id', $supplierId)
             ->where('invoice_no', $invoiceNo)
             ->whereDate('purchase_date', $date)
             ->first();
@@ -93,12 +100,12 @@ class SupplierInvoice extends Model
 
         static::query()->updateOrCreate(
             [
-                'supplier_id' => $product->supplier_id,
+                'supplier_id' => $supplierId,
                 'invoice_no' => $invoiceNo,
                 'purchase_date' => $date,
             ],
             [
-                'exchange_rate' => round((float) ($product->exchange_rate ?? 0), 2),
+                'exchange_rate' => round($exchangeRate, 2),
                 'total_afn' => $total,
                 'paid_afn' => $paid,
                 'due_afn' => round(max(0, $total - $paid), 2),

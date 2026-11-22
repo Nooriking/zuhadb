@@ -2,13 +2,13 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 
 class Product extends Model
@@ -16,113 +16,30 @@ class Product extends Model
     use HasFactory, SoftDeletes;
 
     protected $table = 'products';
+
     protected $primaryKey = 'id';
 
-    /* =========================================================
-     |  Fillable
-     ========================================================= */
-
     protected $fillable = [
-        // Product info
         'brand_id',
         'user_id',
         'name',
         'gender',
         'status',
         'description',
-
-        // Purchase info
-        'variant_id',
-        'investor_id',
-        'supplier_id',
-        'invoice_number',
-        'purchase_date',
-        'exchange_rate',
-        'purchase_currency_id',
-        'purchase_currency_code',
-        'purchase_currency_symbol',
-        'purchase_unit_amount',
-        'purchase_line_amount',
-        'rate_to_ledger',
-        'rate_kind',
-        'usd_to_afn_rate',
-        'aed_to_afn_rate',
-        'usd_to_aed_rate',
-        'rate_effective_at',
-        'rate_source',
-        'unit_amount_usd',
-        'unit_amount_aed',
-        'line_amount_usd',
-        'line_amount_aed',
-        'quantity',
-        'remaining_quantity',
-        'purchase_price_afn',
-        'wholesale_price_afn',
-        'wholesale_min_qty',
-
-        // ✅ Investor profit
-        'profit_per_unit',
-        'line_total',
-        'line_profit',
-
-        // ✅ Store profit (جدید)
-        'profit_currency_id',
-        'profit_currency_code',
-        'store_profit_per_unit',
-        'line_store_profit',
-
-        'bill_image',
-        'notes',
-        'payment_status',
-
-        // Meta
         'trash',
     ];
 
-    /* =========================================================
-     |  Casts
-     ========================================================= */
-
     protected $casts = [
-        'trash'                  => 'boolean',
-        'purchase_date'          => 'date',
-        'exchange_rate'          => 'decimal:8',
-        'purchase_unit_amount'   => 'decimal:2',
-        'purchase_line_amount'   => 'decimal:2',
-        'rate_to_ledger'         => 'decimal:8',
-        'usd_to_afn_rate'        => 'decimal:8',
-        'aed_to_afn_rate'        => 'decimal:8',
-        'usd_to_aed_rate'        => 'decimal:8',
-        'rate_effective_at'      => 'datetime',
-        'unit_amount_usd'        => 'decimal:4',
-        'unit_amount_aed'        => 'decimal:4',
-        'line_amount_usd'        => 'decimal:2',
-        'line_amount_aed'        => 'decimal:2',
-        'quantity'               => 'integer',
-        'remaining_quantity'     => 'integer',
-        'purchase_price_afn'     => 'decimal:2',
-        'wholesale_price_afn'    => 'decimal:2',
-        'wholesale_min_qty'      => 'integer',
-
-        // ✅ Investor profit
-        'profit_per_unit'        => 'decimal:2',
-        'line_total'             => 'decimal:2',
-        'line_profit'            => 'decimal:2',
-
-        // ✅ Store profit (جدید)
-        'store_profit_per_unit'  => 'decimal:2',
-        'line_store_profit'      => 'decimal:2',
-
-        'created_at'             => 'datetime',
-        'updated_at'             => 'datetime',
-        'deleted_at'             => 'datetime',
+        'trash' => 'boolean',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+        'deleted_at' => 'datetime',
     ];
 
     protected $appends = [
         'display_name',
         'is_active',
         'is_trashed',
-        'is_purchase',
     ];
 
     /* =========================================================
@@ -139,38 +56,14 @@ class Product extends Model
         return $this->belongsTo(User::class, 'user_id');
     }
 
-    public function variant(): BelongsTo
-    {
-        return $this->belongsTo(ProductVariant::class, 'variant_id');
-    }
-
-    public function investor(): BelongsTo
-    {
-        return $this->belongsTo(Investor::class, 'investor_id');
-    }
-
-    public function supplier(): BelongsTo
-    {
-        return $this->belongsTo(Supplier::class, 'supplier_id');
-    }
-
-    public function purchaseCurrency(): BelongsTo
-    {
-        return $this->belongsTo(Currency::class, 'purchase_currency_id');
-    }
-
     public function variants(): HasMany
     {
         return $this->hasMany(ProductVariant::class, 'product_id');
     }
 
-    /**
-     * Per-product USD pair rates (catalog product only). Independent of
-     * purchase-row exchange_rate snapshots and of currencies.rate_to_default.
-     */
-    public function exchangeRates(): HasMany
+    public function prices(): HasMany
     {
-        return $this->hasMany(ProductExchangeRate::class, 'product_id');
+        return $this->hasMany(ProductPrice::class, 'product_id');
     }
 
     public function activeVariants(): HasMany
@@ -179,11 +72,17 @@ class Product extends Model
             ->where('trash', false);
     }
 
-    public function purchaseRows(): HasMany
+    /** Batches belonging to this product's variants. */
+    public function batches(): HasManyThrough
     {
-        return $this->hasMany(Product::class, 'name', 'name')
-            ->whereNotNull('variant_id')
-            ->where('brand_id', $this->brand_id);
+        return $this->hasManyThrough(
+            ProductBatch::class,
+            ProductVariant::class,
+            'product_id',
+            'variant_id',
+            'id',
+            'id'
+        );
     }
 
     public function barcodes(): HasManyThrough
@@ -207,10 +106,6 @@ class Product extends Model
         return $query->where('trash', false);
     }
 
-    /**
-     * ✅ scope اصلاح‌شده — نام از trashed به onlyTrash تغییر یافت
-     * تا با SoftDeletes تداخل نکند.
-     */
     public function scopeOnlyTrash(Builder $query): Builder
     {
         return $query
@@ -238,56 +133,28 @@ class Product extends Model
         return $query->where('gender', $gender);
     }
 
-    public function scopeMainProducts(Builder $query): Builder
-    {
-        return $query->whereNull('variant_id');
-    }
-
-    public function scopePurchases(Builder $query): Builder
-    {
-        return $query->whereNotNull('variant_id');
-    }
-
     public function scopeInStock(Builder $query): Builder
     {
-        return $query->whereHas('variants', function ($q) {
-            $q->where('stock_quantity', '>', 0)->notTrashed();
+        return $query->whereHas('variants.inventories', function ($q) {
+            $q->where('available_quantity', '>', 0);
         });
     }
 
     public function scopeOutOfStock(Builder $query): Builder
     {
-        return $query->whereDoesntHave('variants', function ($q) {
-            $q->where('stock_quantity', '>', 0)->notTrashed();
+        return $query->whereDoesntHave('variants.inventories', function ($q) {
+            $q->where('available_quantity', '>', 0);
         });
     }
 
-    public function scopePurchasedBetween(Builder $query, $from, $to): Builder
-    {
-        return $query->where('purchase_date', '>=', $from)
-                     ->where('purchase_date', '<=', $to)
-                     ->whereNotNull('variant_id');
-    }
-
-    public function scopeWithUnpaidPurchases(Builder $query): Builder
-    {
-        return $query->whereNotNull('variant_id')
-            ->where(function ($q) {
-                $q->where('payment_status', '!=', 'paid')
-                  ->orWhereNull('payment_status');
-            });
-    }
-
-    /** ✅ فقط purchase row هایی که مال دوکان هستند (بدون investor) */
     public function scopeStoreOwned(Builder $query): Builder
     {
-        return $query->whereNotNull('variant_id')->whereNull('investor_id');
+        return $query->whereHas('batches', fn ($q) => $q->whereNull('investment_id'));
     }
 
-    /** ✅ فقط purchase row هایی که مال سرمایه‌گذار هستند */
     public function scopeInvestorOwned(Builder $query): Builder
     {
-        return $query->whereNotNull('variant_id')->whereNotNull('investor_id');
+        return $query->whereHas('batches', fn ($q) => $q->whereNotNull('investment_id'));
     }
 
     public static function supplierCredits(): array
@@ -351,20 +218,18 @@ class Product extends Model
         return (bool) $this->trash;
     }
 
-    public function getIsPurchaseAttribute(): bool
-    {
-        return $this->variant_id !== null;
-    }
-
     public function getTotalStockAttribute(): int
     {
-        if ($this->variant_id !== null) {
-            return (int) $this->remaining_quantity;
+        $variantIds = $this->variants()->where('trash', false)->pluck('id');
+
+        if ($variantIds->isEmpty()) {
+            return 0;
         }
 
-        return (int) $this->variants()
+        return (int) Inventory::query()
+            ->whereIn('variant_id', $variantIds)
             ->where('trash', false)
-            ->sum('stock_quantity');
+            ->sum('available_quantity');
     }
 
     public function getIsInStockAttribute(): bool
@@ -374,63 +239,48 @@ class Product extends Model
 
     public function getTotalPurchaseAfnAttribute(): float
     {
-        if ($this->variant_id !== null) {
-            return (float) $this->purchase_price_afn;
-        }
+        $variantIds = $this->variants()->pluck('id');
 
-        return (float) Product::where('name', $this->name)
-            ->where('brand_id', $this->brand_id)
-            ->whereNotNull('variant_id')
+        return (float) ProductBatch::query()
+            ->whereIn('variant_id', $variantIds)
             ->where('trash', false)
-            ->sum('purchase_price_afn');
+            ->sum('total_cost_afn');
     }
 
     public function getTotalProfitAfnAttribute(): float
     {
-        if ($this->variant_id !== null) {
-            return (float) $this->line_profit;
-        }
+        $variantIds = $this->variants()->pluck('id');
 
-        return (float) Product::where('name', $this->name)
-            ->where('brand_id', $this->brand_id)
-            ->whereNotNull('variant_id')
+        return (float) ProductBatch::query()
+            ->whereIn('variant_id', $variantIds)
             ->where('trash', false)
-            ->sum('line_profit');
+            ->get()
+            ->sum(fn (ProductBatch $b) => (float) bcmul((string) $b->profit_per_unit_afn, (string) $b->quantity, 2));
     }
 
-    // ✅ سود کل دوکان (جدید)
     public function getTotalStoreProfitAfnAttribute(): float
     {
-        if ($this->variant_id !== null) {
-            return (float) $this->line_store_profit;
-        }
+        $variantIds = $this->variants()->pluck('id');
 
-        return (float) Product::where('name', $this->name)
-            ->where('brand_id', $this->brand_id)
-            ->whereNotNull('variant_id')
+        return (float) ProductBatch::query()
+            ->whereIn('variant_id', $variantIds)
             ->where('trash', false)
-            ->sum('line_store_profit');
+            ->get()
+            ->sum(fn (ProductBatch $b) => (float) bcmul((string) ($b->store_profit_per_unit_afn ?? 0), (string) $b->quantity, 2));
     }
 
     public function getPurchaseCountAttribute(): int
     {
-        if ($this->variant_id !== null) {
-            return 1;
-        }
+        $variantIds = $this->variants()->pluck('id');
 
-        return Product::where('name', $this->name)
-            ->where('brand_id', $this->brand_id)
-            ->whereNotNull('variant_id')
+        return (int) ProductBatch::query()
+            ->whereIn('variant_id', $variantIds)
             ->where('trash', false)
             ->count();
     }
 
     public function getVariantsCountAttribute(): int
     {
-        if ($this->variant_id !== null) {
-            return 0;
-        }
-
         return $this->variants()->where('trash', false)->count();
     }
 
@@ -448,54 +298,43 @@ class Product extends Model
         return (bool) $this->trash;
     }
 
-    public function refreshStock(): void
-    {
-        $this->variants()->get()->each(function (ProductVariant $variant) {
-            $totalStock = Product::where('variant_id', $variant->id)
-                ->where('trash', false)
-                ->sum('remaining_quantity');
-
-            $variant->update([
-                'stock_quantity' => (int) $totalStock,
-            ]);
-        });
-    }
-
     public function moveToTrash(): void
     {
         $this->update([
-            'trash'   => true,
+            'trash' => true,
             'user_id' => auth()->id(),
         ]);
 
         $this->variants()->update([
-            'trash'   => true,
+            'trash' => true,
             'user_id' => auth()->id(),
         ]);
 
         $variantIds = $this->variants()->pluck('id')->all();
         if (! empty($variantIds)) {
-            Product::whereIn('variant_id', $variantIds)
-                ->update(['trash' => true, 'user_id' => auth()->id()]);
+            ProductBatch::query()
+                ->whereIn('variant_id', $variantIds)
+                ->update(['trash' => true]);
         }
     }
 
     public function restoreFromTrash(): void
     {
         $this->update([
-            'trash'   => false,
+            'trash' => false,
             'user_id' => auth()->id(),
         ]);
 
         $this->variants()->update([
-            'trash'   => false,
+            'trash' => false,
             'user_id' => auth()->id(),
         ]);
 
         $variantIds = $this->variants()->pluck('id')->all();
         if (! empty($variantIds)) {
-            Product::whereIn('variant_id', $variantIds)
-                ->update(['trash' => false, 'user_id' => auth()->id()]);
+            ProductBatch::query()
+                ->whereIn('variant_id', $variantIds)
+                ->update(['trash' => false]);
         }
     }
 
@@ -504,36 +343,23 @@ class Product extends Model
         return 'id';
     }
 
-    /* =========================================================
-     |  Boot
-     ========================================================= */
-
     protected static function booted(): void
     {
-        static::saved(function (Product $product) {
-            if ($product->variant_id && $product->supplier_id) {
-                SupplierInvoice::syncFromProduct($product);
-            }
-        });
-
         static::deleting(function (Product $product) {
             if ($product->isForceDeleting()) {
                 return;
             }
 
-            if ($product->variant_id !== null) {
-                return;
-            }
-
             $product->variants()->update([
-                'trash'   => true,
+                'trash' => true,
                 'user_id' => auth()->id(),
             ]);
 
             $variantIds = $product->variants()->pluck('id')->all();
             if (! empty($variantIds)) {
-                Product::whereIn('variant_id', $variantIds)
-                    ->update(['trash' => true, 'user_id' => auth()->id()]);
+                ProductBatch::query()
+                    ->whereIn('variant_id', $variantIds)
+                    ->update(['trash' => true]);
             }
         });
     }

@@ -5,6 +5,7 @@ namespace App\Http\Middleware;
 use App\Models\ActivityNotification;
 use App\Models\AppSetting;
 use App\Models\Currency;
+use App\Services\ExchangeService;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Middleware;
@@ -80,11 +81,51 @@ class HandleInertiaRequests extends Middleware
 
             'currency' => fn () => Currency::sharedPayload(),
 
+            'exchange' => fn () => $isAuthenticated
+                ? $this->sharedExchangeRates()
+                : [
+                    'usd_to_afn' => null,
+                    'aed_to_afn' => null,
+                    'usd_to_aed' => null,
+                    'effective_at' => null,
+                    'source' => null,
+                ],
+
             'flash' => [
                 'success'      => fn () => $request->session()->get('success'),
                 'error'        => fn () => $request->session()->get('error'),
                 'created_sale' => fn () => $request->session()->get('created_sale'),
             ],
         ]);
+    }
+
+    /**
+     * @return array{usd_to_afn: string|null, aed_to_afn: string|null, usd_to_aed: string|null, effective_at: string|null, source: string|null}
+     */
+    private function sharedExchangeRates(): array
+    {
+        $empty = [
+            'usd_to_afn' => null,
+            'aed_to_afn' => null,
+            'usd_to_aed' => null,
+            'effective_at' => null,
+            'source' => null,
+        ];
+
+        try {
+            $exchange = app(ExchangeService::class);
+            $rates = $exchange->getCurrentRates();
+            $usdSnap = $exchange->snapshot('USD', 'AFN');
+
+            return [
+                'usd_to_afn' => $rates['usd_to_afn'] ?? null,
+                'aed_to_afn' => $rates['aed_to_afn'] ?? null,
+                'usd_to_aed' => $rates['usd_to_aed'] ?? null,
+                'effective_at' => $usdSnap['effective_at'] ?? null,
+                'source' => $usdSnap['source'] ?? null,
+            ];
+        } catch (\Throwable) {
+            return $empty;
+        }
     }
 }

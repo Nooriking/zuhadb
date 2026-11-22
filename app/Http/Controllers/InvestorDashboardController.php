@@ -222,41 +222,24 @@ class InvestorDashboardController extends Controller
         ];
 
         $purchases = $own && $onlyId > 0
-            ? Product::query()
+            ? \App\Models\ProductBatch::query()
                 ->where('trash', false)
-                ->whereNotNull('variant_id')
                 ->where('investor_id', $onlyId)
+                ->with('purchaseItem:id,name')
                 ->orderByDesc('id')
-                ->get([
-                    'id',
-                    'name',
-                    'quantity',
-                    'remaining_quantity',
-                    'line_total',
-                    'profit_per_unit',
-                    'profit_currency_code',
-                    'purchase_currency_code',
-                    'purchase_unit_amount',
-                    'purchase_line_amount',
-                    'unit_amount_usd',
-                    'unit_amount_aed',
-                    'line_amount_usd',
-                    'line_amount_aed',
-                    'usd_to_afn_rate',
-                    'aed_to_afn_rate',
-                ])
+                ->get()
             : collect();
 
         $stockItems = $purchases->map(function ($row) use ($money) {
             $qty = (int) $row->quantity;
             $remaining = (int) $row->remaining_quantity;
             $sold = max(0, $qty - $remaining);
-            $cost = (float) $row->line_total;
-            $profitPerUnit = (float) $row->profit_per_unit;
+            $cost = (float) $row->total_cost_afn;
+            $profitPerUnit = (float) $row->profit_per_unit_afn;
             $profit = $profitPerUnit * $qty;
 
             return [
-                'name' => $row->name ?: 'Product',
+                'name' => $row->purchaseItem?->name ?: ('Batch '.$row->batch_code),
                 'quantity' => $qty,
                 'remaining' => $remaining,
                 'sold' => $sold,
@@ -264,18 +247,18 @@ class InvestorDashboardController extends Controller
                 'profit' => $money($profit),
                 'profit_per_unit_afn' => $profitPerUnit,
                 'profit_currency_code' => $row->profit_currency_code,
-                'original_currency' => $row->purchase_currency_code,
-                'original_unit' => $row->purchase_unit_amount,
-                'original_line' => $row->purchase_line_amount,
+                'original_currency' => $row->profit_currency_code,
+                'original_unit' => $row->unit_cost_currency,
+                'original_line' => (float) $row->unit_cost_currency * $qty,
                 'historical_afn' => round($cost, 2),
-                'historical_usd' => $row->line_amount_usd !== null ? (float) $row->line_amount_usd : null,
-                'historical_aed' => $row->line_amount_aed !== null ? (float) $row->line_amount_aed : null,
+                'historical_usd' => null,
+                'historical_aed' => null,
                 'usd_to_afn_rate' => $row->usd_to_afn_rate,
                 'aed_to_afn_rate' => $row->aed_to_afn_rate,
             ];
         })->values();
 
-        $stockValueLedger = (float) $purchases->sum(fn ($row) => (float) $row->line_total);
+        $stockValueLedger = (float) $purchases->sum(fn ($row) => (float) $row->total_cost_afn);
         $kpis['stock_value'] = $money($stockValueLedger);
         $kpis3c['stock_value'] = $this->currencies->threeCurrencyFromLedger($stockValueLedger);
 

@@ -22,11 +22,11 @@ export type OriginalMoney = {
 export function currencyLabel(code: string | null | undefined): string {
     switch ((code || '').toUpperCase()) {
         case 'AFN':
-            return 'AFN (افغانی)';
+            return 'AFN (Afghani)';
         case 'USD':
-            return 'USD (دالر)';
+            return 'USD (Dollar)';
         case 'AED':
-            return 'AED (درهم)';
+            return 'AED (Dirham)';
         case 'UNKNOWN':
         case '':
             return 'Unknown';
@@ -85,7 +85,7 @@ export function ensureThreeCurrencyTotals(
             existing || {
                 code,
                 label: currencyLabel(code),
-                short_label: code === 'AFN' ? 'افغانی' : code === 'USD' ? 'دالر' : 'درهم',
+                short_label: code === 'AFN' ? 'Afghani' : code === 'USD' ? 'Dollar' : 'Dirham',
                 symbol: null,
                 total: 0,
             }

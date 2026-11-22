@@ -25,13 +25,10 @@ class StockDashboardController extends Controller
         $stock = Inventory::notTrashed()
             ->when($branchId, fn ($q) => $q->where('branch_id', $branchId));
 
-        $low = (clone $stock)->whereHas('variant', function ($q) {
-            $q->where('minimum_stock', '>', 0)
-                ->whereColumn('inventories.quantity', '<=', 'product_variants.minimum_stock');
-        });
+        $low = (clone $stock)->lowStock();
 
         $lowItems = (clone $low)
-            ->with(['variant:id,product_id,volume_ml,minimum_stock', 'variant.product:id,name'])
+            ->with(['variant:id,product_id,volume_ml', 'variant.product:id,name'])
             ->orderBy('quantity')
             ->limit(8)
             ->get()
@@ -40,7 +37,7 @@ class StockDashboardController extends Controller
                 'product' => $row->variant?->product?->name ?? '—',
                 'volume_ml' => $row->variant?->volume_ml,
                 'quantity' => (int) $row->quantity,
-                'min_stock' => (int) ($row->variant?->minimum_stock ?? 0),
+                'min_stock' => Inventory::LOW_STOCK_THRESHOLD,
             ]);
 
         $movements = InventoryTransaction::query()

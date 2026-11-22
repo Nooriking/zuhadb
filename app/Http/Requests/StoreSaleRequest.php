@@ -45,6 +45,7 @@ class StoreSaleRequest extends FormRequest
             'items.*.quantity' => SafeData::quantity(true, 1),
             'items.*.sale_unit_amount' => SafeData::money(false, 0),
             'items.*.sale_price_afn' => SafeData::money(false, 0),
+            'items.*.use_catalog_price' => ['nullable', 'boolean'],
             'items.*.discount_afn' => SafeData::money(false, 0),
             'items.*.discount_amount' => SafeData::money(false, 0),
 
@@ -78,7 +79,9 @@ class StoreSaleRequest extends FormRequest
             foreach ($items as $index => $item) {
                 $hasUnit = isset($item['sale_unit_amount']) && $item['sale_unit_amount'] !== '' && $item['sale_unit_amount'] !== null;
                 $hasAfn = isset($item['sale_price_afn']) && $item['sale_price_afn'] !== '' && $item['sale_price_afn'] !== null;
-                if (! $hasUnit && ! $hasAfn) {
+                $useCatalog = ! empty($item['use_catalog_price']);
+                // Missing unit price is allowed — SaleService falls back to PriceResolver.
+                if (! $hasUnit && ! $hasAfn && ! $useCatalog && empty($item['variant_id'])) {
                     $validator->errors()->add("items.{$index}.sale_unit_amount", 'Sale unit price is required.');
                 }
             }
@@ -95,6 +98,13 @@ class StoreSaleRequest extends FormRequest
                     return;
                 }
 
+                $saleCode = strtoupper((string) $saleCurrency->code);
+                if (! in_array($saleCode, ['AFN', 'USD', 'AED'], true)) {
+                    $validator->errors()->add('sale_currency_id', "Unsupported sale currency: {$saleCode}");
+
+                    return;
+                }
+
                 $overrides = [];
                 if ($this->filled('usd_to_afn_rate')) {
                     $overrides['usd_to_afn'] = (string) $this->input('usd_to_afn_rate');
@@ -103,21 +113,42 @@ class StoreSaleRequest extends FormRequest
                     $overrides['aed_to_afn'] = (string) $this->input('aed_to_afn_rate');
                 }
 
-                $board = $fx->boardAt($this->input('sale_date'), $overrides, allowCatalogFallback: true);
+                // Sales require the Central Exchange Board — never catalog fallback.
+                if ($overrides === []) {
+                    $current = app(\App\Services\ExchangeService::class)->getCurrentRates();
+                    $overrides = [
+                        'usd_to_afn' => (string) $current['usd_to_afn'],
+                        'aed_to_afn' => (string) $current['aed_to_afn'],
+                        'usd_to_aed' => (string) ($current['usd_to_aed'] ?? ''),
+                        'source' => (string) ($current['source'] ?? 'exchange_rates'),
+                    ];
+                }
+
+                if ((float) ($overrides['usd_to_afn'] ?? 0) <= 0 || (float) ($overrides['aed_to_afn'] ?? 0) <= 0) {
+                    $validator->errors()->add(
+                        'exchange_rate',
+                        'Central exchange rate board is unavailable. Please add USD/AED rates in Exchange Rates first.'
+                    );
+
+                    return;
+                }
+
+                $board = $fx->boardAt($this->input('sale_date'), $overrides, allowCatalogFallback: false);
                 $costs = ProductVariant::query()
                     ->whereIn('id', collect($items)->pluck('variant_id')->filter())
-                    ->pluck('purchase_price_afn', 'id');
+                    ->get()
+                    ->keyBy('id');
 
                 foreach ($items as $index => $item) {
-                    $code = strtoupper((string) $saleCurrency->code);
                     if (isset($item['sale_unit_amount']) && $item['sale_unit_amount'] !== '' && $item['sale_unit_amount'] !== null) {
                         $unitOriginal = Money::round((string) $item['sale_unit_amount'], 4);
-                        $priceAfn = (float) $board->equivalents($unitOriginal, $code, 2)['afn'];
+                        $priceAfn = (float) $board->equivalents($unitOriginal, $saleCode, 2)['afn'];
                     } else {
                         $priceAfn = (float) ($item['sale_price_afn'] ?? 0);
                     }
 
-                    $cost = (float) ($costs[$item['variant_id'] ?? null] ?? 0);
+                    $variant = $costs->get($item['variant_id'] ?? null);
+                    $cost = $variant ? (float) $variant->purchase_price_afn : 0;
                     if ($priceAfn < $cost) {
                         $validator->errors()->add(
                             "items.{$index}.sale_unit_amount",
@@ -125,8 +156,17 @@ class StoreSaleRequest extends FormRequest
                         );
                     }
                 }
+            } catch (\Illuminate\Validation\ValidationException $e) {
+                foreach ($e->errors() as $field => $messages) {
+                    foreach ($messages as $message) {
+                        $validator->errors()->add($field, $message);
+                    }
+                }
             } catch (\Throwable) {
-                // Board resolution errors are reported by the service on submit.
+                $validator->errors()->add(
+                    'exchange_rate',
+                    'Central exchange rate board is unavailable. Please add USD/AED rates in Exchange Rates first.'
+                );
             }
         });
     }

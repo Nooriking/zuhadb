@@ -4,11 +4,12 @@ use App\Models\Brand;
 use App\Models\Branch;
 use App\Models\Currency;
 use App\Models\Product;
-use App\Models\ProductExchangeRate;
 use App\Models\ProductVariant;
 use App\Models\User;
-use App\Services\ProductExchangeRateService;
+use App\Services\CurrencyService;
+use App\Services\ExchangeService;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
+use Illuminate\Support\Facades\Schema;
 
 beforeEach(function () {
     $this->withoutMiddleware(ValidateCsrfToken::class);
@@ -94,7 +95,7 @@ test('creating a product stores entered currency amounts and ledger snapshots', 
         ->and((float) $variant->sale_price_afn)->toBe(1050.0);
 });
 
-test('creating a product stores usd to afn and usd to aed rates as afn and aed per one usd', function () {
+test('creating a product does not store product-level exchange rates; board is the single source', function () {
     $this->actingAs($this->admin);
 
     $usd = Currency::query()->where('code', 'USD')->first()
@@ -103,6 +104,9 @@ test('creating a product stores usd to afn and usd to aed rates as afn and aed p
         ?? Currency::factory()->create(['code' => 'AFN', 'is_base' => true, 'rate_to_default' => '1', 'status' => 'active']);
     $aed = Currency::query()->where('code', 'AED')->first()
         ?? Currency::factory()->create(['code' => 'AED', 'rate_to_default' => '19', 'status' => 'active']);
+
+    app(CurrencyService::class)->postRate($usd, $afn, '70', now(), null, 'test');
+    app(CurrencyService::class)->postRate($aed, $afn, '19', now(), null, 'test');
 
     $brand = Brand::factory()->create();
 
@@ -126,12 +130,11 @@ test('creating a product stores usd to afn and usd to aed rates as afn and aed p
     ])->assertRedirect('/products');
 
     $product = Product::query()->where('name', 'Rate Perfume')->whereNull('variant_id')->first();
-    $rates = app(ProductExchangeRateService::class);
+    $board = app(ExchangeService::class)->getCurrentRates();
 
     expect($product)->not->toBeNull()
-        ->and($rates->rate($product, 'USD', 'AFN'))->toBe('70')
-        ->and($rates->rate($product, 'USD', 'AED'))->toBe('3.6725')
-        ->and((int) ProductExchangeRate::query()->where('product_id', $product->id)->count())->toBe(2);
+        ->and((float) $board['usd_to_afn'])->toBe(70.0)
+        ->and(Schema::hasTable('product_exchange_rates'))->toBeFalse();
 
     $this->put("/products/{$product->id}", [
         'name' => 'Rate Perfume',
@@ -178,14 +181,20 @@ test('product exchange rates reject zero and negative values', function () {
         ->assertSessionHasErrors(['usd_to_afn_rate', 'usd_to_aed_rate']);
 });
 
-test('product edit page loads reference rates and updating them does not rewrite purchase FX snapshots', function () {
+test('product edit page loads fx board and later board rate changes do not rewrite purchase FX snapshots', function () {
     $this->actingAs($this->admin);
 
     $afn = Currency::query()->where('code', 'AFN')->first()
         ?? Currency::factory()->create(['code' => 'AFN', 'is_base' => true, 'rate_to_default' => '1', 'status' => 'active']);
     $usd = Currency::query()->where('code', 'USD')->first()
         ?? Currency::factory()->create(['code' => 'USD', 'rate_to_default' => '70', 'status' => 'active', 'is_base' => false]);
+    $aed = Currency::query()->where('code', 'AED')->first()
+        ?? Currency::factory()->create(['code' => 'AED', 'rate_to_default' => '19', 'status' => 'active', 'is_base' => false]);
     $usd->update(['rate_to_default' => '70', 'status' => 'active', 'trash' => false]);
+
+    $fx = app(CurrencyService::class);
+    $fx->postRate($usd, $afn, '70', now()->subDay(), null, 'test');
+    $fx->postRate($aed, $afn, '19', now()->subDay(), null, 'test');
 
     $brand = Brand::factory()->create();
 
@@ -194,8 +203,6 @@ test('product edit page loads reference rates and updating them does not rewrite
         'brand_id' => $brand->id,
         'gender' => 'unisex',
         'status' => 'active',
-        'usd_to_afn_rate' => '70',
-        'usd_to_aed_rate' => '3.67',
         'variants' => [
             [
                 'volume_ml' => 100,
@@ -244,20 +251,23 @@ test('product edit page loads reference rates and updating them does not rewrite
         ->assertOk()
         ->assertInertia(fn ($page) => $page
             ->component('products/edit')
-            ->where('usd_to_afn_rate', fn ($v) => (float) $v === 70.0)
-            ->where('usd_to_aed_rate', fn ($v) => (float) $v === 3.67)
+            ->has('fxBoard')
             ->has('currencies')
+            ->missing('usd_to_afn_rate')
+            ->missing('usd_to_aed_rate')
+            ->missing('exchangeRateContext')
         );
 
     $variantId = $product->variants()->value('id');
+
+    // New board rate must not rewrite the historical purchase snapshot.
+    $fx->postRate($usd, $afn, '80', now(), null, 'test');
 
     $this->put("/products/{$product->id}", [
         'name' => 'Edit Estimate Perfume',
         'brand_id' => $brand->id,
         'gender' => 'unisex',
         'status' => 'active',
-        'usd_to_afn_rate' => '80',
-        'usd_to_aed_rate' => '3.67',
         'variants' => [
             [
                 'id' => $variantId,
@@ -289,10 +299,8 @@ test('product edit page loads reference rates and updating them does not rewrite
     ])->assertRedirect('/products');
 
     $purchaseRow->refresh();
-    $rates = app(ProductExchangeRateService::class);
 
-    // Reference rates updated for estimates; historical purchase snapshot untouched.
-    expect($rates->rate($product->fresh(), 'USD', 'AFN'))->toBe('80')
+    expect((float) app(ExchangeService::class)->getRate('USD', 'AFN'))->toBe(80.0)
         ->and((float) $purchaseRow->exchange_rate)->toBe($snapshotRate)
         ->and((float) ($purchaseRow->purchase_line_amount ?? 0))->toBe($snapshotLine)
         ->and($purchaseRow->purchase_currency_code)->toBe($snapshotCode);

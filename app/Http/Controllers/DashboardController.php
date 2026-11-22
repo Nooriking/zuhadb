@@ -357,7 +357,7 @@ class DashboardController extends Controller
          ========================================================= */
 
         $counters = [
-            'products' => Product::notTrashed()->whereNull('variant_id')->count(),
+            'products' => Product::notTrashed()->whereNull('purchase_date')->count(),
             'variants' => ProductVariant::notTrashed()->count(),
             'customers' => Customer::notTrashed()->count(),
             'suppliers' => Supplier::notTrashed()->count(),
@@ -413,7 +413,7 @@ class DashboardController extends Controller
         $lowStockItems = $this->lowStockQuery($branchId)
             ->with([
                 'branch:id,name,code',
-                'variant:id,product_id,volume_ml,concentration,minimum_stock',
+                'variant:id,product_id,volume_ml,concentration',
                 'variant.product:id,name,brand_id',
                 'variant.product.brand:id,name',
             ])
@@ -434,7 +434,7 @@ class DashboardController extends Controller
                     'brand' => $inv->variant?->product?->brand?->name,
                     'volume_ml' => $inv->variant?->volume_ml,
                     'quantity' => (int) $inv->quantity,
-                    'min_stock' => (int) ($inv->variant?->minimum_stock ?? 0),
+                    'min_stock' => Inventory::LOW_STOCK_THRESHOLD,
                 ];
             });
 
@@ -538,7 +538,7 @@ class DashboardController extends Controller
 
     /**
      * Original tender totals for payments in the selected period.
-     * Uses amount_currency + currency_code snapshots from each payment —
+     * Uses amount_currency + currency_code snapshots from each payment --
      * never recalculates with today's catalog rate.
      *
      * @return list<array{code: string, symbol: string|null, total: float}>
@@ -602,15 +602,12 @@ class DashboardController extends Controller
     }
 
     /**
-     * Same rule as the inventory low-stock page: quantity at or below the variant minimum.
+     * Same rule as the inventory low-stock page: quantity at or below the fixed threshold.
      */
     private function lowStockQuery(?int $branchId = null)
     {
         return Inventory::notTrashed()
             ->when($branchId, fn ($q) => $q->where('branch_id', $branchId))
-            ->whereHas('variant', function ($q) {
-                $q->where('minimum_stock', '>', 0)
-                    ->whereColumn('inventories.quantity', '<=', 'product_variants.minimum_stock');
-            });
+            ->lowStock();
     }
 }

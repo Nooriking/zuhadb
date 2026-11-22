@@ -8,7 +8,6 @@ use App\Models\Customer;
 use App\Models\Receipt;
 use App\Models\SalePayment;
 use App\Services\ActivityLogger;
-use App\Services\CurrencyService;
 use App\Services\CustomerLedgerService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -328,17 +327,18 @@ class CustomerController extends Controller
                 ->get();
             $sale = $openSales->first();
 
-            $payment = SalePayment::create(array_merge(app(CurrencyService::class)->ledgerSnapshot(), [
+            $payment = SalePayment::createWithSnapshot([
                 'sale_id'           => $sale?->id,
                 'customer_id'       => $customer->id,
-                'amount_afn'        => $amount,
+                'amount_currency'   => $amount,
+                'currency_id'       => null,
                 'remaining_due_afn' => $remaining,
                 'payment_method'    => $validated['payment_method'],
                 'reference_number'  => $validated['reference_number'] ?? null,
                 'notes'             => $validated['notes'] ?? null,
                 'paid_at'           => now(),
                 'received_by'       => Auth::id(),
-            ]));
+            ]);
 
             $left = $amount;
             foreach ($openSales as $openSale) {
@@ -358,10 +358,8 @@ class CustomerController extends Controller
             }
 
             app(CustomerLedgerService::class)->recordPayment($payment);
-
-            $customer->update([
-                'current_due_afn' => $remaining,
-            ]);
+            $customer->refresh();
+            $remaining = round((float) $customer->current_due_afn, 2);
 
             return Receipt::create([
                 'customer_id'       => $customer->id,

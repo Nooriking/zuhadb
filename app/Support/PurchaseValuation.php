@@ -37,7 +37,8 @@ class PurchaseValuation
             ?? config('business.default_currency', 'AFN')
         ));
 
-        $board = $this->currencies->boardAt($at, $rateOverrides, allowCatalogFallback: true);
+        // Purchases freeze the exchange_rates board only — no silent catalog/1:1 fallback.
+        $board = $this->currencies->boardAt($at, $rateOverrides, allowCatalogFallback: false);
 
         // Explicit purchase-currency→AFN override (legacy single-rate field) wins for rate_to_ledger
         // when the purchase currency is not AFN, but the board still drives the other two currencies.

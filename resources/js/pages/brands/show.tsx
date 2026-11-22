@@ -17,7 +17,6 @@ interface Brand {
     name: string;
     country: string | null;
     description: string | null;
-    logo: string | null;
     status: 'active' | 'inactive';
     creator: { id: number; name: string; email: string } | null;
     products: Product[];
@@ -63,13 +62,9 @@ export default function BrandsShow({ brand, stats }: Props) {
                 {/* Header */}
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-4">
-                        {brand.logo ? (
-                            <img loading="lazy" decoding="async" src={`/storage/${brand.logo}`} alt={brand.name} className="h-16 w-16 rounded-lg border object-contain" />
-                        ) : (
-                            <div className="flex h-16 w-16 items-center justify-center rounded-lg border bg-gray-100">
-                                <Tag className="h-8 w-8 text-gray-400" />
-                            </div>
-                        )}
+                        <div className="flex h-16 w-16 items-center justify-center rounded-lg border bg-gray-100">
+                            <Tag className="h-8 w-8 text-gray-400" />
+                        </div>
                         <div>
                             <div className="flex items-center gap-3">
                                 <h1 className="text-2xl font-bold tracking-tight">{brand.name}</h1>

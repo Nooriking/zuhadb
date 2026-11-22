@@ -19,7 +19,6 @@ interface Brand {
     name: string;
     country: string | null;
     description: string | null;
-    logo: string | null;
     status: 'active' | 'inactive';
     products_count: number;
     creator: { id: number; name: string } | null;
@@ -156,17 +155,9 @@ export default function BrandsIndex({ brands, filters }: Props) {
                                         <TableCell>{brands.from ? brands.from + index : index + 1}</TableCell>
                                         <TableCell>
                                             <div className="flex items-center gap-3">
-                                                {brand.logo ? (
-                                                    <img loading="lazy" decoding="async"
-                                                        src={`/storage/${brand.logo}`}
-                                                        alt={brand.name}
-                                                        className="h-10 w-10 rounded-md border object-contain"
-                                                    />
-                                                ) : (
-                                                    <div className="bg-muted flex h-10 w-10 items-center justify-center rounded-md border">
-                                                        <Tag className="text-muted-foreground h-5 w-5" />
-                                                    </div>
-                                                )}
+                                                <div className="bg-muted flex h-10 w-10 items-center justify-center rounded-md border">
+                                                    <Tag className="text-muted-foreground h-5 w-5" />
+                                                </div>
                                                 <div>
                                                     <div className="font-medium">{brand.name}</div>
                                                     {brand.description && (

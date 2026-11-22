@@ -18,7 +18,12 @@ class Receipt extends Model
         'sale_id',
         'sale_payment_id',
         'receipt_number',
+        'currency_id',
+        'currency_code',
         'amount_afn',
+        'amount_currency',
+        'exchange_rate_to_afn',
+        'rate_effective_at',
         'remaining_due_afn',
         'receipt_type',
         'notes',
@@ -26,10 +31,13 @@ class Receipt extends Model
     ];
 
     protected $casts = [
-        'amount_afn'         => 'decimal:2',
-        'remaining_due_afn'  => 'decimal:2',
-        'created_at'         => 'datetime',
-        'updated_at'         => 'datetime',
+        'amount_afn'            => 'decimal:2',
+        'amount_currency'       => 'decimal:2',
+        'exchange_rate_to_afn'  => 'decimal:8',
+        'rate_effective_at'     => 'datetime',
+        'remaining_due_afn'     => 'decimal:2',
+        'created_at'            => 'datetime',
+        'updated_at'            => 'datetime',
     ];
 
     /* =========================================================
@@ -56,6 +64,11 @@ class Receipt extends Model
     public function salePayment(): BelongsTo
     {
         return $this->belongsTo(SalePayment::class, 'sale_payment_id');
+    }
+
+    public function currency(): BelongsTo
+    {
+        return $this->belongsTo(Currency::class, 'currency_id');
     }
 
     public function creator(): BelongsTo

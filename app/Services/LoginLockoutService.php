@@ -69,6 +69,17 @@ class LoginLockoutService
 
         $seconds = $this->maxRemaining(...$keys);
 
+        // Cookie is only a UI mirror of an active DB lock. If DB lock is gone, ignore
+        // (and clear) a leftover cookie so refresh / clear-cache cannot soft-lock forever.
+        if ($seconds <= 0) {
+            $cookieUntil = (int) (Cookie::get(self::COOKIE) ?: 0);
+            if ($cookieUntil > 0) {
+                $this->forgetLockCookie();
+            }
+
+            return 0;
+        }
+
         $cookieUntil = (int) (Cookie::get(self::COOKIE) ?: 0);
         if ($cookieUntil > time()) {
             $seconds = max($seconds, $cookieUntil - time());

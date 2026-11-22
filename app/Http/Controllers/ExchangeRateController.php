@@ -24,14 +24,34 @@ class ExchangeRateController extends Controller
     public function index(Request $request): Response
     {
         $fromCurrency = $request->query('from_currency_id');
-        $toCurrency   = $request->query('to_currency_id');
+        $toCurrency = $request->query('to_currency_id');
+        $search = trim((string) $request->query('search', ''));
+        $sort = $request->query('sort', 'effective_at');
+        $direction = strtolower((string) $request->query('direction', 'desc')) === 'asc' ? 'asc' : 'desc';
+
+        $allowedSorts = ['effective_at', 'rate', 'created_at', 'updated_at'];
+        if (! in_array($sort, $allowedSorts, true)) {
+            $sort = 'effective_at';
+        }
 
         $exchangeRates = ExchangeRate::query()
             ->with(['fromCurrency:id,code,name,symbol', 'toCurrency:id,code,name,symbol', 'creator:id,name'])
             ->notTrashed()
-            ->when($fromCurrency, fn ($q, $v) => $q->where('from_currency_id', $v))
-            ->when($toCurrency, fn ($q, $v) => $q->where('to_currency_id', $v))
-            ->latestFirst()
+            ->when($fromCurrency, fn ($q) => $q->where('from_currency_id', $fromCurrency))
+            ->when($toCurrency, fn ($q) => $q->where('to_currency_id', $toCurrency))
+            ->when($search !== '', function ($q) use ($search) {
+                $q->where(function ($inner) use ($search) {
+                    $inner->whereHas('fromCurrency', function ($currency) use ($search) {
+                        $currency->where('code', 'like', "%{$search}%")
+                            ->orWhere('name', 'like', "%{$search}%");
+                    })->orWhereHas('toCurrency', function ($currency) use ($search) {
+                        $currency->where('code', 'like', "%{$search}%")
+                            ->orWhere('name', 'like', "%{$search}%");
+                    })->orWhere('source', 'like', "%{$search}%");
+                });
+            })
+            ->orderBy($sort, $direction)
+            ->orderByDesc('id')
             ->paginate(15)
             ->withQueryString();
 
@@ -39,10 +59,64 @@ class ExchangeRateController extends Controller
 
         return Inertia::render('exchange-rates/index', [
             'exchangeRates' => $exchangeRates,
-            'currencies'    => $currencies,
-            'filters'       => [
+            'currencies' => $currencies,
+            'currentRates' => $this->currentActiveRates(),
+            'filters' => [
                 'from_currency_id' => $fromCurrency,
-                'to_currency_id'   => $toCurrency,
+                'to_currency_id' => $toCurrency,
+                'search' => $search !== '' ? $search : null,
+                'sort' => $sort,
+                'direction' => $direction,
+            ],
+        ]);
+    }
+
+    /* =========================================================
+     |  HISTORY
+     ========================================================= */
+
+    public function history(Request $request): Response
+    {
+        $fromCurrency = $request->query('from_currency_id');
+        $toCurrency = $request->query('to_currency_id');
+        $fromDate = $request->query('from_date');
+        $toDate = $request->query('to_date');
+        $search = trim((string) $request->query('search', ''));
+
+        $exchangeRates = ExchangeRate::query()
+            ->with(['fromCurrency:id,code,name,symbol', 'toCurrency:id,code,name,symbol', 'creator:id,name'])
+            ->notTrashed()
+            ->when($fromCurrency, fn ($q) => $q->where('from_currency_id', $fromCurrency))
+            ->when($toCurrency, fn ($q) => $q->where('to_currency_id', $toCurrency))
+            ->when($fromDate, fn ($q) => $q->whereDate('effective_at', '>=', $fromDate))
+            ->when($toDate, fn ($q) => $q->whereDate('effective_at', '<=', $toDate))
+            ->when($search !== '', function ($q) use ($search) {
+                $q->where(function ($inner) use ($search) {
+                    $inner->whereHas('fromCurrency', function ($currency) use ($search) {
+                        $currency->where('code', 'like', "%{$search}%")
+                            ->orWhere('name', 'like', "%{$search}%");
+                    })->orWhereHas('toCurrency', function ($currency) use ($search) {
+                        $currency->where('code', 'like', "%{$search}%")
+                            ->orWhere('name', 'like', "%{$search}%");
+                    })->orWhere('source', 'like', "%{$search}%");
+                });
+            })
+            ->latestFirst()
+            ->orderByDesc('id')
+            ->paginate(20)
+            ->withQueryString();
+
+        $currencies = Currency::notTrashed()->active()->select('id', 'code', 'name', 'symbol')->get();
+
+        return Inertia::render('exchange-rates/history', [
+            'exchangeRates' => $exchangeRates,
+            'currencies' => $currencies,
+            'filters' => [
+                'from_currency_id' => $fromCurrency,
+                'to_currency_id' => $toCurrency,
+                'from_date' => $fromDate,
+                'to_date' => $toDate,
+                'search' => $search !== '' ? $search : null,
             ],
         ]);
     }
@@ -57,6 +131,7 @@ class ExchangeRateController extends Controller
 
         return Inertia::render('exchange-rates/create', [
             'currencies' => $currencies,
+            'sources' => $this->allowedSources(),
         ]);
     }
 
@@ -76,7 +151,7 @@ class ExchangeRateController extends Controller
             (string) $data['rate'],
             $data['effective_at'],
             Auth::id(),
-            'manual',
+            $data['source'] ?? 'manual',
         );
 
         return redirect()
@@ -94,7 +169,7 @@ class ExchangeRateController extends Controller
             abort(404);
         }
 
-        $exchangeRate->load(['fromCurrency', 'toCurrency', 'creator:id,name,email']);
+        $exchangeRate->load(['fromCurrency', 'toCurrency', 'creator:id,name']);
 
         return Inertia::render('exchange-rates/show', [
             'exchangeRate' => $exchangeRate,
@@ -115,7 +190,8 @@ class ExchangeRateController extends Controller
 
         return Inertia::render('exchange-rates/edit', [
             'exchangeRate' => $exchangeRate,
-            'currencies'   => $currencies,
+            'currencies' => $currencies,
+            'sources' => $this->allowedSources(),
         ]);
     }
 
@@ -125,6 +201,10 @@ class ExchangeRateController extends Controller
 
     public function update(UpdateExchangeRateRequest $request, ExchangeRate $exchangeRate): RedirectResponse
     {
+        if ($exchangeRate->trash) {
+            abort(404);
+        }
+
         $data = $request->validated();
         $data['created_by'] = Auth::id();
 
@@ -132,7 +212,7 @@ class ExchangeRateController extends Controller
 
         return redirect()
             ->route('exchange-rates.index')
-            ->with('success', "Exchange rate updated successfully.");
+            ->with('success', 'Exchange rate updated successfully.');
     }
 
     /* =========================================================
@@ -142,7 +222,7 @@ class ExchangeRateController extends Controller
     public function destroy(ExchangeRate $exchangeRate): RedirectResponse
     {
         $exchangeRate->update([
-            'trash'      => true,
+            'trash' => true,
             'created_by' => Auth::id(),
         ]);
 
@@ -160,7 +240,7 @@ class ExchangeRateController extends Controller
         $exchangeRate = ExchangeRate::onlyTrashed()->findOrFail($id);
 
         $exchangeRate->update([
-            'trash'      => false,
+            'trash' => false,
             'created_by' => Auth::id(),
         ]);
 
@@ -180,7 +260,7 @@ class ExchangeRateController extends Controller
         $exchangeRate->delete();
 
         return redirect()
-            ->route('exchange-rates.index')
+            ->route('exchange-rates.trash')
             ->with('success', 'Exchange rate was permanently deleted.');
     }
 
@@ -198,5 +278,47 @@ class ExchangeRateController extends Controller
         return Inertia::render('exchange-rates/trash', [
             'exchangeRates' => $exchangeRates,
         ]);
+    }
+
+    /* =========================================================
+     |  HELPERS
+     ========================================================= */
+
+    /**
+     * @return list<string>
+     */
+    private function allowedSources(): array
+    {
+        return ['manual', 'market', 'bank', 'other'];
+    }
+
+    /**
+     * Latest effective non-trashed rate per currency pair.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function currentActiveRates(): array
+    {
+        $rows = ExchangeRate::query()
+            ->with(['fromCurrency:id,code,name,symbol', 'toCurrency:id,code,name,symbol', 'creator:id,name'])
+            ->notTrashed()
+            ->where('effective_at', '<=', now())
+            ->orderByDesc('effective_at')
+            ->orderByDesc('id')
+            ->get();
+
+        $seen = [];
+        $current = [];
+
+        foreach ($rows as $row) {
+            $key = $row->from_currency_id.'-'.$row->to_currency_id;
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $current[] = $row;
+        }
+
+        return $current;
     }
 }

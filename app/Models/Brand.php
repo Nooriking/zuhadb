@@ -17,7 +17,6 @@ class Brand extends Model
         'name',
         'country',
         'description',
-        'logo',
         'status',
         'trash',
         'user_id',

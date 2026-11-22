@@ -10,6 +10,7 @@ use App\Models\Investor;
 use App\Models\InvestorTransaction;
 use App\Models\InvestorWithdrawal;
 use App\Services\CurrencyService;
+use App\Services\PriceResolver;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -21,6 +22,7 @@ class InvestorWithdrawalController extends Controller
 {
     public function __construct(
         private readonly CurrencyService $currencies,
+        private readonly PriceResolver $prices,
     ) {}
 
     /* =========================================================
@@ -105,30 +107,44 @@ class InvestorWithdrawalController extends Controller
 
             $currency = $this->currencies->requireActive((int) $data['currency_id']);
             $amountEntered = (float) ($data['amount'] ?? $data['amount_afn'] ?? 0);
-            $amountAfn = (float) $this->currencies->toLedger((string) $amountEntered, $currency);
+            $currencyCode = strtoupper((string) $currency->code);
+            $rate = $this->prices->getTodayRate($currencyCode, 'AFN');
+            $amountAfn = round($amountEntered * $rate, 2);
             $snap = $this->currencies->snapshot($currency);
             $data['currency_id'] = $snap['id'];
             $data['currency_code'] = $snap['code'];
             $data['currency_symbol'] = $snap['symbol'];
-            $data['exchange_rate'] = $snap['rate_to_default'];
+            $data['exchange_rate'] = $rate;
             $data['amount_currency'] = $amountEntered;
             unset($data['amount']);
+
+            $mcBalance = $wallet->balanceFor($currencyCode);
 
             // Profit withdrawals only from payable (pending) profit balance on the cash wallet.
             // Capital withdrawals only from cash capital — goods capital is not cash.
             if ($data['type'] === 'profit') {
-                $payable = (float) \App\Models\InvestorProfitEntry::query()
+                $payableAfn = (float) \App\Models\InvestorProfitEntry::query()
                     ->where('investor_id', $investor->id)
                     ->where('status', 'pending')
                     ->sum('profit_amount_afn');
-                $available = min((float) $wallet->profit_balance_afn, $payable);
-                if ($amountAfn > $available + 0.01) {
-                    throw new \Exception('The withdrawal is larger than the payable profit available.');
+                $availableCurrency = (float) ($mcBalance?->profit_balance_currency ?? 0);
+                $availableMcAfn = (float) ($mcBalance?->profit_balance_afn ?? 0);
+                if ($currencyCode === 'AFN' || ! $mcBalance) {
+                    $availableCurrency = max($availableCurrency, (float) $wallet->profit_balance_afn);
+                    $availableMcAfn = max($availableMcAfn, (float) $wallet->profit_balance_afn);
+                }
+                $availableAfn = min((float) $wallet->profit_balance_afn, $payableAfn, max($availableMcAfn, (float) $wallet->profit_balance_afn));
+                if ($amountEntered > $availableCurrency + 0.01 || $amountAfn > $availableAfn + 0.01) {
+                    throw new \Exception('The withdrawal is larger than the payable profit available in '.$currencyCode.'.');
                 }
                 $balanceBefore = (float) $wallet->profit_balance_afn;
             } else {
-                if ($amountAfn > (float) $wallet->capital_balance_afn) {
-                    throw new \Exception('The withdrawal is larger than the cash capital available. Goods capital cannot be withdrawn as cash.');
+                $availableCurrency = (float) ($mcBalance?->capital_balance_currency ?? 0);
+                if ($currencyCode === 'AFN' || ! $mcBalance) {
+                    $availableCurrency = max($availableCurrency, (float) $wallet->capital_balance_afn);
+                }
+                if ($amountEntered > $availableCurrency + 0.01 || $amountAfn > (float) $wallet->capital_balance_afn + 0.01) {
+                    throw new \Exception('The withdrawal is larger than the cash capital available in '.$currencyCode.'. Goods capital cannot be withdrawn as cash.');
                 }
                 $balanceBefore = (float) $wallet->capital_balance_afn;
             }
@@ -216,15 +232,20 @@ class InvestorWithdrawalController extends Controller
             $wallet   = $investor->getOrCreateWallet();
 
             $amountAfn = (float) $withdrawal->amount_afn;
+            $amountCurrency = (float) ($withdrawal->amount_currency ?? $amountAfn);
+            $currencyCode = strtoupper((string) ($withdrawal->currency_code ?: 'AFN'));
+            $rate = (float) ($withdrawal->exchange_rate ?: 1);
 
             if ($withdrawal->isProfitWithdrawal()) {
                 $wallet->decrement('profit_balance_afn', $amountAfn);
                 $wallet->increment('total_withdrawn_afn', $amountAfn);
+                $wallet->adjustProfit($currencyCode, -1 * $amountCurrency, -1 * $amountAfn, $rate);
 
                 $txType = 'profit_withdrawn';
             } else {
                 $wallet->decrement('capital_balance_afn', $amountAfn);
                 $wallet->increment('total_withdrawn_afn', $amountAfn);
+                $wallet->adjustCapital($currencyCode, -1 * $amountCurrency, -1 * $amountAfn, $rate);
 
                 $txType = 'capital_withdrawn';
             }

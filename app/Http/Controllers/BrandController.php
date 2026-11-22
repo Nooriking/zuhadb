@@ -8,7 +8,6 @@ use App\Models\Brand;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -65,10 +64,6 @@ class BrandController extends Controller
         $data = $request->validated();
         $data['user_id'] = Auth::id();
 
-        if ($request->hasFile('logo')) {
-            $data['logo'] = $request->file('logo')->store('brands/logos', 'public');
-        }
-
         $brand = Brand::create($data);
 
         return redirect()
@@ -123,13 +118,6 @@ class BrandController extends Controller
         $data = $request->validated();
         $data['user_id'] = Auth::id();
 
-        if ($request->hasFile('logo')) {
-            if ($brand->logo && Storage::disk('public')->exists($brand->logo)) {
-                Storage::disk('public')->delete($brand->logo);
-            }
-            $data['logo'] = $request->file('logo')->store('brands/logos', 'public');
-        }
-
         $brand->update($data);
 
         return redirect()
@@ -181,12 +169,8 @@ class BrandController extends Controller
     {
         $brand = Brand::inTrash()->findOrFail($id);
 
-        if ($brand->logo && Storage::disk('public')->exists($brand->logo)) {
-            Storage::disk('public')->delete($brand->logo);
-        }
-
         $name = $brand->name;
-        $brand->delete();   // ✅ اصلاح شد (قبلاً forceDelete بود)
+        $brand->delete();
 
         return redirect()
             ->route('brands.index')
@@ -194,12 +178,12 @@ class BrandController extends Controller
     }
 
     /* =========================================================
-     |  TRASH LIST  ✅ اصلاح شد
+     |  TRASH LIST
      ========================================================= */
 
     public function trash(): Response
     {
-        $brands = Brand::inTrash()   // ✅ اصلاح شد (قبلاً onlyTrashed بود)
+        $brands = Brand::inTrash()
             ->with('creator:id,name')
             ->orderByDesc('updated_at')
             ->paginate(15);

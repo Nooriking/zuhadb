@@ -63,7 +63,8 @@ class AppSearchController extends Controller
             ->where('barcode', 'like', $like)
             ->where('status', 'active')
             ->with([
-                'variant:id,product_id,volume_ml,concentration,sale_price_afn,purchase_price_afn',
+                'variant:id,product_id,volume_ml,concentration',
+                'variant.prices' => fn ($q) => $q->where('is_active', true),
                 'variant.product:id,name,brand_id',
                 'variant.product.brand:id,name',
             ])
@@ -71,7 +72,7 @@ class AppSearchController extends Controller
             ->get();
 
         $products = Product::query()
-            ->whereNull('variant_id')
+            ->whereNull('purchase_date')
             ->where('trash', false)
             ->where(function ($query) use ($like) {
                 $query->where('name', 'like', $like)
@@ -80,6 +81,7 @@ class AppSearchController extends Controller
             ->with([
                 'brand:id,name',
                 'variants' => fn ($variants) => $variants->where('trash', false)->limit(1),
+                'variants.prices' => fn ($q) => $q->where('is_active', true),
                 'variants.barcodes' => fn ($barcodes) => $barcodes->where('status', 'active')->orderByDesc('is_primary'),
             ])
             ->limit(6)

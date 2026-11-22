@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
+import { LOW_STOCK_THRESHOLD } from '@/lib/inventory';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
 import { AlertTriangle, ArrowDownCircle, ArrowLeft, ArrowUpCircle, RefreshCw, TrendingDown, TrendingUp, Warehouse, X } from 'lucide-react';
@@ -26,7 +27,6 @@ interface Inventory {
         name: string | null;
         volume_ml: number | null;
         concentration: string | null;
-        minimum_stock: number;
         product: {
             id: number;
             name: string;
@@ -110,7 +110,7 @@ export default function InventoryShow({ inventory, transactions, stats }: Props)
                 </Badge>
             );
         }
-        if (inventory.variant && inventory.quantity <= inventory.variant.minimum_stock) {
+        if (inventory.quantity > 0 && inventory.quantity <= 2) {
             return (
                 <Badge variant="warning" className="gap-1">
                     <TrendingDown className="h-3 w-3" /> Low Stock
@@ -207,7 +207,7 @@ export default function InventoryShow({ inventory, transactions, stats }: Props)
                     <div className="rounded-lg border bg-white p-4">
                         <p className="text-xs text-gray-500">Reserved</p>
                         <p className="text-2xl font-bold text-yellow-600">{inventory.reserved_quantity}</p>
-                        <p className="text-muted-foreground text-xs">Min stock: {inventory.variant?.minimum_stock}</p>
+                        <p className="text-muted-foreground text-xs">Low-stock threshold: {LOW_STOCK_THRESHOLD}</p>
                     </div>
                     <div className="rounded-lg border bg-white p-4">
                         <p className="text-xs text-gray-500">Total Purchased</p>

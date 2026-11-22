@@ -1,13 +1,11 @@
-// resources/js/pages/exchange-rates/trash.tsx
-
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-
 import AppLayout from '@/layouts/app-layout';
 import { forceDeleteItem, restoreItem } from '@/lib/trash-actions';
+import { formatRate } from '@/lib/money';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link } from '@inertiajs/react';
+import { Head, Link, router } from '@inertiajs/react';
 import { ArrowLeft, RefreshCw, RotateCcw, Trash2 } from 'lucide-react';
 
 interface Currency {
@@ -20,6 +18,7 @@ interface ExchangeRate {
     id: number;
     rate: string;
     effective_at: string;
+    source?: string | null;
     from_currency: Currency | null;
     to_currency: Currency | null;
 }
@@ -42,8 +41,16 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Trash', href: '/exchange-rates/trash' },
 ];
 
-export default function ExchangeRatesTrash({ exchangeRates }: Props) {
+const formatDateTime = (date: string) =>
+    new Date(date).toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    });
 
+export default function ExchangeRatesTrash({ exchangeRates }: Props) {
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="Trashed Exchange Rates" />
@@ -70,14 +77,15 @@ export default function ExchangeRatesTrash({ exchangeRates }: Props) {
                                 <TableHead>From</TableHead>
                                 <TableHead className="text-center">Rate</TableHead>
                                 <TableHead>To</TableHead>
-                                <TableHead>Effective Date</TableHead>
+                                <TableHead>Effective</TableHead>
+                                <TableHead>Source</TableHead>
                                 <TableHead className="text-center">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {exchangeRates.data.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={6} className="text-muted-foreground h-24 text-center">
+                                    <TableCell colSpan={7} className="text-muted-foreground h-24 text-center">
                                         <div className="flex flex-col items-center gap-2">
                                             <RefreshCw className="text-muted-foreground h-8 w-8" />
                                             <p>Trash is empty.</p>
@@ -93,16 +101,26 @@ export default function ExchangeRatesTrash({ exchangeRates }: Props) {
                                                 {rate.from_currency?.code || '—'}
                                             </Badge>
                                         </TableCell>
-                                        <TableCell className="text-center font-mono font-bold">{rate.rate}</TableCell>
+                                        <TableCell className="text-center font-mono font-bold">{formatRate(rate.rate)}</TableCell>
                                         <TableCell>
                                             <Badge variant="outline" className="font-mono">
                                                 {rate.to_currency?.code || '—'}
                                             </Badge>
                                         </TableCell>
-                                        <TableCell className="text-sm">{new Date(rate.effective_at).toLocaleDateString('en-US')}</TableCell>
+                                        <TableCell className="text-sm">{formatDateTime(rate.effective_at)}</TableCell>
+                                        <TableCell>
+                                            <Badge variant="secondary" className="capitalize">
+                                                {rate.source || 'manual'}
+                                            </Badge>
+                                        </TableCell>
                                         <TableCell>
                                             <div className="flex items-center justify-center gap-1">
-                                                <Button variant="ghost" size="icon" title="Restore" onClick={() => void restoreItem(`Rate #${rate.id}`, `/exchange-rates/${rate.id}/restore`)}>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    title="Restore"
+                                                    onClick={() => void restoreItem(`Rate #${rate.id}`, `/exchange-rates/${rate.id}/restore`)}
+                                                >
                                                     <RotateCcw className="h-4 w-4 text-green-600" />
                                                 </Button>
                                                 <Button
@@ -110,7 +128,12 @@ export default function ExchangeRatesTrash({ exchangeRates }: Props) {
                                                     size="icon"
                                                     title="Delete Forever"
                                                     className="text-destructive hover:text-destructive"
-                                                    onClick={() => void forceDeleteItem(`${rate.from_currency?.code || "?"} → ${rate.to_currency?.code || "?"}`, `/exchange-rates/${rate.id}/force-delete`)}
+                                                    onClick={() =>
+                                                        void forceDeleteItem(
+                                                            `${rate.from_currency?.code || '?'} → ${rate.to_currency?.code || '?'}`,
+                                                            `/exchange-rates/${rate.id}/force-delete`,
+                                                        )
+                                                    }
                                                 >
                                                     <Trash2 className="h-4 w-4" />
                                                 </Button>
@@ -122,8 +145,23 @@ export default function ExchangeRatesTrash({ exchangeRates }: Props) {
                         </TableBody>
                     </Table>
                 </div>
-            </div>
 
+                {exchangeRates.last_page > 1 && (
+                    <div className="flex flex-wrap gap-1">
+                        {exchangeRates.links.map((link, i) => (
+                            <Button
+                                key={i}
+                                variant={link.active ? 'default' : 'outline'}
+                                size="sm"
+                                onClick={() => link.url && router.get(link.url, {}, { preserveState: true, preserveScroll: true })}
+                                disabled={!link.url}
+                                className="min-w-[40px]"
+                                dangerouslySetInnerHTML={{ __html: link.label }}
+                            />
+                        ))}
+                    </div>
+                )}
+            </div>
         </AppLayout>
     );
 }

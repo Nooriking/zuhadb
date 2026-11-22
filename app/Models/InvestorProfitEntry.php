@@ -282,6 +282,12 @@ class InvestorProfitEntry extends Model
                     ),
                     'last_transaction_at'     => now(),
                 ]);
+                $wallet->adjustProfit(
+                    (string) ($snapCode ?: 'AFN'),
+                    (float) $profitAmountOriginal,
+                    (float) $profitAmountAfn,
+                    $snapRate !== null ? (float) $snapRate : null
+                );
             }
 
             InvestorTransaction::record(
@@ -346,6 +352,12 @@ class InvestorProfitEntry extends Model
                     ),
                     'last_transaction_at'     => now(),
                 ]);
+                $wallet->adjustProfit(
+                    (string) ($this->currency_code ?: 'AFN'),
+                    -1 * (float) ($this->profit_amount_currency ?? $this->profit_amount_afn),
+                    -1 * (float) $this->profit_amount_afn,
+                    $this->exchange_rate !== null ? (float) $this->exchange_rate : null
+                );
             }
 
             /* ═══ برگرداندن مبلغ از investment ═══ */
@@ -409,6 +421,12 @@ class InvestorProfitEntry extends Model
                         ),
                         'last_transaction_at' => now(),
                     ]);
+                    $wallet->adjustProfit(
+                        (string) ($this->currency_code ?: 'AFN'),
+                        -1 * (float) $reverseAmountCurrency,
+                        -1 * (float) $reverseAmount,
+                        $this->exchange_rate !== null ? (float) $this->exchange_rate : null
+                    );
                 }
                 if ($this->investment) {
                     $this->investment->update([
@@ -490,6 +508,16 @@ class InvestorProfitEntry extends Model
                     ),
                     'last_transaction_at' => now(),
                 ]);
+                $reverseAmountCurrency = Money::round(
+                    Money::mul($perUnitCurrency, (string) $quantity, 8),
+                    2
+                );
+                $wallet->adjustProfit(
+                    (string) ($this->currency_code ?: 'AFN'),
+                    -1 * (float) $reverseAmountCurrency,
+                    -1 * (float) $reverseAmount,
+                    $this->exchange_rate !== null ? (float) $this->exchange_rate : null
+                );
             }
 
             InvestorTransaction::record(

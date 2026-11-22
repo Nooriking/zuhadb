@@ -13,6 +13,9 @@ class Inventory extends Model
 {
     use HasFactory;
 
+    /** Fixed low-stock threshold after product-level minimum_stock was removed. */
+    public const LOW_STOCK_THRESHOLD = 2;
+
     protected $table = 'inventories';
 
     protected $fillable = [
@@ -69,9 +72,9 @@ class Inventory extends Model
 
     public function scopeLowStock($query)
     {
-        return $query->whereHas('variant', function ($q) {
-            $q->whereColumn('inventories.quantity', '<=', 'product_variants.minimum_stock');
-        });
+        return $query
+            ->where('quantity', '>', 0)
+            ->where('quantity', '<=', self::LOW_STOCK_THRESHOLD);
     }
 
     public function scopeOutOfStock($query)
@@ -259,7 +262,7 @@ class Inventory extends Model
     private static function warnIfLow(self $inventory): void
     {
         $left = (int) $inventory->quantity;
-        if ($left <= 0 || $left > 2) {
+        if ($left <= 0 || $left > self::LOW_STOCK_THRESHOLD) {
             return;
         }
 
@@ -288,7 +291,7 @@ class Inventory extends Model
             ActivityNotification::create([
                 'user_id' => $admin->id,
                 'section' => 'inventory',
-                'title' => 'Low stock: 2 or fewer left',
+                'title' => 'Low stock: '.self::LOW_STOCK_THRESHOLD.' or fewer left',
                 'body' => $body,
                 'url' => '/inventory',
             ]);
@@ -299,8 +302,7 @@ class Inventory extends Model
 
     public function getIsLowStockAttribute(): bool
     {
-        if (! $this->variant) return false;
-        return $this->quantity <= $this->variant->minimum_stock;
+        return $this->quantity > 0 && $this->quantity <= self::LOW_STOCK_THRESHOLD;
     }
 
     public function getIsOutOfStockAttribute(): bool

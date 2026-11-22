@@ -167,7 +167,7 @@ class CurrencyService
         }
 
         throw ValidationException::withMessages([
-            'exchange_rate' => "No applicable exchange rate for {$from->code} → {$to->code} at {$atCarbon->toDateTimeString()}.",
+            'exchange_rate' => "No applicable exchange rate for {$from->code} → {$to->code} at {$atCarbon->toDateTimeString()}. Enter Product Reference Rates or post a rate on the Exchange Rates page (and set catalog rate_to_default > 0).",
         ]);
     }
 
@@ -282,6 +282,13 @@ class CurrencyService
                 ]);
             }
         }
+        if (array_key_exists('usd_to_aed', $overrides) && $overrides['usd_to_aed'] !== null && $overrides['usd_to_aed'] !== '') {
+            if ((float) $overrides['usd_to_aed'] <= 0) {
+                throw ValidationException::withMessages([
+                    'usd_to_aed_rate' => 'USD→AED rate must be greater than zero.',
+                ]);
+            }
+        }
 
         $overrideUsd = isset($overrides['usd_to_afn']) && (float) $overrides['usd_to_afn'] > 0
             ? Money::round((string) $overrides['usd_to_afn'], 8)
@@ -290,17 +297,54 @@ class CurrencyService
             ? Money::round((string) $overrides['aed_to_afn'], 8)
             : null;
 
-        $usdResolved = $overrideUsd !== null
-            ? ['rate' => $overrideUsd, 'kind' => 'transaction', 'effective_at' => $at ? \Illuminate\Support\Carbon::parse($at)->toDateTimeString() : now()->toDateTimeString(), 'exchange_rate_id' => null]
-            : $this->resolveAt($usd, $ledger, $at, $allowCatalogFallback);
+        // Product forms store USD→AED (AED per 1 USD). Derive AED→AFN when needed:
+        // 1 AED = (USD→AFN) / (USD→AED) AFN.
+        if ($overrideAed === null && $overrideUsd !== null
+            && isset($overrides['usd_to_aed']) && (float) $overrides['usd_to_aed'] > 0) {
+            $overrideAed = Money::round(Money::div($overrideUsd, (string) $overrides['usd_to_aed'], 12), 8);
+        }
 
-        $aedResolved = $overrideAed !== null
-            ? ['rate' => $overrideAed, 'kind' => 'transaction', 'effective_at' => $at ? \Illuminate\Support\Carbon::parse($at)->toDateTimeString() : now()->toDateTimeString(), 'exchange_rate_id' => null]
-            : $this->resolveAt($aed, $ledger, $at, $allowCatalogFallback);
+        $atStamp = $at
+            ? \Illuminate\Support\Carbon::parse($at)->toDateTimeString()
+            : now()->toDateTimeString();
+
+        try {
+            $usdResolved = $overrideUsd !== null
+                ? ['rate' => $overrideUsd, 'kind' => 'transaction', 'effective_at' => $atStamp, 'exchange_rate_id' => null]
+                : $this->resolveAt($usd, $ledger, $at, $allowCatalogFallback);
+
+            $aedResolved = $overrideAed !== null
+                ? ['rate' => $overrideAed, 'kind' => 'transaction', 'effective_at' => $atStamp, 'exchange_rate_id' => null]
+                : $this->resolveAt($aed, $ledger, $at, $allowCatalogFallback);
+        } catch (ValidationException $e) {
+            $messages = $e->errors();
+            if (isset($messages['exchange_rate'])) {
+                throw ValidationException::withMessages([
+                    'exchange_rate' => 'No FX board rate for USD/AED → AFN on this date, and catalog rates are missing. Enter Product Reference Rates (USD→AFN and USD→AED), or post rates on the Exchange Rates page.',
+                    'usd_to_afn_rate' => 'Required when the FX board has no USD→AFN / AED→AFN rate.',
+                    'usd_to_aed_rate' => 'Required when converting AED (used with USD→AFN to derive AED→AFN).',
+                ]);
+            }
+
+            throw $e;
+        }
+
+        // Last chance: derive AED→AFN from resolved USD→AFN + override USD→AED.
+        if ((float) $aedResolved['rate'] <= 0 && (float) $usdResolved['rate'] > 0
+            && isset($overrides['usd_to_aed']) && (float) $overrides['usd_to_aed'] > 0) {
+            $aedResolved = [
+                'rate' => Money::round(Money::div((string) $usdResolved['rate'], (string) $overrides['usd_to_aed'], 12), 8),
+                'kind' => 'derived',
+                'effective_at' => $usdResolved['effective_at'] ?? $atStamp,
+                'exchange_rate_id' => null,
+            ];
+        }
 
         if ((float) $usdResolved['rate'] <= 0 || (float) $aedResolved['rate'] <= 0) {
             throw ValidationException::withMessages([
-                'exchange_rate' => 'USD→AFN and AED→AFN rates must be greater than zero.',
+                'exchange_rate' => 'USD→AFN and AED→AFN rates must be greater than zero. Enter Product Reference Rates or post them on the Exchange Rates page.',
+                'usd_to_afn_rate' => 'Enter how many AFN equal 1 USD.',
+                'usd_to_aed_rate' => 'Enter how many AED equal 1 USD.',
             ]);
         }
 

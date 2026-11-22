@@ -548,7 +548,7 @@ class ProfitReportController extends Controller
         }
 
         return \App\Models\Product::query()
-            ->whereNotNull('variant_id')
+            ->whereNotNull('purchase_date')
             ->where('trash', false)
             ->whereBetween('purchase_date', [$f['from'], $f['to']])
             ->when($f['branch_id'], function ($query) {

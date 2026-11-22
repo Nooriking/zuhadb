@@ -202,7 +202,7 @@ export default function SaleReturnsIndex({ saleReturns, branches, filters, stats
                             </div>
                             <ByCurrencyAmounts
                                 amounts={stats.total_amount_by_currency}
-                                titlePrefix="برگشت"
+                                titlePrefix="Returns"
                                 valueClassName="font-mono text-sm font-bold text-green-600"
                                 digits={2}
                             />
@@ -216,7 +216,7 @@ export default function SaleReturnsIndex({ saleReturns, branches, filters, stats
                             </div>
                             <ByCurrencyAmounts
                                 amounts={stats.today_amount_by_currency}
-                                titlePrefix="برگشت"
+                                titlePrefix="Returns"
                                 valueClassName="font-mono text-sm font-bold text-red-600"
                                 digits={2}
                             />

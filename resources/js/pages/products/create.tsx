@@ -1,10 +1,7 @@
-import { BackButton } from '@/components/form-page';
-import { MoneyField } from '@/components/money-field';
-import { ProductExchangeRateFields, type ExchangeRateContext } from '@/components/product-exchange-rate-fields';
-import { defaultCurrencyId, findCurrency, type CatalogCurrency } from '@/lib/currencies';
-import { calcProfits, estimateToAfn, formatEstimate as fmt } from '@/lib/product-estimate';
 // resources/js/pages/products/create.tsx
 
+import { BackButton } from '@/components/form-page';
+import { MoneyField } from '@/components/money-field';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -12,13 +9,17 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { useExchange } from '@/hooks/useExchange';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
+import { defaultCurrencyId, findCurrency, type CatalogCurrency } from '@/lib/currencies';
+import { calcProfits, estimateToAfn, formatEstimate as fmt } from '@/lib/product-estimate';
 import { getSwal } from '@/lib/swal';
 import { type BreadcrumbItem } from '@/types';
 import { Head, router } from '@inertiajs/react';
 import {
     AlertCircle,
+    ArrowRightLeft,
     Barcode,
     CheckCircle2,
     Package,
@@ -27,11 +28,10 @@ import {
     Save,
     Scan,
     Star,
-    Store,
+    Tag,
     Trash2,
     TrendingUp,
     User,
-    Wallet,
     X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -65,7 +65,6 @@ interface Variant {
     wholesale_price_afn: string;
     wholesale_currency_id: string;
     wholesale_min_qty: string;
-    minimum_stock: string;
     barcodes: BarcodeItem[];
 }
 
@@ -90,9 +89,6 @@ interface Props {
     investors?: Investor[];
     suppliers?: Supplier[];
     currencies?: CatalogCurrency[];
-    exchangeRateContext?: ExchangeRateContext;
-    usd_to_afn_rate?: string | null;
-    usd_to_aed_rate?: string | null;
     errors?: Record<string, string>;
 }
 
@@ -159,18 +155,18 @@ const newVariant = (): Variant => ({
     wholesale_price_afn: '',
     wholesale_currency_id: '',
     wholesale_min_qty: '10',
-    minimum_stock: '0',
     barcodes: [newBarcode(true)],
 });
 
-const newPurchase = (variantIndex: number): Purchase => ({
+// ✨ CHANGED: default profit currency = ledger currency (not empty)
+const newPurchase = (variantIndex: number, defaultCurrencyId?: string): Purchase => ({
     _key: Math.random().toString(36).slice(2),
     variant_index: variantIndex,
     investor_id: 'store',
     supplier_id: 'none',
     quantity: '1',
     profit_per_unit: '0',
-    profit_currency_id: '',
+    profit_currency_id: defaultCurrencyId || '',
     invoice_number: '',
     purchase_date: today(),
     payment_status: 'paid',
@@ -211,13 +207,14 @@ export default function ProductsCreate({
     investors = [],
     suppliers = [],
     currencies = [],
-    exchangeRateContext,
-    usd_to_afn_rate = null,
-    usd_to_aed_rate = null,
     errors: initialErrors,
 }: Props) {
     const { toast } = useToast();
+    const { usdToAfn, usdToAed, effectiveAt, source } = useExchange();
+    const refUsdToAfn = usdToAfn ?? 0;
+    const refUsdToAed = usdToAed ?? 0;
     const ledgerCurrencyId = defaultCurrencyId(currencies);
+    const ledgerCur = useMemo(() => findCurrency(currencies, ledgerCurrencyId), [currencies, ledgerCurrencyId]);
 
     const [form, setForm] = useState({
         name: '',
@@ -225,8 +222,6 @@ export default function ProductsCreate({
         gender: 'unisex',
         status: 'active' as 'active' | 'inactive',
         description: '',
-        usd_to_afn_rate: usd_to_afn_rate ? String(usd_to_afn_rate) : '',
-        usd_to_aed_rate: usd_to_aed_rate ? String(usd_to_aed_rate) : '',
     });
 
     const withDefaultCurrency = (variant: Variant): Variant => ({
@@ -237,7 +232,8 @@ export default function ProductsCreate({
     });
 
     const [variants, setVariants] = useState<Variant[]>([withDefaultCurrency(newVariant())]);
-    const [purchases, setPurchases] = useState<Purchase[]>([newPurchase(0)]);
+    // ✨ CHANGED: pass ledgerCurrencyId to newPurchase
+    const [purchases, setPurchases] = useState<Purchase[]>([newPurchase(0, ledgerCurrencyId)]);
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
     const [loading, setLoading] = useState(false);
 
@@ -263,10 +259,31 @@ export default function ProductsCreate({
         });
     }, []);
 
+    // ✨ CHANGED: sync all three price currencies AND all related purchases' profit_currency_id
+    const syncVariantCurrency = useCallback((index: number, currencyId: string) => {
+        setVariants((prev) => {
+            const copy = [...prev];
+            copy[index] = {
+                ...copy[index],
+                purchase_currency_id: currencyId,
+                sale_currency_id: currencyId,
+                wholesale_currency_id: currencyId,
+            };
+            return copy;
+        });
+
+        // ✨ Sync profit currency of every purchase that belongs to this variant
+        setPurchases((prev) =>
+            prev.map((p) =>
+                p.variant_index === index ? { ...p, profit_currency_id: currencyId } : p,
+            ),
+        );
+    }, []);
+
     const addVariant = () => {
         const nextIndex = variants.length;
         setVariants((prev) => [...prev, withDefaultCurrency(newVariant())]);
-        setPurchases((prev) => [...prev, newPurchase(nextIndex)]);
+        setPurchases((prev) => [...prev, newPurchase(nextIndex, ledgerCurrencyId)]);
     };
 
     const removeVariant = (index: number) => {
@@ -421,7 +438,7 @@ export default function ProductsCreate({
         });
     }, []);
 
-    const addPurchase = () => setPurchases((prev) => [...prev, newPurchase(0)]);
+    const addPurchase = () => setPurchases((prev) => [...prev, newPurchase(0, ledgerCurrencyId)]);
     const removePurchase = (index: number) => setPurchases((prev) => prev.filter((_, i) => i !== index));
 
     /* ═══════════ Submit ═══════════ */
@@ -492,21 +509,6 @@ export default function ProductsCreate({
         const clientErrors: Record<string, string> = {};
         if (!form.name.trim()) clientErrors.name = 'Product name is required';
 
-        const rateFields: Array<['usd_to_afn_rate' | 'usd_to_aed_rate', string]> = [
-            ['usd_to_afn_rate', 'USD to AFN'],
-            ['usd_to_aed_rate', 'USD to AED'],
-        ];
-        rateFields.forEach(([field, label]) => {
-            const raw = form[field].trim();
-            if (raw === '') return;
-            const n = toNum(raw);
-            if (n <= 0) clientErrors[field] = `${label} must be greater than zero.`;
-        });
-
-        const refUsdToAfn = toNum(form.usd_to_afn_rate);
-        const refUsdToAed = toNum(form.usd_to_aed_rate);
-        const ledgerCur = findCurrency(currencies, ledgerCurrencyId);
-
         variants.forEach((v, i) => {
             if (!v.sale_price_afn || toNum(v.sale_price_afn) < 0 || toNum(v.purchase_price_afn) < 0) {
                 clientErrors[`variants.${i}.sale_price_afn`] = 'Prices cannot be negative.';
@@ -560,8 +562,6 @@ export default function ProductsCreate({
         formData.append('gender', form.gender);
         formData.append('status', form.status);
         if (form.description.trim()) formData.append('description', form.description.trim());
-        if (form.usd_to_afn_rate.trim()) formData.append('usd_to_afn_rate', form.usd_to_afn_rate.trim());
-        if (form.usd_to_aed_rate.trim()) formData.append('usd_to_aed_rate', form.usd_to_aed_rate.trim());
 
         variants.forEach((v, i) => {
             if (v.volume_ml) formData.append(`variants[${i}][volume_ml]`, v.volume_ml);
@@ -576,7 +576,6 @@ export default function ProductsCreate({
             formData.append(`variants[${i}][wholesale_amount]`, v.wholesale_price_afn || '0');
             formData.append(`variants[${i}][wholesale_currency_id]`, v.wholesale_currency_id || ledgerCurrencyId);
             formData.append(`variants[${i}][wholesale_min_qty]`, v.wholesale_min_qty || '0');
-            formData.append(`variants[${i}][minimum_stock]`, v.minimum_stock || '0');
             (v.barcodes ?? []).forEach((b, j) => {
                 if (b.barcode.trim()) {
                     formData.append(`variants[${i}][barcodes][${j}][barcode]`, b.barcode.trim());
@@ -594,6 +593,7 @@ export default function ProductsCreate({
             formData.append(`purchases[${i}][quantity]`, p.quantity || '1');
             if (isInvestorPurchase(p.investor_id)) {
                 formData.append(`purchases[${i}][profit_per_unit]`, p.profit_per_unit || '0');
+                // ✨ always send profit currency (synced already)
                 formData.append(`purchases[${i}][profit_currency_id]`, p.profit_currency_id || ledgerCurrencyId);
             }
             if (p.invoice_number) formData.append(`purchases[${i}][invoice_number]`, p.invoice_number);
@@ -690,20 +690,21 @@ export default function ProductsCreate({
                             <span className="bg-primary text-primary-foreground flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold">1</span>
                             Product Information
                         </CardTitle>
-                        <CardDescription>Name, brand, gender, and description.</CardDescription>
+                        <CardDescription>Name, brand, gender, status, and description.</CardDescription>
                     </CardHeader>
-                    <CardContent className="space-y-6">
+                    <CardContent className="space-y-5">
+                        <div className="space-y-2">
+                            <Label>Product Name <span className="text-destructive">*</span></Label>
+                            <Input
+                                value={form.name}
+                                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                                placeholder="e.g. Sauvage"
+                                className={errors.name ? 'border-destructive' : ''}
+                            />
+                            {errors.name && <p className="text-destructive text-sm">{errors.name}</p>}
+                        </div>
+
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                            <div className="space-y-2 md:col-span-2">
-                                <Label>Product Name <span className="text-destructive">*</span></Label>
-                                <Input
-                                    value={form.name}
-                                    onChange={(e) => setForm({ ...form, name: e.target.value })}
-                                    placeholder="e.g. Sauvage"
-                                    className={errors.name ? 'border-destructive' : ''}
-                                />
-                                {errors.name && <p className="text-destructive text-sm">{errors.name}</p>}
-                            </div>
                             <div className="space-y-2">
                                 <Label>Brand</Label>
                                 <Select value={form.brand_id} onValueChange={(v) => setForm({ ...form, brand_id: v })}>
@@ -726,6 +727,9 @@ export default function ProductsCreate({
                                 </Select>
                                 {errors.gender && <p className="text-destructive text-xs">{errors.gender}</p>}
                             </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                             <div className="space-y-2">
                                 <Label>Status</Label>
                                 <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v as 'active' | 'inactive' })}>
@@ -736,23 +740,27 @@ export default function ProductsCreate({
                                     </SelectContent>
                                 </Select>
                             </div>
+                            <div className="space-y-2">
+                                <Label>Product Description</Label>
+                                <Textarea
+                                    value={form.description}
+                                    onChange={(e) => setForm({ ...form, description: e.target.value })}
+                                    rows={2}
+                                    placeholder="Optional general description"
+                                    className="min-h-[72px] resize-none"
+                                />
+                            </div>
                         </div>
-                        <div className="space-y-2">
-                            <Label>Product Description</Label>
-                            <Textarea
-                                value={form.description}
-                                onChange={(e) => setForm({ ...form, description: e.target.value })}
-                                rows={2}
-                                placeholder="Optional general description for the product"
-                            />
-                        </div>
-                        <ProductExchangeRateFields
-                            usdToAfn={form.usd_to_afn_rate}
-                            usdToAed={form.usd_to_aed_rate}
-                            onChange={(field, value) => setForm({ ...form, [field]: value })}
-                            errors={errors}
-                            context={exchangeRateContext}
-                        />
+
+                        {(usdToAfn || usdToAed) && (
+                            <p className="text-muted-foreground text-xs">
+                                Estimates use the central exchange board
+                                {usdToAfn ? ` · 1 USD = ${usdToAfn} AFN` : ''}
+                                {usdToAed ? ` · 1 USD = ${usdToAed} AED` : ''}
+                                {effectiveAt ? ` · effective ${effectiveAt}` : ''}
+                                {source ? ` · ${source}` : ''}.
+                            </p>
+                        )}
                     </CardContent>
                 </Card>
 
@@ -777,7 +785,7 @@ export default function ProductsCreate({
                                 data-error={errors[`variants.${vIndex}.sale_price_afn`] ? 'true' : undefined}
                                 className="flex flex-col gap-4 rounded-lg border p-4"
                             >
-                                <div className="mb-4 flex items-center justify-between">
+                                <div className="mb-1 flex items-center justify-between">
                                     <h3 className="font-semibold">Variant #{vIndex + 1}</h3>
                                     {variants.length > 1 && (
                                         <Button type="button" variant="ghost" size="icon" onClick={() => removeVariant(vIndex)} className="text-destructive">
@@ -887,11 +895,109 @@ export default function ProductsCreate({
                                     )}
                                 </div>
 
+                                {/* SIZE */}
+                                <div className="space-y-3 rounded-lg border p-4">
+                                    <h4 className="text-sm font-semibold">Size</h4>
+                                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                        <div className="space-y-2">
+                                            <Label>Volume (ml)</Label>
+                                            <Input
+                                                type="number"
+                                                min="0"
+                                                onKeyDown={preventNegative}
+                                                value={v.volume_ml}
+                                                onChange={(e) => { if (toNum(e.target.value) >= 0) updateVariant(vIndex, 'volume_ml', e.target.value); }}
+                                                placeholder="100"
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label>Concentration</Label>
+                                            <Select value={v.concentration} onValueChange={(val) => updateVariant(vIndex, 'concentration', val)}>
+                                                <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                                                <SelectContent>
+                                                    {CONCENTRATIONS.map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* PRODUCT PRICES — ✨ dynamic currency sync */}
+                                <div className="space-y-4 rounded-lg border p-4">
+                                    <div className="flex items-center gap-2">
+                                        <Tag className="h-4 w-4 text-amber-600" />
+                                        <h4 className="text-sm font-semibold">Product Prices</h4>
+                                    </div>
+
+                                    {/* Purchase cost first */}
+                                    <div className="rounded-md border border-blue-200 bg-blue-50/50 p-3">
+                                        <MoneyField
+                                            label="Purchase cost per unit"
+                                            amount={v.purchase_price_afn}
+                                            currencyId={v.purchase_currency_id || ledgerCurrencyId}
+                                            currencies={currencies}
+                                            onAmountChange={(val) => { if (toNum(val) >= 0) updateVariant(vIndex, 'purchase_price_afn', val); }}
+                                            // ✨ sync all three price currencies + profit currency
+                                            onCurrencyChange={(val) => syncVariantCurrency(vIndex, val)}
+                                            error={errors[`variants.${vIndex}.purchase_price_afn`] || errors[`variants.${vIndex}.purchase_currency_id`]}
+                                        />
+                                    </div>
+
+                                    {/* Sale + Wholesale */}
+                                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                        <MoneyField
+                                            label="Selling price per unit"
+                                            required
+                                            amount={v.sale_price_afn}
+                                            currencyId={v.sale_currency_id || ledgerCurrencyId}
+                                            currencies={currencies}
+                                            onAmountChange={(val) => { if (toNum(val) >= 0) updateVariant(vIndex, 'sale_price_afn', val); }}
+                                            // ✨ sync all three price currencies + profit currency
+                                            onCurrencyChange={(val) => syncVariantCurrency(vIndex, val)}
+                                            error={errors[`variants.${vIndex}.sale_price_afn`] || errors[`variants.${vIndex}.sale_currency_id`]}
+                                        />
+                                        <MoneyField
+                                            label="Wholesale price per unit"
+                                            amount={v.wholesale_price_afn}
+                                            currencyId={v.wholesale_currency_id || ledgerCurrencyId}
+                                            currencies={currencies}
+                                            onAmountChange={(val) => { if (toNum(val) >= 0) updateVariant(vIndex, 'wholesale_price_afn', val); }}
+                                            // ✨ sync all three price currencies + profit currency
+                                            onCurrencyChange={(val) => syncVariantCurrency(vIndex, val)}
+                                            error={errors[`variants.${vIndex}.wholesale_price_afn`] || errors[`variants.${vIndex}.wholesale_currency_id`]}
+                                        />
+                                    </div>
+
+                                    {/* Wholesale min qty */}
+                                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                        <div className="space-y-2">
+                                            <Label>Wholesale Min Qty</Label>
+                                            <Input
+                                                type="number"
+                                                min="0"
+                                                onKeyDown={preventNegative}
+                                                value={v.wholesale_min_qty}
+                                                onChange={(e) => { if (toNum(e.target.value) >= 0) updateVariant(vIndex, 'wholesale_min_qty', e.target.value); }}
+                                                placeholder="10"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Exchange Equivalents */}
+                                    <ExchangeEquivalents
+                                        variant={v}
+                                        currencies={currencies}
+                                        ledgerCur={ledgerCur}
+                                        refUsdToAfn={refUsdToAfn}
+                                        refUsdToAed={refUsdToAed}
+                                    />
+                                </div>
+
                                 {/* OWNER & INVESTOR PROFIT */}
                                 <div className="bg-muted/30 rounded-lg border p-4">
-                                    <h4 className="mb-3 flex items-center gap-1 text-sm font-semibold">
+                                    <div className="mb-3 flex items-center gap-1 text-sm font-semibold">
                                         <User className="h-4 w-4" /> Owner & Investor Profit
-                                    </h4>
+                                    </div>
                                     {purchases.filter((p) => p.variant_index === vIndex).map((p) => {
                                         const pIndex = purchases.findIndex((row) => row._key === p._key);
                                         const investorBuy = isInvestorPurchase(p.investor_id);
@@ -916,9 +1022,10 @@ export default function ProductsCreate({
                                                 </div>
                                                 <div className="space-y-2">
                                                     <MoneyField
-                                                        label="Investor profit / unit (own currency)"
+                                                        label="Investor profit / unit"
                                                         required={investorBuy}
                                                         amount={p.profit_per_unit}
+                                                        // ✨ profit currency is kept in sync via syncVariantCurrency
                                                         currencyId={p.profit_currency_id || ledgerCurrencyId}
                                                         currencies={currencies}
                                                         disabled={!investorBuy}
@@ -930,90 +1037,6 @@ export default function ProductsCreate({
                                             </div>
                                         );
                                     })}
-                                </div>
-
-                                {/* SIZE */}
-                                <div className="space-y-3 rounded-lg border p-4">
-                                    <h4 className="text-sm font-semibold">Size</h4>
-                                    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                                        <div className="space-y-2">
-                                            <Label>Volume (ml)</Label>
-                                            <Input
-                                                type="number"
-                                                min="0"
-                                                onKeyDown={preventNegative}
-                                                value={v.volume_ml}
-                                                onChange={(e) => { if (toNum(e.target.value) >= 0) updateVariant(vIndex, 'volume_ml', e.target.value); }}
-                                                placeholder="100"
-                                            />
-                                        </div>
-                                        <div className="space-y-2">
-                                            <Label>Concentration</Label>
-                                            <Select value={v.concentration} onValueChange={(val) => updateVariant(vIndex, 'concentration', val)}>
-                                                <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
-                                                <SelectContent>
-                                                    {CONCENTRATIONS.map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-                                        <div className="space-y-2">
-                                            <Label>Minimum Stock</Label>
-                                            <Input
-                                                type="number"
-                                                min="0"
-                                                onKeyDown={preventNegative}
-                                                value={v.minimum_stock}
-                                                onChange={(e) => { if (toNum(e.target.value) >= 0) updateVariant(vIndex, 'minimum_stock', e.target.value); }}
-                                                placeholder="0"
-                                            />
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {/* PRICES */}
-                                <div className="space-y-3 rounded-lg border p-4">
-                                    <h4 className="text-sm font-semibold">Catalog prices (independent currencies)</h4>
-                                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                        <MoneyField
-                                            label="Purchase cost (catalog / default)"
-                                            amount={v.purchase_price_afn}
-                                            currencyId={v.purchase_currency_id || ledgerCurrencyId}
-                                            currencies={currencies}
-                                            onAmountChange={(val) => { if (toNum(val) >= 0) updateVariant(vIndex, 'purchase_price_afn', val); }}
-                                            onCurrencyChange={(val) => updateVariant(vIndex, 'purchase_currency_id', val)}
-                                            error={errors[`variants.${vIndex}.purchase_price_afn`] || errors[`variants.${vIndex}.purchase_currency_id`]}
-                                        />
-                                        <MoneyField
-                                            label="Selling price (own currency)"
-                                            required
-                                            amount={v.sale_price_afn}
-                                            currencyId={v.sale_currency_id || ledgerCurrencyId}
-                                            currencies={currencies}
-                                            onAmountChange={(val) => { if (toNum(val) >= 0) updateVariant(vIndex, 'sale_price_afn', val); }}
-                                            onCurrencyChange={(val) => updateVariant(vIndex, 'sale_currency_id', val)}
-                                            error={errors[`variants.${vIndex}.sale_price_afn`] || errors[`variants.${vIndex}.sale_currency_id`]}
-                                        />
-                                        <MoneyField
-                                            label="Wholesale price (own currency)"
-                                            amount={v.wholesale_price_afn}
-                                            currencyId={v.wholesale_currency_id || ledgerCurrencyId}
-                                            currencies={currencies}
-                                            onAmountChange={(val) => { if (toNum(val) >= 0) updateVariant(vIndex, 'wholesale_price_afn', val); }}
-                                            onCurrencyChange={(val) => updateVariant(vIndex, 'wholesale_currency_id', val)}
-                                            error={errors[`variants.${vIndex}.wholesale_price_afn`] || errors[`variants.${vIndex}.wholesale_currency_id`]}
-                                        />
-                                        <div className="space-y-2">
-                                            <Label>Wholesale Min Qty</Label>
-                                            <Input
-                                                type="number"
-                                                min="0"
-                                                onKeyDown={preventNegative}
-                                                value={v.wholesale_min_qty}
-                                                onChange={(e) => { if (toNum(e.target.value) >= 0) updateVariant(vIndex, 'wholesale_min_qty', e.target.value); }}
-                                                placeholder="10"
-                                            />
-                                        </div>
-                                    </div>
                                 </div>
                             </div>
                         ))}
@@ -1045,15 +1068,12 @@ export default function ProductsCreate({
                             const isInvestor = isInvestorPurchase(p.investor_id);
                             const variant = variants[p.variant_index];
                             const defaultCur = findCurrency(currencies, ledgerCurrencyId);
-                            const refUsdToAfn = toNum(form.usd_to_afn_rate);
-                            const refUsdToAed = toNum(form.usd_to_aed_rate);
                             const purchaseCur = findCurrency(currencies, variant?.purchase_currency_id || ledgerCurrencyId);
                             const saleCur = findCurrency(currencies, variant?.sale_currency_id || ledgerCurrencyId);
                             const profitCur = findCurrency(currencies, p.profit_currency_id || ledgerCurrencyId);
                             const costLedger = estimateToAfn(toNum(variant?.purchase_price_afn), purchaseCur, defaultCur, refUsdToAfn, refUsdToAed);
                             const saleLedger = estimateToAfn(toNum(variant?.sale_price_afn), saleCur, defaultCur, refUsdToAfn, refUsdToAed);
                             const investorLedger = estimateToAfn(isInvestor ? toNum(p.profit_per_unit) : 0, profitCur, defaultCur, refUsdToAfn, refUsdToAed);
-                            const canCompare = costLedger !== null && saleLedger !== null && investorLedger !== null;
                             const unitPrice = costLedger ?? toNum(variant?.purchase_price_afn);
                             const profits = calcProfits(costLedger ?? 0, saleLedger ?? 0, investorLedger ?? 0, toNum(p.quantity));
 
@@ -1068,7 +1088,6 @@ export default function ProductsCreate({
                                         )}
                                     </div>
 
-                                    {/* Variant selector + Quantity */}
                                     <div className="bg-muted/30 mb-4 rounded-lg border p-4">
                                         <h4 className="mb-3 text-sm font-semibold">Variant & Quantity</h4>
                                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -1105,7 +1124,6 @@ export default function ProductsCreate({
                                         </div>
                                     </div>
 
-                                    {/* Profit preview */}
                                     <div className="mb-4 rounded-lg border p-4">
                                         <h4 className="mb-3 flex items-center gap-1 text-sm font-semibold"><TrendingUp className="h-3 w-3" /> Totals & Profit Split (estimate)</h4>
                                         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -1131,7 +1149,6 @@ export default function ProductsCreate({
                                         </div>
                                     </div>
 
-                                    {/* Invoice, date, supplier, payment */}
                                     <div className="mb-4 rounded-lg border p-4">
                                         <h4 className="mb-3 text-sm font-semibold">Bill & Payment</h4>
                                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -1191,7 +1208,6 @@ export default function ProductsCreate({
                     </CardContent>
                 </Card>
 
-                {/* Submit */}
                 <div className="flex gap-2">
                     <Button type="submit" disabled={loading} className="gap-2">
                         <Save className="h-4 w-4" /> {loading ? 'Saving...' : 'Save Product'}
@@ -1200,5 +1216,63 @@ export default function ProductsCreate({
                 </div>
             </form>
         </AppLayout>
+    );
+}
+
+/* ═══════════════════════════════════════════════════════
+ |  Exchange Equivalents sub-component
+ ═══════════════════════════════════════════════════════ */
+
+function ExchangeEquivalents({
+    variant,
+    currencies,
+    ledgerCur,
+    refUsdToAfn,
+    refUsdToAed,
+}: {
+    variant: Variant;
+    currencies: CatalogCurrency[];
+    ledgerCur: CatalogCurrency | null;
+    refUsdToAfn: number;
+    refUsdToAed: number;
+}) {
+    const purchaseCur = findCurrency(currencies, variant.purchase_currency_id);
+    const saleCur = findCurrency(currencies, variant.sale_currency_id);
+
+    const purchaseAfn = estimateToAfn(toNum(variant.purchase_price_afn), purchaseCur, ledgerCur, refUsdToAfn, refUsdToAed);
+    const saleAfn = estimateToAfn(toNum(variant.sale_price_afn), saleCur, ledgerCur, refUsdToAfn, refUsdToAed);
+
+    if (purchaseAfn === null && saleAfn === null) {
+        return (
+            <div className="rounded-md border border-dashed p-3 text-center text-xs text-muted-foreground">
+                Enter purchase and sale prices above to see exchange equivalents.
+            </div>
+        );
+    }
+
+    return (
+        <div className="rounded-md border border-dashed bg-gray-50/60 p-3">
+            <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-gray-700">
+                <ArrowRightLeft className="h-3.5 w-3.5" />
+                Exchange Equivalents (estimate)
+            </div>
+            <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
+                <div className="rounded bg-white p-2">
+                    <div className="text-muted-foreground mb-0.5 text-[10px] uppercase tracking-wide">Purchase → AFN</div>
+                    <div className="font-mono font-semibold">{purchaseAfn !== null ? fmt(purchaseAfn) : '—'} <span className="text-muted-foreground">AFN</span></div>
+                </div>
+                <div className="rounded bg-white p-2">
+                    <div className="text-muted-foreground mb-0.5 text-[10px] uppercase tracking-wide">Sale → AFN</div>
+                    <div className="font-mono font-semibold">{saleAfn !== null ? fmt(saleAfn) : '—'} <span className="text-muted-foreground">AFN</span></div>
+                </div>
+                <div className="rounded bg-white p-2">
+                    <div className="text-muted-foreground mb-0.5 text-[10px] uppercase tracking-wide">Gross margin</div>
+                    <div className="font-mono font-semibold text-emerald-700">
+                        {purchaseAfn !== null && saleAfn !== null ? fmt(saleAfn - purchaseAfn) : '—'}
+                        <span className="text-muted-foreground ml-1">AFN</span>
+                    </div>
+                </div>
+            </div>
+        </div>
     );
 }

@@ -52,7 +52,6 @@ return new class extends Migration
 
             // Stock (cached)
             $table->integer('stock_quantity')->default(0);
-            $table->integer('minimum_stock')->default(0);
 
             // Trash
             $table->boolean('trash')->default(false)->index();

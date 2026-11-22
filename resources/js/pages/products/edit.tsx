@@ -1,9 +1,6 @@
 // resources/js/pages/products/edit.tsx
 
 import { MoneyField } from '@/components/money-field';
-import { ProductExchangeRateFields, type ExchangeRateContext } from '@/components/product-exchange-rate-fields';
-import { defaultCurrencyId, findCurrency, type CatalogCurrency } from '@/lib/currencies';
-import { calcProfits, estimateToAfn, formatEstimate as fmt } from '@/lib/product-estimate';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,8 +8,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { useExchange } from '@/hooks/useExchange';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
+import { defaultCurrencyId, findCurrency, type CatalogCurrency } from '@/lib/currencies';
+import { calcProfits, estimateToAfn, formatEstimate as fmt } from '@/lib/product-estimate';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
 import {
@@ -164,9 +164,6 @@ interface Props {
     investors?: Investor[];
     suppliers?: Supplier[];
     currencies?: CatalogCurrency[];
-    exchangeRateContext?: ExchangeRateContext;
-    usd_to_afn_rate?: string | null;
-    usd_to_aed_rate?: string | null;
     errors?: Record<string, string>;
 }
 
@@ -328,12 +325,12 @@ export default function ProductsEdit({
     investors = [],
     suppliers = [],
     currencies = [],
-    exchangeRateContext,
-    usd_to_afn_rate = null,
-    usd_to_aed_rate = null,
     errors: initialErrors,
 }: Props) {
     const { toast } = useToast();
+    const { usdToAfn, usdToAed, effectiveAt, source } = useExchange();
+    const refUsdToAfn = usdToAfn ?? 0;
+    const refUsdToAed = usdToAed ?? 0;
 
     const breadcrumbs: BreadcrumbItem[] = [
         { title: 'Dashboard', href: '/dashboard' },
@@ -349,8 +346,6 @@ export default function ProductsEdit({
         gender: product.gender || 'unisex',
         status: product.status || 'active',
         description: product.description || '',
-        usd_to_afn_rate: usd_to_afn_rate ? String(usd_to_afn_rate) : '',
-        usd_to_aed_rate: usd_to_aed_rate ? String(usd_to_aed_rate) : '',
     });
 
     const ledgerCurrencyId = defaultCurrencyId(currencies);
@@ -638,8 +633,6 @@ export default function ProductsEdit({
             const p = copy[index];
             const variant = variants[p.variant_index];
             const ledgerCur = findCurrency(currencies, ledgerCurrencyId);
-            const refUsdToAfn = toNum(form.usd_to_afn_rate);
-            const refUsdToAed = toNum(form.usd_to_aed_rate);
 
             const qty = toNum(p.quantity);
             // Line totals shown as AFN estimates — original purchase currency stays on the MoneyField.
@@ -767,23 +760,6 @@ export default function ProductsEdit({
             clientErrors.name = 'Product name is required';
         }
 
-        const rateFields: Array<['usd_to_afn_rate' | 'usd_to_aed_rate', string]> = [
-            ['usd_to_afn_rate', 'USD to AFN (AFN per 1 USD)'],
-            ['usd_to_aed_rate', 'USD to AED (AED per 1 USD)'],
-        ];
-        rateFields.forEach(([field, label]) => {
-            const raw = form[field].trim();
-            if (raw === '') {
-                return;
-            }
-            const n = toNum(raw);
-            if (n <= 0) {
-                clientErrors[field] = `${label} must be greater than zero.`;
-            }
-        });
-
-        const refUsdToAfn = toNum(form.usd_to_afn_rate);
-        const refUsdToAed = toNum(form.usd_to_aed_rate);
         const ledgerCur = findCurrency(currencies, ledgerCurrencyId);
 
         variants.forEach((v, i) => {
@@ -882,8 +858,6 @@ export default function ProductsEdit({
         if (form.description.trim()) {
             formData.append('description', form.description.trim());
         }
-        if (form.usd_to_afn_rate.trim()) formData.append('usd_to_afn_rate', form.usd_to_afn_rate.trim());
-        if (form.usd_to_aed_rate.trim()) formData.append('usd_to_aed_rate', form.usd_to_aed_rate.trim());
 
         // Variants
         variants.forEach((v, i) => {
@@ -1107,13 +1081,15 @@ export default function ProductsEdit({
                             />
                         </div>
 
-                        <ProductExchangeRateFields
-                            usdToAfn={form.usd_to_afn_rate}
-                            usdToAed={form.usd_to_aed_rate}
-                            onChange={(field, value) => setForm({ ...form, [field]: value })}
-                            errors={errors}
-                            context={exchangeRateContext}
-                        />
+                        {(usdToAfn || usdToAed) && (
+                            <p className="text-muted-foreground text-xs">
+                                Estimates use the central exchange board
+                                {usdToAfn ? ` · 1 USD = ${usdToAfn} AFN` : ''}
+                                {usdToAed ? ` · 1 USD = ${usdToAed} AED` : ''}
+                                {effectiveAt ? ` · effective ${effectiveAt}` : ''}
+                                {source ? ` · ${source}` : ''}. Rates are managed under Exchange Rates — not edited here.
+                            </p>
+                        )}
                     </CardContent>
                 </Card>
 
@@ -1402,8 +1378,6 @@ export default function ProductsEdit({
                             const isInvestor = isInvestorPurchase(p.investor_id);
                             const variant = variants[p.variant_index];
                             const defaultCur = findCurrency(currencies, ledgerCurrencyId);
-                            const refUsdToAfn = toNum(form.usd_to_afn_rate);
-                            const refUsdToAed = toNum(form.usd_to_aed_rate);
                             const purchaseCur = findCurrency(currencies, variant?.purchase_currency_id || ledgerCurrencyId);
                             const saleCur = findCurrency(currencies, variant?.sale_currency_id || ledgerCurrencyId);
                             const profitCur = findCurrency(currencies, p.profit_currency_id || ledgerCurrencyId);

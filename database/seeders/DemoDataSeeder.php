@@ -14,7 +14,6 @@ use App\Models\Product;
 use App\Models\ProductBarcode;
 use App\Models\ProductVariant;
 use App\Models\Supplier;
-use App\Models\User;
 use Illuminate\Database\Seeder;
 
 /**
@@ -111,23 +110,19 @@ class DemoDataSeeder extends Seeder
             ])->getAttributes()
         );
 
-        $investorUser = User::where('email', 'investor@example.com')->first();
-
         $investor = Investor::firstOrCreate(
             ['email' => 'investor@example.com'],
             [
-                'user_id' => $investorUser?->id,
                 'full_name' => 'Demo Investor',
                 'phone' => '0700000006',
-                'address' => 'Kabul',
+                'username' => 'demo_investor',
+                'password' => bcrypt('DemoInvestor@123'),
                 'status' => 'active',
                 'trash' => false,
             ]
         );
 
-        if ($investorUser && $investor->user_id !== $investorUser->id) {
-            $investor->update(['user_id' => $investorUser->id]);
-        }
+        $investor->getOrCreateWallet();
 
         $investment = Investment::firstOrCreate(
             ['investment_number' => 'INV-DEMO-0001'],

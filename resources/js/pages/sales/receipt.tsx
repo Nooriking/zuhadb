@@ -10,6 +10,12 @@ interface SaleItem {
     sale_price_afn: string;
     line_total_afn: string;
     discount_afn: string;
+    sale_unit_amount?: string | number | null;
+    sale_line_amount?: string | number | null;
+    sale_currency_code?: string | null;
+    display_unit_price?: number | null;
+    display_line_total?: number | null;
+    display_currency_code?: string | null;
 }
 
 interface Payment {
@@ -38,6 +44,19 @@ interface Sale {
     customer_name_snapshot: string | null;
     customer_phone_snapshot: string | null;
     printed_count: number;
+    sale_currency_code?: string | null;
+    sale_currency_symbol?: string | null;
+    sale_currency_label?: string | null;
+    sale_currency_known?: boolean;
+    sale_amount_currency?: string | number | null;
+    display_total?: number | null;
+    display_subtotal?: number | null;
+    display_discount?: number | null;
+    display_paid?: number | null;
+    display_remaining?: number | null;
+    display_previous_due?: number | null;
+    display_new_sale_amount?: number | null;
+    display_grand_total_due?: number | null;
     customer: { id: number; name: string; phone: string | null } | null;
     creator: { name: string } | null;
     items: SaleItem[];
@@ -58,10 +77,13 @@ interface Props {
     printedAt: string;
 }
 
-const money = (value: string | number) =>
-    new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(typeof value === 'string' ? parseFloat(value) || 0 : value || 0);
+const money = (value: string | number | null | undefined, digits = 0) =>
+    new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(
+        typeof value === 'string' ? parseFloat(value) || 0 : value || 0,
+    );
 
-const methodLabel = (method: string) => ({ cash: 'Cash', card: 'Card', bank: 'Bank', mobile: 'Mobile', other: 'Other' })[method] || method;
+const methodLabel = (method: string) =>
+    ({ cash: 'Cash', card: 'Card', bank: 'Bank', mobile: 'Mobile', other: 'Other' })[method] || method;
 
 export default function SaleReceipt({ sale, company, printedAt }: Props) {
     useEffect(() => {
@@ -74,6 +96,12 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
     const dateOnly = new Date(sale.sale_date).toLocaleDateString('en-GB');
     const timeOnly = printedAt.split(' ')[1] || '';
     const status = sale.payment_status === 'paid' ? 'PAID' : sale.payment_status === 'partial' ? 'PARTIAL' : 'UNPAID';
+    const currencyCode =
+        sale.sale_currency_known === false ? null : sale.sale_currency_code || sale.items[0]?.display_currency_code || 'AFN';
+    const currencySuffix = currencyCode || 'AFN';
+
+    const formatAmount = (value: string | number | null | undefined, digits = 2) =>
+        `${money(value, digits)} ${currencySuffix}`;
 
     return (
         <>
@@ -91,7 +119,6 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
                     <header className="bill-head">
                         {company.logo && <img loading="lazy" decoding="async" className="bill-logo" src={company.logo} alt={company.name} />}
                         <p className="bill-brand">{company.name}</p>
-                        {/* {company.slogan && <p>{company.slogan}</p>} */}
                         {company.phone && <p>Tel: {company.phone}</p>}
                         {company.address && <p>{company.address}</p>}
                     </header>
@@ -121,6 +148,10 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
                                 <dd>{customerPhone}</dd>
                             </div>
                         )}
+                        <div>
+                            <dt>Currency</dt>
+                            <dd>{sale.sale_currency_label || currencySuffix}</dd>
+                        </div>
                     </dl>
                     <table className="bill-items">
                         <thead>
@@ -132,23 +163,45 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
                             </tr>
                         </thead>
                         <tbody>
-                            {sale.items.map((item, index) => (
-                                <tr key={item.id}>
-                                    <td>
-                                        {index + 1}. {item.product_name_snapshot || 'Product'}
-                                    </td>
-                                    <td>{item.quantity}</td>
-                                    <td>{money(item.sale_price_afn)}</td>
-                                    <td>{money(item.line_total_afn)}</td>
-                                </tr>
-                            ))}
+                            {sale.items.map((item, index) => {
+                                const unit =
+                                    item.display_unit_price ??
+                                    item.sale_unit_amount ??
+                                    item.sale_price_afn;
+                                const line =
+                                    item.display_line_total ??
+                                    item.sale_line_amount ??
+                                    item.line_total_afn;
+                                const lineCode = item.display_currency_code || currencySuffix;
+                                return (
+                                    <tr key={item.id}>
+                                        <td>
+                                            {index + 1}. {item.product_name_snapshot || 'Product'}
+                                        </td>
+                                        <td>{item.quantity}</td>
+                                        <td>
+                                            {money(unit, 2)} {lineCode}
+                                        </td>
+                                        <td>
+                                            {money(line, 2)} {lineCode}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
                         </tbody>
                     </table>
                     <dl className="bill-totals">
-                        {parseFloat(sale.discount_afn) > 0 && (
+                        {(sale.display_discount != null
+                            ? sale.display_discount
+                            : parseFloat(sale.discount_afn)) > 0 && (
                             <div>
                                 <dt>Discount</dt>
-                                <dd>-{money(sale.discount_afn)} AFN</dd>
+                                <dd>
+                                    -
+                                    {formatAmount(
+                                        sale.display_discount ?? sale.discount_afn,
+                                    )}
+                                </dd>
                             </div>
                         )}
                         {parseFloat(sale.tax_afn) > 0 && (
@@ -161,21 +214,50 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
                             <>
                                 <div>
                                     <dt>Previous due</dt>
-                                    <dd>{money(sale.previous_due_afn || 0)} AFN</dd>
+                                    <dd>
+                                        {formatAmount(
+                                            sale.display_previous_due ?? sale.previous_due_afn ?? 0,
+                                        )}
+                                    </dd>
                                 </div>
                                 <div>
                                     <dt>This sale</dt>
-                                    <dd>{money(sale.new_sale_amount_afn || sale.total_afn)} AFN</dd>
+                                    <dd>
+                                        {formatAmount(
+                                            sale.display_new_sale_amount ??
+                                                sale.sale_amount_currency ??
+                                                sale.new_sale_amount_afn ??
+                                                sale.total_afn,
+                                        )}
+                                    </dd>
                                 </div>
                             </>
                         )}
                         <div className="bill-grand">
                             <dt>Total</dt>
-                            <dd>{money(sale.grand_total_due_afn || sale.total_afn)} AFN</dd>
+                            <dd>
+                                {formatAmount(
+                                    sale.display_grand_total_due ??
+                                        sale.sale_amount_currency ??
+                                        sale.grand_total_due_afn ??
+                                        sale.total_afn,
+                                )}
+                            </dd>
                         </div>
+                        {/* AFN ledger reference for accounting — historical snapshot, not live FX */}
+                        {currencySuffix !== 'AFN' && (
+                            <div>
+                                <dt>AFN ledger</dt>
+                                <dd>{money(sale.total_afn)} AFN</dd>
+                            </div>
+                        )}
                         <div>
                             <dt>Paid</dt>
-                            <dd>{money(sale.received_now_afn || sale.paid_afn)} AFN</dd>
+                            <dd>
+                                {formatAmount(
+                                    sale.display_paid ?? sale.received_now_afn ?? sale.paid_afn,
+                                )}
+                            </dd>
                         </div>
                         {sale.payments.length > 1 &&
                             sale.payments.map((payment) => (
@@ -186,17 +268,18 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
                             ))}
                         <div className="bill-due">
                             <dt>Remaining</dt>
-                            <dd>{money(sale.remaining_due_afn || sale.due_afn)} AFN</dd>
+                            <dd>
+                                {formatAmount(
+                                    sale.display_remaining ?? sale.remaining_due_afn ?? sale.due_afn,
+                                )}
+                            </dd>
                         </div>
                     </dl>
                     <p className="bill-status">{status}</p>
                     {sale.notes && <p className="bill-note">{sale.notes}</p>}
                     <footer className="bill-foot">
                         <p>Thank you</p>
-                        {/* <p>Exchange within {company.exchange_window_days ?? 3} days with this invoice</p> */}
                         {company.address && <p>{company.address}</p>}
-                        {/* {(company.support_phone || company.phone) && <p>Support {company.support_phone || company.phone}</p>} */}
-                        {/* {company.manufacturer && <p>{company.manufacturer}</p>} */}
                         <p>
                             {printedAt} · Print {sale.printed_count + 1}
                         </p>

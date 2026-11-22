@@ -5,47 +5,47 @@ namespace App\Services;
 use App\Models\Expense;
 use App\Models\Inventory;
 use App\Models\Investment;
-use App\Models\InvestmentProductAllocation;
+use App\Models\InvestorTransaction;
 use App\Models\Product;
 use App\Models\ProductBatch;
+use App\Models\ProductPrice;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductVariant;
 use App\Models\Currency;
+use App\Models\SupplierInvoice;
 use App\Models\User;
-use App\Services\ActivityLogger;
 use App\Support\FxBoard;
 use App\Support\Money;
 use App\Support\PurchaseValuation;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class PurchaseService
 {
-    public function __construct(private readonly PurchaseValuation $valuation) {}
+    public function __construct(
+        private readonly PurchaseValuation $valuation,
+        private readonly ExchangeService $exchange,
+    ) {}
 
     /**
-     * Receive stock for an existing variant (batch + inventory + price history).
+     * Receive stock for an existing variant (batch + inventory + optional auto-investment).
      *
      * @param  array<string, mixed>  $data  Validated receive payload
      */
-    public function receiveStock(array $data, User $actor, int $branchId): Product
+    public function receiveStock(array $data, User $actor, int $branchId): ProductBatch
     {
         return DB::transaction(function () use ($data, $actor, $branchId) {
-            $variant = ProductVariant::with(['product', 'purchaseCurrency'])->findOrFail($data['variant_id']);
+            $variant = ProductVariant::with(['product', 'prices'])->findOrFail($data['variant_id']);
             $product = $variant->product;
             $qty = (int) $data['quantity'];
             $salePrice = (float) $data['sale_price_afn'];
             $profitOriginal = (float) ($data['profit_per_unit'] ?? 0);
+            $supplierId = ! empty($data['supplier_id']) ? (int) $data['supplier_id'] : null;
 
             $ledger = Currency::ledger();
             $purchaseCurrency = ! empty($data['purchase_currency_id'])
                 ? Currency::query()->notTrashed()->findOrFail((int) $data['purchase_currency_id'])
-                : ($variant->purchaseCurrency
-                    ?? ($variant->purchase_currency_id ? Currency::query()->find($variant->purchase_currency_id) : $ledger));
-            $profitCurrency = ! empty($data['profit_currency_id'])
-                ? Currency::query()->notTrashed()->find((int) $data['profit_currency_id'])
-                : $ledger;
+                : $this->resolveCatalogPurchaseCurrency($variant, $ledger);
 
             $exchangeRate = (float) ($data['exchange_rate'] ?? 0);
             if ($exchangeRate < 0) {
@@ -54,7 +54,6 @@ class PurchaseService
                 ]);
             }
 
-            // Prefer original unit amount in the selected purchase currency.
             if (isset($data['purchase_unit_amount']) && $data['purchase_unit_amount'] !== '' && $data['purchase_unit_amount'] !== null) {
                 $originalUnit = (string) $data['purchase_unit_amount'];
             } elseif (
@@ -66,28 +65,52 @@ class PurchaseService
                 && $purchaseCurrency->id !== $ledger->id
                 && $exchangeRate > 0
             ) {
-                // Legacy clients send AFN unit + exchange_rate for a non-AFN purchase currency.
                 $originalUnit = number_format(((float) $data['purchase_price_afn']) / $exchangeRate, 2, '.', '');
             } elseif (isset($data['purchase_price_afn']) && $data['purchase_price_afn'] !== '' && $data['purchase_price_afn'] !== null) {
                 $originalUnit = (string) $data['purchase_price_afn'];
                 $purchaseCurrency = $ledger ?? $purchaseCurrency;
-            } elseif ($variant->purchase_amount !== null && $variant->purchase_currency_id) {
-                $originalUnit = (string) $variant->purchase_amount;
-                $purchaseCurrency = $variant->purchaseCurrency ?? $purchaseCurrency;
             } else {
-                $originalUnit = (string) ($variant->purchase_price_afn ?? '0');
-                $purchaseCurrency = $ledger ?? $purchaseCurrency;
+                $catalogPurchase = $this->catalogPriceRow($variant, 'purchase');
+                $originalUnit = (string) ($catalogPurchase?->amount ?? '0');
+                if ($catalogPurchase?->currency_id) {
+                    $purchaseCurrency = Currency::query()->find($catalogPurchase->currency_id) ?? $purchaseCurrency;
+                } else {
+                    $purchaseCurrency = $ledger ?? $purchaseCurrency;
+                }
             }
 
-            $rateOverrides = [];
+            // Single source: central exchange_rates via ExchangeService.
+            $usdSnap = $this->exchange->snapshot('USD', 'AFN');
+            $aedSnap = $this->exchange->snapshot('AED', 'AFN');
+            $current = $this->exchange->getCurrentRates();
+            $rateOverrides = [
+                'usd_to_afn' => (string) $usdSnap['rate'],
+                'aed_to_afn' => (string) $aedSnap['rate'],
+                'usd_to_aed' => (string) $current['usd_to_aed'],
+                'source' => (string) ($usdSnap['source'] ?? 'exchange_rates'),
+            ];
+
             if (! empty($data['usd_to_afn_rate']) && (float) $data['usd_to_afn_rate'] > 0) {
                 $rateOverrides['usd_to_afn'] = (string) $data['usd_to_afn_rate'];
             }
             if (! empty($data['aed_to_afn_rate']) && (float) $data['aed_to_afn_rate'] > 0) {
                 $rateOverrides['aed_to_afn'] = (string) $data['aed_to_afn_rate'];
             }
-            if ($rateOverrides !== []) {
-                $rateOverrides['source'] = (string) ($data['rate_source'] ?? 'transaction');
+            if (! empty($data['usd_to_aed_rate']) && (float) $data['usd_to_aed_rate'] > 0) {
+                $rateOverrides['usd_to_aed'] = (string) $data['usd_to_aed_rate'];
+            }
+
+            if ($exchangeRate <= 0 && $purchaseCurrency) {
+                $purchaseCode = strtoupper((string) $purchaseCurrency->code);
+                if ($purchaseCode === 'AFN') {
+                    $exchangeRate = 1.0;
+                } elseif ($purchaseCode === 'USD') {
+                    $exchangeRate = (float) $rateOverrides['usd_to_afn'];
+                } elseif ($purchaseCode === 'AED') {
+                    $exchangeRate = (float) $rateOverrides['aed_to_afn'];
+                } else {
+                    $exchangeRate = (float) $this->exchange->snapshot($purchaseCode, 'AFN')['rate'];
+                }
             }
 
             $effectiveAt = $data['purchase_date'] ?? now();
@@ -100,6 +123,8 @@ class PurchaseService
                 $rateOverrides,
             );
             $purchasePrice = (float) $money['unit_cost_afn'];
+            $totalCostAfn = (float) $money['line_cost_afn'];
+            $purchaseLineAmount = (float) $money['purchase_line_amount'];
 
             $fundingSource = $data['funding_source'] ?? null;
             $investorId = $data['investor_id'] ?? null;
@@ -123,13 +148,9 @@ class PurchaseService
                 ]);
             }
 
-            // Compare receive-time sale AFN (request) vs this receive's PurchaseValuation AFN —
-            // never revalue the purchase with a later catalog/product-reference rate.
-            // Catalog variant.sale_price_afn must not silently substitute for either side.
             if ($salePrice < $purchasePrice) {
                 throw ValidationException::withMessages([
-                    'sale_price_afn' => 'Sale price (AFN at receive) cannot be less than this purchase\'s historical AFN cost. '
-                        .'Catalog estimate rates are not used for this check.',
+                    'sale_price_afn' => 'Sale price (AFN at receive) cannot be less than this purchase\'s historical AFN cost.',
                 ]);
             }
 
@@ -138,66 +159,54 @@ class PurchaseService
                 'aed_to_afn' => (string) ($money['aed_to_afn_rate'] ?? 0),
                 'usd_to_aed' => $money['usd_to_aed_rate'] ?? null,
                 'effective_at' => isset($money['rate_effective_at']) ? (string) $money['rate_effective_at'] : null,
-                'source' => (string) ($money['rate_source'] ?? 'operational'),
+                'source' => (string) ($money['rate_source'] ?? 'exchange_rates'),
                 'kind' => (string) ($money['rate_kind'] ?? 'operational'),
             ]);
 
-            $profitCode = strtoupper((string) ($profitCurrency?->code ?? $ledger?->code ?? 'AFN'));
             if ($investorId && $profitOriginal > 0) {
+                $profitCode = strtoupper((string) ($purchaseCurrency?->code ?? $ledger?->code ?? 'AFN'));
                 $profitEq = $board->equivalents(Money::round((string) $profitOriginal, 4), $profitCode, 4);
                 $profitAfn = (float) Money::round($profitEq['afn'], 2);
-                $profitUsd = (float) $profitEq['usd'];
-                $profitAed = (float) $profitEq['aed'];
             } else {
                 $profitOriginal = 0;
                 $profitAfn = 0.0;
-                $profitUsd = 0.0;
-                $profitAed = 0.0;
-                $profitCurrency = $ledger;
-                $profitCode = strtoupper((string) ($ledger?->code ?? 'AFN'));
             }
 
-            // Preview-only company PPU at receive time (sale-time residual is authoritative).
-            // Do not silently clamp — insufficient coverage is enforced at sale time.
             $storeProfitPerUnit = round($salePrice - $purchasePrice - $profitAfn, 2);
-
-            $totalCostAfn = (float) $money['line_cost_afn'];
 
             $investment = null;
             if ($investorId && ! $investmentId) {
-                // Receiving investor goods is itself the contribution event.
-                // Do NOT increase the investor cash wallet — goods are in-kind capital.
-                $investment = Investment::create([
+                $investment = Investment::createFromPurchase([
                     'investor_id' => (int) $investorId,
-                    'source_type' => 'goods',
-                    'investment_number' => Investment::generateInvestmentNumber(),
-                    'currency_id' => $money['purchase_currency_id'],
-                    'currency_code' => $money['purchase_currency_code'],
-                    'currency_symbol' => $money['purchase_currency_symbol'],
+                    'currency_id' => $money['purchase_currency_id'] ?? $purchaseCurrency?->id,
+                    'amount_currency' => $purchaseLineAmount,
+                    'amount_afn' => $totalCostAfn,
                     'exchange_rate' => $money['rate_to_ledger'],
-                    'usd_to_afn_rate' => $money['usd_to_afn_rate'] ?? null,
-                    'aed_to_afn_rate' => $money['aed_to_afn_rate'] ?? null,
-                    'usd_to_aed_rate' => $money['usd_to_aed_rate'] ?? null,
-                    'rate_effective_at' => $money['rate_effective_at'] ?? null,
-                    'rate_source' => $money['rate_source'] ?? null,
-                    'capital_amount_currency' => $money['purchase_line_amount'],
-                    'capital_amount_afn' => $totalCostAfn,
-                    'capital_amount_usd' => $money['line_amount_usd'] ?? null,
-                    'capital_amount_aed' => $money['line_amount_aed'] ?? null,
-                    'available_amount_currency' => $money['purchase_line_amount'],
-                    'available_amount_afn' => $totalCostAfn,
-                    'allocated_amount_afn' => 0,
-                    'profit_amount_afn' => 0,
-                    'withdrawn_amount_afn' => 0,
-                    'investment_date' => $data['purchase_date'],
-                    'status' => 'active',
-                    'notes' => 'Goods contribution created by product receiving.',
+                    'investment_date' => $data['purchase_date'] ?? now()->toDateString(),
+                    'notes' => 'Auto-created on stock receive',
                     'created_by' => $actor->id,
                 ]);
                 $investmentId = $investment->id;
-            }
 
-            if ($investmentId) {
+                InvestorTransaction::record(
+                    investorId: (int) $investorId,
+                    type: 'goods_deposit',
+                    amountAfn: $totalCostAfn,
+                    balanceType: 'capital',
+                    options: [
+                        'investment_id' => $investmentId,
+                        'currency_id' => $money['purchase_currency_id'] ?? $purchaseCurrency?->id,
+                        'currency_code' => $money['purchase_currency_code'] ?? $purchaseCurrency?->code,
+                        'amount_currency' => $purchaseLineAmount,
+                        'exchange_rate' => $money['rate_to_ledger'],
+                        'reference_type' => ProductBatch::class,
+                        'description' => 'Goods contribution on stock receive',
+                        'transaction_date' => $data['purchase_date'] ?? now()->toDateString(),
+                    ]
+                );
+
+                // In-kind goods: capital is tied up in inventory, not cash wallet.
+            } elseif ($investmentId) {
                 $investment = Investment::query()->lockForUpdate()->findOrFail($investmentId);
 
                 if ((int) $investment->investor_id !== (int) $investorId) {
@@ -205,132 +214,58 @@ class PurchaseService
                         'investment_id' => 'That investment does not belong to the selected investor.',
                     ]);
                 }
-
-                if (! $investment->hasAvailableCapital()) {
-                    throw ValidationException::withMessages([
-                        'investment_id' => 'This investment has no available capital left.',
-                    ]);
-                }
-
-                $available = $investment->isGoodsInvestment()
-                    ? $investment->remainingGoodsCapitalAfn()
-                    : (float) $investment->available_amount_afn;
-
-                if ($totalCostAfn > $available + 0.01) {
-                    throw ValidationException::withMessages([
-                        'investment_id' => "Available capital is {$available} AFN, but this stock costs {$totalCostAfn} AFN.",
-                    ]);
-                }
             }
 
-            $oldPurchase = (float) $variant->purchase_price_afn;
-            $oldSale = (float) $variant->sale_price_afn;
+            $oldPurchase = $variant->activePriceAmount('purchase', 'AFN');
+            $oldSale = $variant->activePriceAmount('sale', 'AFN');
 
-            $variant->update([
-                'purchase_price_afn' => $purchasePrice,
-                'sale_price_afn' => $salePrice,
-                'user_id' => $actor->id,
-            ]);
+            $this->syncReceiveCatalogPrices($product, $variant, $purchasePrice, $salePrice);
 
-            $purchaseRowPayload = [
-                'name' => $product->name,
-                'brand_id' => $product->brand_id,
-                'gender' => $product->gender,
-                'status' => $product->status,
-                'description' => $product->description,
-                'user_id' => $actor->id,
-                'trash' => false,
+            $paymentStatus = $supplierId ? 'unpaid' : 'paid';
+            $purchaseDate = $data['purchase_date'] ?? now()->toDateString();
+
+            $batch = ProductBatch::create([
+                'branch_id' => $branchId,
                 'variant_id' => $variant->id,
-                'investor_id' => $investorId,
-                'supplier_id' => $data['supplier_id'] ?? null,
+                'investment_id' => $investmentId,
+                'batch_code' => ProductBatch::generateBatchCode(),
                 'invoice_number' => $data['invoice_number'] ?? null,
-                'purchase_date' => $data['purchase_date'],
+                'purchase_date' => $purchaseDate,
+                'payment_status' => $paymentStatus,
+                'bill_image' => $data['bill_image'] ?? null,
+                'notes' => $data['notes'] ?? null,
+                'purchase_currency_id' => $money['purchase_currency_id'] ?? $purchaseCurrency?->id,
+                'purchase_amount_currency' => $purchaseLineAmount,
                 'quantity' => $qty,
                 'remaining_quantity' => $qty,
-                'purchase_price_afn' => $totalCostAfn,
-                'profit_per_unit' => $profitAfn,
-                'line_total' => $totalCostAfn,
-                'line_profit' => $profitAfn * $qty,
-                'store_profit_per_unit' => $storeProfitPerUnit,
-                'line_store_profit' => round($storeProfitPerUnit * $qty, 2),
-                'notes' => $data['notes'] ?? null,
-                'payment_status' => ! empty($data['supplier_id']) ? 'unpaid' : 'paid',
-            ];
+                'unit_cost_currency' => (float) $money['purchase_unit_amount'],
+                'exchange_rate' => (float) $money['rate_to_ledger'],
+                'unit_cost_afn' => $purchasePrice,
+                'profit_per_unit_afn' => $profitAfn,
+                'store_profit_per_unit_afn' => $storeProfitPerUnit,
+                'sale_price_afn' => $salePrice,
+                'received_date' => $purchaseDate,
+                'status' => 'active',
+                'user_id' => $actor->id,
+                'trash' => false,
+            ]);
 
-            if (Schema::hasColumn('products', 'profit_currency_id')) {
-                $purchaseRowPayload['profit_currency_id'] = $profitCurrency?->id ?? $ledger?->id;
-            }
-            if (Schema::hasColumn('products', 'profit_currency_code')) {
-                $purchaseRowPayload['profit_currency_code'] = $profitCode;
-            }
-
-            $purchaseRow = Product::create(array_merge($purchaseRowPayload, [
-                'exchange_rate' => $money['exchange_rate'],
-                'purchase_currency_id' => $money['purchase_currency_id'],
-                'purchase_currency_code' => $money['purchase_currency_code'],
-                'purchase_currency_symbol' => $money['purchase_currency_symbol'],
-                'purchase_unit_amount' => $money['purchase_unit_amount'],
-                'purchase_line_amount' => $money['purchase_line_amount'],
-                'rate_to_ledger' => $money['rate_to_ledger'],
-                'rate_kind' => $money['rate_kind'],
-                'usd_to_afn_rate' => $money['usd_to_afn_rate'] ?? null,
-                'aed_to_afn_rate' => $money['aed_to_afn_rate'] ?? null,
-                'usd_to_aed_rate' => $money['usd_to_aed_rate'] ?? null,
-                'rate_effective_at' => $money['rate_effective_at'] ?? null,
-                'rate_source' => $money['rate_source'] ?? null,
-                'unit_amount_usd' => $money['unit_amount_usd'] ?? null,
-                'unit_amount_aed' => $money['unit_amount_aed'] ?? null,
-                'line_amount_usd' => $money['line_amount_usd'] ?? null,
-                'line_amount_aed' => $money['line_amount_aed'] ?? null,
-            ]));
-
-            // Goods contributions are in-kind — never invent a supplier cash payment.
-            if (! ($investment && $investment->isGoodsInvestment())) {
-                $this->applyPaidNow($purchaseRow, (float) ($data['paid_now'] ?? 0), $actor->id);
-            }
-
-            $batch = $this->createProductBatch(
-                branchId: $branchId,
-                variantId: $variant->id,
-                purchaseRowId: $purchaseRow->id,
-                investorId: $investorId ? (int) $investorId : null,
-                qty: $qty,
-                unitCostAfn: $purchasePrice,
-                unitCostCurrency: (float) $money['purchase_unit_amount'],
-                exchangeRate: (float) $money['rate_to_ledger'],
-                profitPerUnitAfn: $profitAfn,
-                profitPerUnitOriginal: $profitOriginal,
-                profitCurrencyId: $profitCurrency?->id,
-                profitCurrencyCode: $profitCode,
-                profitPerUnitUsd: $profitUsd,
-                profitPerUnitAed: $profitAed,
-                storeProfitPerUnit: $storeProfitPerUnit,
-                salePriceAfn: $salePrice,
-                receivedDate: $data['purchase_date'],
-                userId: $actor->id,
-            );
-
-            if ($investment) {
-                $purchaseAllocation = $investment->allocateToPurchase(
-                    $purchaseRow->id,
-                    $totalCostAfn,
-                    "Add stock · batch {$batch->batch_code}"
+            if ($supplierId) {
+                $this->syncSupplierInvoice(
+                    supplierId: $supplierId,
+                    batch: $batch,
+                    totalAfn: $totalCostAfn,
+                    exchangeRate: (float) ($money['rate_to_ledger'] ?? 0),
+                    actorId: $actor->id,
                 );
 
-                InvestmentProductAllocation::create([
-                    'investment_id' => $investment->id,
-                    'investment_purchase_allocation_id' => $purchaseAllocation->id,
-                    'batch_id' => $batch->id,
-                    'variant_id' => $variant->id,
-                    'funded_quantity' => $qty,
-                    'sold_quantity' => 0,
-                    'remaining_quantity' => $qty,
-                    'cost_per_unit_afn' => $purchasePrice,
-                    'profit_per_unit_afn' => $profitAfn,
-                    'capital_recovered_afn' => 0,
-                    'profit_earned_afn' => 0,
-                    'status' => 'active',
-                ]);
+                $this->applyPaidNow(
+                    $batch,
+                    $supplierId,
+                    (float) ($data['paid_now'] ?? 0),
+                    (float) ($money['rate_to_ledger'] ?? 0),
+                    $actor->id,
+                );
             }
 
             $this->recordPriceChange(
@@ -348,17 +283,16 @@ class PurchaseService
                 variantId: $variant->id,
                 qty: $qty,
                 type: 'purchase',
+                batchId: $batch->id,
                 notes: 'Stock received',
                 unitCostAfn: $purchasePrice,
             );
-
-            $this->refreshVariantStock($product);
 
             ActivityLogger::log(
                 action: 'receive',
                 section: 'purchases',
                 description: "Stock received for variant #{$variant->id} qty {$qty}",
-                subject: $purchaseRow,
+                subject: $batch,
                 properties: [
                     'variant_id' => $variant->id,
                     'quantity' => $qty,
@@ -373,76 +307,100 @@ class PurchaseService
                 userId: $actor->id,
             );
 
-            return $purchaseRow;
+            return $batch;
         });
     }
 
-    private function createProductBatch(
-        int $branchId,
-        int $variantId,
-        int $purchaseRowId,
-        ?int $investorId,
-        int $qty,
-        float $unitCostAfn,
-        float $unitCostCurrency,
-        float $exchangeRate,
-        float $profitPerUnitAfn,
-        float $profitPerUnitOriginal,
-        ?int $profitCurrencyId,
-        string $profitCurrencyCode,
-        float $profitPerUnitUsd,
-        float $profitPerUnitAed,
-        float $storeProfitPerUnit,
+    private function catalogPriceRow(ProductVariant $variant, string $priceType): ?ProductPrice
+    {
+        return $variant->prices
+            ->where('price_type', $priceType)
+            ->where('is_active', true)
+            ->sortByDesc('min_qty')
+            ->first(fn (ProductPrice $p) => (int) $p->min_qty === 0)
+            ?? $variant->prices
+                ->where('price_type', $priceType)
+                ->where('is_active', true)
+                ->sortByDesc('min_qty')
+                ->first();
+    }
+
+    private function resolveCatalogPurchaseCurrency(ProductVariant $variant, ?Currency $ledger): ?Currency
+    {
+        $row = $this->catalogPriceRow($variant, 'purchase');
+        if ($row?->currency_id) {
+            return Currency::query()->find($row->currency_id) ?? $ledger;
+        }
+
+        return $ledger;
+    }
+
+    private function syncReceiveCatalogPrices(
+        Product $product,
+        ProductVariant $variant,
+        float $purchasePriceAfn,
         float $salePriceAfn,
-        string $receivedDate,
-        int $userId,
-    ): ProductBatch {
-        $payload = [
-            'branch_id' => $branchId,
-            'variant_id' => $variantId,
-            'purchase_item_id' => $purchaseRowId,
-            'investor_id' => $investorId,
-            'batch_code' => ProductBatch::generateBatchCode(),
-            'quantity' => $qty,
-            'remaining_quantity' => $qty,
-            'unit_cost_afn' => $unitCostAfn,
-            'total_cost_afn' => $unitCostAfn * $qty,
-            'profit_per_unit_afn' => $profitPerUnitAfn,
-            'received_date' => $receivedDate,
-            'status' => 'active',
-            'user_id' => $userId,
-            'trash' => false,
-        ];
-
-        if (Schema::hasColumn('product_batches', 'unit_cost_currency')) {
-            $payload['unit_cost_currency'] = $unitCostCurrency;
-        }
-        if (Schema::hasColumn('product_batches', 'exchange_rate')) {
-            $payload['exchange_rate'] = $exchangeRate;
-        }
-        if (Schema::hasColumn('product_batches', 'profit_per_unit_currency')) {
-            $payload['profit_per_unit_currency'] = $profitPerUnitOriginal;
-        }
-        if (Schema::hasColumn('product_batches', 'store_profit_per_unit_afn')) {
-            $payload['store_profit_per_unit_afn'] = $storeProfitPerUnit;
-        }
-        if (Schema::hasColumn('product_batches', 'sale_price_afn')) {
-            $payload['sale_price_afn'] = $salePriceAfn;
-        }
-        if (Schema::hasColumn('product_batches', 'profit_currency_id')) {
-            $payload['profit_currency_id'] = $profitCurrencyId;
-        }
-        if (Schema::hasColumn('product_batches', 'profit_currency_code')) {
-            $payload['profit_currency_code'] = $profitCurrencyCode;
-        }
-        if (Schema::hasColumn('product_batches', 'profit_per_unit_usd')) {
-            $payload['profit_per_unit_usd'] = $profitPerUnitUsd;
-        }
-        if (Schema::hasColumn('product_batches', 'profit_per_unit_aed')) {
-            $payload['profit_per_unit_aed'] = $profitPerUnitAed;
+    ): void {
+        $afn = Currency::query()->notTrashed()->where('code', 'AFN')->first();
+        if (! $afn) {
+            return;
         }
 
-        return ProductBatch::create($payload);
+        foreach (
+            [
+                'purchase' => $purchasePriceAfn,
+                'sale' => $salePriceAfn,
+            ] as $type => $amount
+        ) {
+            ProductPrice::query()->updateOrCreate(
+                [
+                    'product_id' => $product->id,
+                    'variant_id' => $variant->id,
+                    'price_type' => $type,
+                    'currency_id' => $afn->id,
+                    'min_qty' => 0,
+                ],
+                [
+                    'currency_code' => 'AFN',
+                    'amount' => Money::round((string) $amount, 4),
+                    'is_active' => true,
+                ]
+            );
+        }
+    }
+
+    private function syncSupplierInvoice(
+        int $supplierId,
+        ProductBatch $batch,
+        float $totalAfn,
+        float $exchangeRate,
+        int $actorId,
+    ): void {
+        $invoiceNo = mb_substr($batch->invoice_number ?: ('B-'.$batch->id), 0, 50);
+        $date = optional($batch->purchase_date)->toDateString() ?: now()->toDateString();
+        $existing = SupplierInvoice::query()
+            ->where('supplier_id', $supplierId)
+            ->where('invoice_no', $invoiceNo)
+            ->whereDate('purchase_date', $date)
+            ->first();
+        $paid = min($totalAfn, round((float) ($existing->paid_afn ?? 0), 2));
+
+        SupplierInvoice::query()->updateOrCreate(
+            [
+                'supplier_id' => $supplierId,
+                'invoice_no' => $invoiceNo,
+                'purchase_date' => $date,
+            ],
+            [
+                'exchange_rate' => round($exchangeRate, 2),
+                'total_afn' => round($totalAfn, 2),
+                'paid_afn' => $paid,
+                'due_afn' => round(max(0, $totalAfn - $paid), 2),
+                'notes' => $batch->notes,
+                'bill_image' => $existing->bill_image ?? $batch->bill_image,
+                'created_by' => $existing->created_by ?? $actorId,
+            ]
+        );
     }
 
     private function recordPriceDropLoss(
@@ -510,38 +468,29 @@ class PurchaseService
         );
     }
 
-    private function applyPaidNow(Product $purchase, float $paidNow, int $userId): void
-    {
-        if ($paidNow <= 0 || ! $purchase->supplier_id) {
+    private function applyPaidNow(
+        ProductBatch $batch,
+        ?int $supplierId,
+        float $paidNow,
+        float $exchangeRate,
+        int $userId,
+    ): void {
+        if ($paidNow <= 0 || ! $supplierId) {
             return;
         }
 
-        $invoiceNo = mb_substr($purchase->invoice_number ?: ('P-'.$purchase->id), 0, 50);
-        $invoice = \App\Models\SupplierInvoice::query()
-            ->where('supplier_id', $purchase->supplier_id)
+        $invoiceNo = mb_substr($batch->invoice_number ?: ('B-'.$batch->id), 0, 50);
+        $invoice = SupplierInvoice::query()
+            ->where('supplier_id', $supplierId)
             ->where('invoice_no', $invoiceNo)
             ->first();
 
         $invoice?->takePayment(
             $paidNow,
-            optional($purchase->purchase_date)->toDateString() ?: now()->toDateString(),
-            (float) ($purchase->exchange_rate ?? 0),
+            optional($batch->purchase_date)->toDateString() ?: now()->toDateString(),
+            $exchangeRate,
             'Paid on purchase',
             $userId,
         );
-    }
-
-    private function refreshVariantStock(Product $product): void
-    {
-        $product->variants()->get()->each(function (ProductVariant $variant) {
-            $totalStock = ProductBatch::query()
-                ->where('variant_id', $variant->id)
-                ->where('trash', false)
-                ->sum('remaining_quantity');
-
-            $variant->update([
-                'stock_quantity' => (int) $totalStock,
-            ]);
-        });
     }
 }

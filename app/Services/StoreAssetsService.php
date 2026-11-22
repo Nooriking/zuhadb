@@ -26,7 +26,8 @@ class StoreAssetsService
             ->where('remaining_quantity', '>', 0)
             ->when($branchId, fn ($q) => $q->where('branch_id', $branchId))
             ->with([
-                'variant:id,product_id,volume_ml,concentration,sale_price_afn',
+                'variant:id,product_id,volume_ml,concentration',
+                'variant.prices' => fn ($q) => $q->where('is_active', true),
                 'variant.product:id,name,brand_id',
                 'variant.product.brand:id,name',
             ])

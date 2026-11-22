@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Branch;
+use App\Models\Currency;
 use App\Models\Customer;
 use App\Models\Expense;
 use App\Models\Inventory;
@@ -14,6 +15,8 @@ use App\Models\SaleItem;
 use App\Models\SaleReturn;
 use App\Models\SaleReturnItem;
 use App\Services\CustomerLedgerService;
+use App\Services\ExchangeService;
+use App\Support\Money;
 use App\Support\OriginalCurrencyMoney;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -278,54 +281,78 @@ class SaleReturnController extends Controller
 
         $saleReturn = DB::transaction(function () use ($validated) {
             $sale = Sale::with('customer')->findOrFail($validated['sale_id']);
+            $exchange = app(ExchangeService::class);
+
+            $currencyCode = strtoupper((string) ($sale->sale_currency_code ?: 'AFN'));
+            $currency = Currency::query()->notTrashed()->where('code', $currencyCode)->first()
+                ?? Currency::ledger();
+            $snap = $exchange->snapshot($currencyCode, 'AFN');
+            $rate = (float) $snap['rate'];
 
             $customer       = $sale->customer;
             $previousDueAfn = $customer ? (float) $customer->current_due_afn : 0;
 
             $saleReturn = SaleReturn::create([
-                'sale_id'           => $sale->id,
-                'branch_id'         => $sale->branch_id,
-                'customer_id'       => $sale->customer_id,
-                'return_number'     => SaleReturn::generateReturnNumber(),
-                'subtotal_afn'      => 0,
-                'total_afn'         => 0,
-                'previous_due_afn'  => $previousDueAfn,
-                'new_due_afn'       => $previousDueAfn,
-                'refund_amount_afn' => 0,
-                'refund_method'     => null,
-                'reason'            => $validated['reason'] ?? null,
-                'return_date'       => $validated['return_date'],
-                'status'            => SaleReturn::STATUS_DRAFT,
-                'created_by'        => Auth::id(),
+                'sale_id'                 => $sale->id,
+                'branch_id'               => $sale->branch_id,
+                'customer_id'             => $sale->customer_id,
+                'return_number'           => SaleReturn::generateReturnNumber(),
+                'return_currency_id'      => $currency?->id,
+                'return_currency_code'    => $currencyCode,
+                'return_currency_symbol'  => $currency?->symbol ?? $sale->sale_currency_symbol,
+                'return_amount_currency'  => 0,
+                'exchange_rate_to_afn'    => Money::round((string) $snap['rate'], 8),
+                'rate_effective_at'       => $snap['effective_at'],
+                'rate_source'             => $snap['source'],
+                'subtotal_afn'            => 0,
+                'total_afn'               => 0,
+                'previous_due_afn'        => $previousDueAfn,
+                'new_due_afn'             => $previousDueAfn,
+                'refund_amount_afn'       => 0,
+                'refund_method'           => null,
+                'reason'                  => $validated['reason'] ?? null,
+                'return_date'             => $validated['return_date'],
+                'status'                  => SaleReturn::STATUS_DRAFT,
+                'created_by'              => Auth::id(),
             ]);
 
             foreach ($validated['items'] as $itemData) {
                 $saleItem = SaleItem::findOrFail($itemData['sale_item_id']);
 
-                $qty       = (int) $itemData['quantity'];
-                $unitPrice = (float) $saleItem->sale_price_afn;
-                $lineTotal = $qty * $unitPrice;
+                $qty = (int) $itemData['quantity'];
+                $unitPriceCurrency = $rate > 0
+                    ? round((float) $saleItem->sale_price_afn / $rate, 4)
+                    : (float) $saleItem->sale_price_afn;
+                $totalCurrency = round($unitPriceCurrency * $qty, 2);
+                $unitPriceAfn = (float) Money::round(Money::mul((string) $unitPriceCurrency, (string) $snap['rate'], 12), 2);
+                $lineTotalAfn = (float) Money::round(Money::mul((string) $totalCurrency, (string) $snap['rate'], 12), 2);
 
-                SaleReturnItem::create([
-                    'sale_return_id'     => $saleReturn->id,
-                    'sale_item_id'       => $saleItem->id,
-                    'batch_id'           => $saleItem->batch_id,
-                    'variant_id'         => $saleItem->variant_id,
-                    'quantity'           => $qty,
-                    'unit_price_afn'     => $unitPrice,
-                    'total_afn'          => $lineTotal,
-                    'condition'          => $itemData['condition'],
-                    'reason'             => $itemData['reason'] ?? null,
-                    'expense_amount_afn' => round((float) ($itemData['expense_amount_afn'] ?? 0), 2),
-                    'expense_bearer'     => $itemData['expense_bearer'],
+                $returnItem = new SaleReturnItem([
+                    'sale_return_id'         => $saleReturn->id,
+                    'sale_item_id'           => $saleItem->id,
+                    'batch_id'               => $saleItem->batch_id,
+                    'variant_id'             => $saleItem->variant_id,
+                    'quantity'               => $qty,
+                    'return_currency_code'   => $currencyCode,
+                    'unit_price_currency'    => $unitPriceCurrency,
+                    'total_currency'         => $totalCurrency,
+                    'unit_price_afn'         => $unitPriceAfn,
+                    'total_afn'              => $lineTotalAfn,
+                    'exchange_rate_to_afn'   => Money::round((string) $snap['rate'], 8),
+                    'condition'              => $itemData['condition'],
+                    'reason'                 => $itemData['reason'] ?? null,
+                    'expense_amount_afn'     => round((float) ($itemData['expense_amount_afn'] ?? 0), 2),
+                    'expense_bearer'         => $itemData['expense_bearer'],
                 ]);
+                $returnItem->calculateFromOriginalSaleItem();
+                $returnItem->save();
             }
 
             $saleReturn = $saleReturn->fresh('items');
             $this->applyReturnTotals($saleReturn);
 
             if ($validated['status'] === SaleReturn::STATUS_COMPLETED) {
-                $this->finalizeReturn($saleReturn->fresh(['items', 'customer']));
+                $this->finalizeReturn($saleReturn->fresh(['items', 'customer', 'sale']));
             } elseif ($validated['status'] === SaleReturn::STATUS_CANCELLED) {
                 $saleReturn->update(['status' => SaleReturn::STATUS_CANCELLED]);
             }
@@ -460,17 +487,29 @@ class SaleReturnController extends Controller
 
             foreach ($validated['items'] as $itemData) {
                 $item = $saleReturn->items()->findOrFail($itemData['id']);
-                $unitPrice = (float) $item->unit_price_afn;
-                $lineTotal = $itemData['quantity'] * $unitPrice;
+                $qty = (int) $itemData['quantity'];
+                $rate = (float) ($item->exchange_rate_to_afn ?: $saleReturn->exchange_rate_to_afn ?: 1);
+                $unitPriceCurrency = $item->unit_price_currency !== null
+                    ? (float) $item->unit_price_currency
+                    : ($rate > 0 ? round((float) $item->unit_price_afn / $rate, 4) : (float) $item->unit_price_afn);
+                $totalCurrency = round($unitPriceCurrency * $qty, 2);
+                $unitPriceAfn = round($unitPriceCurrency * $rate, 2);
+                $lineTotalAfn = round($totalCurrency * $rate, 2);
 
-                $item->update([
-                    'quantity'           => $itemData['quantity'],
-                    'total_afn'          => $lineTotal,
-                    'condition'          => $itemData['condition'],
-                    'reason'             => $itemData['reason'] ?? null,
-                    'expense_amount_afn' => round((float) ($itemData['expense_amount_afn'] ?? 0), 2),
-                    'expense_bearer'     => $itemData['expense_bearer'],
+                $item->fill([
+                    'quantity'             => $qty,
+                    'unit_price_currency'  => $unitPriceCurrency,
+                    'total_currency'       => $totalCurrency,
+                    'unit_price_afn'       => $unitPriceAfn,
+                    'total_afn'            => $lineTotalAfn,
+                    'exchange_rate_to_afn' => $rate,
+                    'condition'            => $itemData['condition'],
+                    'reason'               => $itemData['reason'] ?? null,
+                    'expense_amount_afn'   => round((float) ($itemData['expense_amount_afn'] ?? 0), 2),
+                    'expense_bearer'       => $itemData['expense_bearer'],
                 ]);
+                $item->calculateFromOriginalSaleItem();
+                $item->save();
             }
 
             $saleReturn = $saleReturn->fresh('items');
@@ -567,13 +606,18 @@ class SaleReturnController extends Controller
                 $customer = $saleReturn->customer_id ? Customer::find($saleReturn->customer_id) : null;
                 if ($customer) {
                     $newDue = round((float) $customer->current_due_afn + $delta, 2);
-                    $customer->update(['current_due_afn' => $newDue]);
+                    $rate = (float) ($saleReturn->exchange_rate_to_afn ?: 1);
+                    $currencyCode = strtoupper((string) ($saleReturn->return_currency_code ?: 'AFN'));
+                    $deltaCurrency = $rate > 0 ? round($delta / $rate, 2) : $delta;
 
                     app(CustomerLedgerService::class)->recordAdjustment(
-                        $customer->fresh(),
+                        $customer,
                         $delta,
                         $newDue,
-                        "Used item on return {$saleReturn->return_number}"
+                        "Used item on return {$saleReturn->return_number}",
+                        $currencyCode,
+                        $deltaCurrency,
+                        $rate
                     );
                 }
             }
@@ -633,17 +677,19 @@ class SaleReturnController extends Controller
     private function applyReturnTotals(SaleReturn $saleReturn): void
     {
         $credit = round((float) $saleReturn->items->sum(fn (SaleReturnItem $item) => $item->customerCreditAmount()), 2);
+        $returnAmountCurrency = round((float) $saleReturn->items->sum(fn (SaleReturnItem $item) => (float) ($item->total_currency ?? 0)), 2);
         $previousDue = (float) $saleReturn->previous_due_afn;
 
         $newDue = max(0, $previousDue - $credit);
         $refund = max(0, $credit - $previousDue);
 
         $saleReturn->update([
-            'subtotal_afn'      => $credit,
-            'total_afn'         => $credit,
-            'new_due_afn'       => round($newDue, 2),
-            'refund_amount_afn' => round($refund, 2),
-            'refund_method'     => $refund > 0 ? ($saleReturn->refund_method ?: 'cash') : null,
+            'subtotal_afn'           => $credit,
+            'total_afn'              => $credit,
+            'return_amount_currency' => $returnAmountCurrency,
+            'new_due_afn'            => round($newDue, 2),
+            'refund_amount_afn'      => round($refund, 2),
+            'refund_method'          => $refund > 0 ? ($saleReturn->refund_method ?: 'cash') : null,
         ]);
     }
 
@@ -673,6 +719,8 @@ class SaleReturnController extends Controller
             $restockParts = $this->resolveRestockParts($item, $saleItem);
 
             if ($item->shouldReturnToStock()) {
+                $lineCogsFromParts = 0.0;
+
                 foreach ($restockParts as $part) {
                     $batch = ProductBatch::query()->lockForUpdate()->find($part['batch_id']);
                     if (! $batch) {
@@ -702,11 +750,17 @@ class SaleReturnController extends Controller
 
                     $allocation?->recordReturn($qty);
 
-                    $reversedCogs = round(
-                        $reversedCogs + ((float) ($part['cost_per_unit_afn'] ?? $batch->unit_cost_afn) * $qty),
+                    $lineCogsFromParts = round(
+                        $lineCogsFromParts + ((float) ($part['cost_per_unit_afn'] ?? $batch->unit_cost_afn) * $qty),
                         2
                     );
                 }
+
+                // Prefer snapshotted original-sale COGS reversal over live/part recomputation.
+                $lineCogs = (float) ($item->cogs_reversal_afn ?? 0) > 0
+                    ? (float) $item->cogs_reversal_afn
+                    : $lineCogsFromParts;
+                $reversedCogs = round($reversedCogs + $lineCogs, 2);
             }
 
             if ($saleItem) {
@@ -718,14 +772,12 @@ class SaleReturnController extends Controller
         }
 
         $customer = $saleReturn->customer_id ? Customer::find($saleReturn->customer_id) : null;
+        $sale = $saleReturn->sale_id ? Sale::find($saleReturn->sale_id) : null;
 
         if ($customer) {
             app(CustomerLedgerService::class)->recordReturn($saleReturn);
-            $customer->update([
-                'current_due_afn' => $saleReturn->new_due_afn,
-            ]);
+            $customer->refresh();
 
-            $sale = $saleReturn->sale_id ? Sale::find($saleReturn->sale_id) : null;
             if ($sale) {
                 $sale->update([
                     'remaining_due_afn' => $customer->current_due_afn,
@@ -1025,6 +1077,8 @@ class SaleReturnController extends Controller
                 'already_returned' => $alreadyReturned,
                 'max_returnable' => $maxReturnable,
                 'sale_price_afn' => (float) $item->sale_price_afn,
+                'sale_unit_amount' => null,
+                'sale_currency_code' => $sale->sale_currency_code,
             ];
         }
 

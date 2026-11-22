@@ -5,8 +5,8 @@ namespace App\Services;
 use App\Models\Currency;
 use App\Models\Customer;
 use App\Models\Inventory;
-use App\Models\InvestmentProductAllocation;
-use App\Models\InvestorProfitEntry;
+use App\Models\Investor;
+use App\Models\InvestorTransaction;
 use App\Models\ProductBatch;
 use App\Models\ProductVariant;
 use App\Models\Receipt;
@@ -17,7 +17,6 @@ use App\Models\User;
 use App\Support\FxBoard;
 use App\Support\Money;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class SaleService
@@ -26,6 +25,8 @@ class SaleService
         private readonly CustomerLedgerService $ledger,
         private readonly SaleNotifier $notifier,
         private readonly CurrencyService $currency,
+        private readonly ExchangeService $exchange,
+        private readonly PriceResolver $priceResolver,
     ) {}
 
     /**
@@ -69,18 +70,16 @@ class SaleService
                     'sale_currency_id' => 'Ledger currency (AFN) is required.',
                 ]));
 
-            $rateOverrides = [];
-            if (! empty($data['usd_to_afn_rate']) && (float) $data['usd_to_afn_rate'] > 0) {
-                $rateOverrides['usd_to_afn'] = (string) $data['usd_to_afn_rate'];
-            }
-            if (! empty($data['aed_to_afn_rate']) && (float) $data['aed_to_afn_rate'] > 0) {
-                $rateOverrides['aed_to_afn'] = (string) $data['aed_to_afn_rate'];
-            }
-            if ($rateOverrides !== []) {
-                $rateOverrides['source'] = (string) ($data['rate_source'] ?? 'transaction');
+            $saleCurrencyCode = strtoupper((string) $saleCurrency->code);
+            if (! in_array($saleCurrencyCode, ['AFN', 'USD', 'AED'], true)) {
+                throw ValidationException::withMessages([
+                    'sale_currency_id' => "Unsupported sale currency: {$saleCurrencyCode}",
+                ]);
             }
 
-            $board = $this->currency->boardAt($data['sale_date'], $rateOverrides, allowCatalogFallback: true);
+            // Central Exchange Board (exchange_rates) only — never invent a silent 1:1.
+            $rateOverrides = $this->resolveSaleBoardOverrides($data);
+            $board = $this->currency->boardAt($data['sale_date'], $rateOverrides, allowCatalogFallback: false);
 
             unset(
                 $data['sale_currency_id'],
@@ -119,18 +118,11 @@ class SaleService
                 ->unique()
                 ->values();
             $batchesById = ProductBatch::query()
+                ->with('investment:id,investor_id,currency_id,exchange_rate')
                 ->whereIn('id', $batchIds)
                 ->lockForUpdate()
                 ->get()
                 ->keyBy('id');
-            $allocationsByBatch = InvestmentProductAllocation::query()
-                ->whereIn('batch_id', $batchIds)
-                ->where('status', 'active')
-                ->where('remaining_quantity', '>', 0)
-                ->orderBy('id')
-                ->lockForUpdate()
-                ->get()
-                ->groupBy('batch_id');
 
             $this->assertInvestorProfitFitsGross($lineData, $batchesById);
 
@@ -202,81 +194,26 @@ class SaleService
                     $partGross = (float) ($part['gross_profit_afn'] ?? 0);
                     $partInvestor = 0.0;
 
-                    if ($batch->investor_id && (float) $batch->profit_per_unit_afn > 0) {
+                    $investorId = $batch->investment_id
+                        ? (int) ($batch->investment?->investor_id ?? 0)
+                        : 0;
+
+                    if ($investorId && (float) $batch->profit_per_unit_afn > 0) {
                         $partInvestor = (float) Money::round(
                             Money::mul((string) $batch->profit_per_unit_afn, (string) $take, 8),
                             2
                         );
-                        $left = $take;
-                        $batchAllocations = $allocationsByBatch->get($batch->id) ?? collect();
 
-                        foreach ($batchAllocations as $allocation) {
-                            if ($left <= 0) {
-                                break;
-                            }
-                            if ($allocation->status !== 'active' || (int) $allocation->remaining_quantity <= 0) {
-                                continue;
-                            }
-
-                            $allocTake = min($left, (int) $allocation->remaining_quantity);
-                            if ($allocTake <= 0) {
-                                continue;
-                            }
-
-                            $profitOriginal = Schema::hasColumn('product_batches', 'profit_per_unit_currency')
-                                ? (float) ($batch->profit_per_unit_currency ?? $batch->profit_per_unit_afn)
-                                : (float) $batch->profit_per_unit_afn;
-                            $profitFx = $profitOriginal > 0
-                                ? (float) Money::round(
-                                    Money::div((string) $batch->profit_per_unit_afn, (string) $profitOriginal, 12),
-                                    8
-                                )
-                                : null;
-
-                            InvestorProfitEntry::recordProfit(
-                                investorId: (int) $batch->investor_id,
-                                investmentId: $allocation->investment_id,
-                                productAllocationId: $allocation->id,
-                                saleId: $sale->id,
-                                saleItemId: $saleItem->id,
-                                quantity: $allocTake,
-                                profitPerUnitAfn: (float) $batch->profit_per_unit_afn,
-                                profitPerUnitCurrency: $profitOriginal,
-                                currencyId: $batch->profit_currency_id ?? null,
-                                exchangeRate: $profitFx,
-                                notes: "Profit from batch {$batch->batch_code}"
-                            );
-
-                            $allocation->recordSale($allocTake);
-                            $left -= $allocTake;
-                        }
-
-                        // Investor-owned batch with no allocation row: still record profit against investor.
-                        if ($left > 0) {
-                            $profitOriginal = Schema::hasColumn('product_batches', 'profit_per_unit_currency')
-                                ? (float) ($batch->profit_per_unit_currency ?? $batch->profit_per_unit_afn)
-                                : (float) $batch->profit_per_unit_afn;
-                            $profitFx = $profitOriginal > 0
-                                ? (float) Money::round(
-                                    Money::div((string) $batch->profit_per_unit_afn, (string) $profitOriginal, 12),
-                                    8
-                                )
-                                : null;
-
-                            InvestorProfitEntry::recordProfit(
-                                investorId: (int) $batch->investor_id,
-                                investmentId: null,
-                                productAllocationId: null,
-                                saleId: $sale->id,
-                                saleItemId: $saleItem->id,
-                                quantity: $left,
-                                profitPerUnitAfn: (float) $batch->profit_per_unit_afn,
-                                profitPerUnitCurrency: $profitOriginal,
-                                currencyId: $batch->profit_currency_id ?? null,
-                                exchangeRate: $profitFx,
-                                notes: "Profit from batch {$batch->batch_code}"
-                            );
-                        }
+                        $this->recordInvestorProfit(
+                            investorId: $investorId,
+                            investmentId: $batch->investment_id ? (int) $batch->investment_id : null,
+                            sale: $sale,
+                            saleItem: $saleItem,
+                            quantity: $take,
+                            profitPerUnitAfn: (float) $batch->profit_per_unit_afn,
+                            profitAmountAfn: $partInvestor,
+                            batchCode: (string) $batch->batch_code,
+                        );
 
                         $investorProfitForLine = (float) Money::round(
                             Money::add((string) $investorProfitForLine, (string) $partInvestor, 8),
@@ -327,22 +264,24 @@ class SaleService
             $createdPayments = [];
 
             foreach ($payments as $payment) {
-                $resolved = $this->resolvePaymentMoney($payment);
-                $amountAfn = $resolved['amount_afn'];
-                if ($amountAfn <= 0) {
-                    continue;
-                }
-
-                $salePayment = SalePayment::create(array_merge($this->currency->ledgerSnapshot(), $resolved, [
+                $salePayment = SalePayment::createWithSnapshot([
                     'sale_id' => $sale->id,
                     'customer_id' => $sale->customer_id,
+                    'amount_currency' => $payment['amount'] ?? $payment['amount_afn'] ?? $payment['amount_currency'] ?? null,
+                    'currency_id' => $payment['currency_id'] ?? null,
                     'remaining_due_afn' => 0,
                     'payment_method' => $payment['payment_method'],
                     'reference_number' => $payment['reference_number'] ?? null,
                     'notes' => $payment['notes'] ?? null,
                     'paid_at' => now(),
                     'received_by' => $actor->id,
-                ]));
+                ]);
+
+                $amountAfn = (float) $salePayment->amount_afn;
+                if ($amountAfn <= 0) {
+                    $salePayment->delete();
+                    continue;
+                }
 
                 $createdPayments[] = $salePayment;
                 $paidAfn = round($paidAfn + $amountAfn, 2);
@@ -369,14 +308,8 @@ class SaleService
             ]);
 
             if ($customer) {
-                $this->ledger->recordSale($sale);
-
-                foreach ($createdPayments as $payment) {
-                    $this->ledger->recordPayment($payment);
-                }
-
+                // Cash-only POS: no customer ledger / balances tables.
                 $customer->update([
-                    'current_due_afn' => $remainingDueAfn,
                     'last_sale_at' => now(),
                 ]);
             }
@@ -414,12 +347,24 @@ class SaleService
     public function addPayment(Sale $sale, array $data, User $actor): Receipt
     {
         $receipt = DB::transaction(function () use ($data, $sale, $actor) {
-            $resolved = $this->resolvePaymentMoney($data);
-            $amountAfn = $resolved['amount_afn'];
-
             $customer = $sale->customer_id
                 ? Customer::whereKey($sale->customer_id)->lockForUpdate()->first()
                 : null;
+
+            $salePayment = SalePayment::createWithSnapshot([
+                'sale_id' => $sale->id,
+                'customer_id' => $sale->customer_id,
+                'amount_currency' => $data['amount'] ?? $data['amount_afn'] ?? $data['amount_currency'] ?? null,
+                'currency_id' => $data['currency_id'] ?? null,
+                'remaining_due_afn' => 0,
+                'payment_method' => $data['payment_method'],
+                'reference_number' => $data['reference_number'] ?? null,
+                'notes' => $data['notes'] ?? null,
+                'paid_at' => now(),
+                'received_by' => $actor->id,
+            ]);
+
+            $amountAfn = (float) $salePayment->amount_afn;
 
             $accountDue = $customer
                 ? round((float) $customer->current_due_afn, 2)
@@ -435,16 +380,7 @@ class SaleService
             $newSaleRemaining = round(max(0, (float) $sale->remaining_due_afn - $amountAfn), 2);
             $balanceAfter = $customer ? $newCustomerDue : $newSaleRemaining;
 
-            $salePayment = SalePayment::create(array_merge($this->currency->ledgerSnapshot(), $resolved, [
-                'sale_id' => $sale->id,
-                'customer_id' => $sale->customer_id,
-                'remaining_due_afn' => $balanceAfter,
-                'payment_method' => $data['payment_method'],
-                'reference_number' => $data['reference_number'] ?? null,
-                'notes' => $data['notes'] ?? null,
-                'paid_at' => now(),
-                'received_by' => $actor->id,
-            ]));
+            $salePayment->update(['remaining_due_afn' => $balanceAfter]);
 
             $newPaidAfn = round((float) $sale->paid_afn + $amountAfn, 2);
             $paymentStatus = $newSaleRemaining <= 0.01 ? 'paid' : 'partial';
@@ -456,29 +392,19 @@ class SaleService
                 'payment_status' => $paymentStatus,
             ]);
 
-            if ($customer) {
-                $this->ledger->recordPayment($salePayment);
-
-                $customer->update([
-                    'current_due_afn' => $newCustomerDue,
-                ]);
-
-                $latest = $customer->sales()->notTrashed()->latest('id')->first();
-                if ($latest && $latest->id !== $sale->id) {
-                    $latest->update([
-                        'remaining_due_afn' => $newCustomerDue,
-                        'due_afn' => $newCustomerDue,
-                        'payment_status' => $newCustomerDue <= 0.01 ? 'paid' : 'partial',
-                    ]);
-                }
-            }
+            // Cash-only POS: no customer ledger / balance recalculation.
 
             return Receipt::create([
                 'customer_id' => $sale->customer_id,
                 'sale_id' => $sale->id,
                 'sale_payment_id' => $salePayment->id,
                 'receipt_number' => Receipt::generateReceiptNumber(),
+                'currency_id' => $salePayment->currency_id,
+                'currency_code' => $salePayment->currency_code,
                 'amount_afn' => $amountAfn,
+                'amount_currency' => $salePayment->amount_currency ?? $amountAfn,
+                'exchange_rate_to_afn' => $salePayment->rate_to_ledger ?? 1,
+                'rate_effective_at' => $salePayment->rate_effective_at,
                 'remaining_due_afn' => $balanceAfter,
                 'receipt_type' => 'payment_receipt',
                 'created_by' => $actor->id,
@@ -559,7 +485,8 @@ class SaleService
                 $data['customer_id'] = $customer->id;
                 $data['customer_name_snapshot'] = $customer->name;
                 $data['customer_phone_snapshot'] = $customer->phone;
-                $previousDueAfn = (float) $customer->current_due_afn;
+                // Cash-only: no outstanding customer balances.
+                $previousDueAfn = 0.0;
             } else {
                 $data['customer_id'] = null;
                 $data['customer_name_snapshot'] = null;
@@ -607,23 +534,44 @@ class SaleService
         $variantId = (int) $item['variant_id'];
         $qty = (int) $item['quantity'];
         $saleCurrency = $saleCurrency ?? Currency::ledger();
-        $board = $board ?? $this->currency->boardAt(now(), [], allowCatalogFallback: true);
+        // Sales always use the Central Exchange Board — never catalog 1:1 fallback.
+        $board = $board ?? $this->currency->boardAt(
+            now(),
+            $this->resolveSaleBoardOverrides([]),
+            allowCatalogFallback: false,
+        );
         $code = strtoupper((string) ($saleCurrency?->code ?? 'AFN'));
-
-        if (isset($item['sale_unit_amount']) && $item['sale_unit_amount'] !== '' && $item['sale_unit_amount'] !== null) {
-            $unitOriginal = Money::round((string) $item['sale_unit_amount'], 4);
-        } elseif (isset($item['sale_price_afn']) && $item['sale_price_afn'] !== '' && $item['sale_price_afn'] !== null) {
-            // Legacy clients send AFN unit price; treat as AFN regardless of document currency.
-            $unitOriginal = Money::round((string) $item['sale_price_afn'], 4);
-            $code = 'AFN';
-        } else {
+        if (! in_array($code, ['AFN', 'USD', 'AED'], true)) {
             throw ValidationException::withMessages([
-                'sale_unit_amount' => 'Sale unit price is required.',
+                'sale_currency_id' => "Unsupported sale currency: {$code}",
             ]);
         }
 
-        $unitEq = $board->equivalents($unitOriginal, $code, 4);
-        $priceAfn = (float) Money::round($unitEq['afn'], 2);
+        $hasUnitAmount = isset($item['sale_unit_amount']) && $item['sale_unit_amount'] !== '' && $item['sale_unit_amount'] !== null;
+        $hasLegacyAfn = isset($item['sale_price_afn']) && $item['sale_price_afn'] !== '' && $item['sale_price_afn'] !== null;
+        $useCatalog = ! empty($item['use_catalog_price']) || (! $hasUnitAmount && ! $hasLegacyAfn);
+
+        if ($useCatalog) {
+            // Catalog unit amount from PriceResolver; AFN ledger always via transaction board.
+            $resolved = $this->priceResolver->resolveSaleLine([
+                'variant_id' => $variantId,
+                'quantity' => $qty,
+                'order_currency_code' => $code,
+            ], $board);
+            $unitOriginal = Money::round((string) $resolved['sale_unit_amount'], 4);
+            $priceAfn = (float) Money::round($board->equivalents($unitOriginal, $code, 4)['afn'], 2);
+            $lineOriginal = Money::round((string) $resolved['sale_line_amount'], 2);
+        } elseif ($hasUnitAmount) {
+            $unitOriginal = Money::round((string) $item['sale_unit_amount'], 4);
+            $priceAfn = (float) Money::round($board->equivalents($unitOriginal, $code, 4)['afn'], 2);
+            $lineOriginal = Money::round(Money::mul($unitOriginal, (string) $qty, 8), 2);
+        } else {
+            // Legacy clients send AFN unit price; treat as AFN regardless of document currency.
+            $unitOriginal = Money::round((string) $item['sale_price_afn'], 4);
+            $code = 'AFN';
+            $priceAfn = (float) Money::round($unitOriginal, 2);
+            $lineOriginal = Money::round(Money::mul($unitOriginal, (string) $qty, 8), 2);
+        }
 
         if (isset($item['discount_amount']) && $item['discount_amount'] !== '' && $item['discount_amount'] !== null) {
             $discOriginal = Money::round((string) $item['discount_amount'], 2);
@@ -634,9 +582,6 @@ class SaleService
 
         $lineSubtotalAfn = round($priceAfn * $qty, 2);
         $lineTotalAfn = round($lineSubtotalAfn - $discAfn, 2);
-        $lineOriginal = Money::round(Money::mul($unitOriginal, (string) $qty, 8), 2);
-        $lineEq = $board->equivalents($lineOriginal, $code, 2);
-
         $fifo = ProductBatch::calculateFifoCost($branchId, $variantId, $qty);
         $lineCostAfn = round((float) $fifo['cost_afn'], 2);
         $breakdown = $fifo['breakdown'];
@@ -695,13 +640,6 @@ class SaleService
             'product_name_snapshot' => $productName,
             'sku_snapshot' => $sku,
             'barcode_snapshot' => $barcode,
-            'sale_currency_code' => $code,
-            'sale_unit_amount' => $unitOriginal,
-            'sale_line_amount' => $lineOriginal,
-            'unit_amount_usd' => $unitEq['usd'],
-            'unit_amount_aed' => $unitEq['aed'],
-            'line_amount_usd' => $lineEq['usd'],
-            'line_amount_aed' => $lineEq['aed'],
             'quantity' => $qty,
             'cost_price_afn' => round($lineCostAfn / max($qty, 1), 2),
             'sale_price_afn' => $priceAfn,
@@ -726,6 +664,103 @@ class SaleService
     }
 
     /**
+     * Resolve USD/AED→AFN board overrides for a sale.
+     * Prefer authorized request overrides; otherwise require exchange_rates rows.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array{usd_to_afn: string, aed_to_afn: string, usd_to_aed?: string, source: string}
+     */
+    private function resolveSaleBoardOverrides(array $data): array
+    {
+        $rateOverrides = [];
+        if (! empty($data['usd_to_afn_rate']) && (float) $data['usd_to_afn_rate'] > 0) {
+            $rateOverrides['usd_to_afn'] = (string) $data['usd_to_afn_rate'];
+        }
+        if (! empty($data['aed_to_afn_rate']) && (float) $data['aed_to_afn_rate'] > 0) {
+            $rateOverrides['aed_to_afn'] = (string) $data['aed_to_afn_rate'];
+        }
+        if (! empty($data['usd_to_aed_rate']) && (float) $data['usd_to_aed_rate'] > 0) {
+            $rateOverrides['usd_to_aed'] = (string) $data['usd_to_aed_rate'];
+        }
+
+        if ($rateOverrides !== []) {
+            if (empty($rateOverrides['usd_to_afn']) || empty($rateOverrides['aed_to_afn'])) {
+                throw ValidationException::withMessages([
+                    'exchange_rate' => 'Both USD→AFN and AED→AFN rates are required when overriding the board.',
+                ]);
+            }
+
+            $rateOverrides['source'] = (string) ($data['rate_source'] ?? 'transaction');
+
+            return $rateOverrides;
+        }
+
+        try {
+            $current = $this->exchange->getCurrentRates();
+        } catch (ValidationException) {
+            throw ValidationException::withMessages([
+                'exchange_rate' => 'Central exchange rate board is unavailable. Please add USD/AED rates in Exchange Rates first.',
+            ]);
+        }
+
+        $usdToAfn = (float) ($current['usd_to_afn'] ?? 0);
+        $aedToAfn = (float) ($current['aed_to_afn'] ?? 0);
+
+        if ($usdToAfn <= 0 || $aedToAfn <= 0) {
+            throw ValidationException::withMessages([
+                'exchange_rate' => 'Central exchange rate board is unavailable. Please add USD/AED rates in Exchange Rates first.',
+            ]);
+        }
+
+        return [
+            'usd_to_afn' => (string) $current['usd_to_afn'],
+            'aed_to_afn' => (string) $current['aed_to_afn'],
+            'usd_to_aed' => (string) ($current['usd_to_aed'] ?? ''),
+            'source' => (string) ($current['source'] ?? 'exchange_rates'),
+        ];
+    }
+
+    private function recordInvestorProfit(
+        int $investorId,
+        ?int $investmentId,
+        Sale $sale,
+        SaleItem $saleItem,
+        int $quantity,
+        float $profitPerUnitAfn,
+        float $profitAmountAfn,
+        string $batchCode,
+    ): void {
+        if ($profitAmountAfn <= 0) {
+            return;
+        }
+
+        $investor = Investor::query()->find($investorId);
+        if (! $investor) {
+            return;
+        }
+
+        $wallet = $investor->getOrCreateWallet();
+        $wallet->adjustProfit('AFN', $profitAmountAfn, $profitAmountAfn, 1.0);
+
+        InvestorTransaction::record(
+            investorId: $investorId,
+            type: 'profit_earned',
+            amountAfn: $profitAmountAfn,
+            balanceType: 'profit',
+            options: [
+                'investment_id' => $investmentId,
+                'currency_code' => 'AFN',
+                'amount_currency' => $profitAmountAfn,
+                'exchange_rate' => 1,
+                'reference_type' => SaleItem::class,
+                'reference_id' => $saleItem->id,
+                'description' => "Profit from sale {$sale->invoice_number} · batch {$batchCode} · qty {$quantity} × {$profitPerUnitAfn} AFN",
+                'transaction_date' => optional($sale->sale_date)->toDateString() ?? now()->toDateString(),
+            ]
+        );
+    }
+
+    /**
      * Block sales where fixed investor profit per unit exceeds gross profit on any FIFO part.
      *
      * @param  list<array<string, mixed>>  $lineData
@@ -736,7 +771,7 @@ class SaleService
         foreach ($lineData as $lineIndex => $line) {
             foreach ($line['cost_breakdown'] ?? [] as $part) {
                 $batch = $batchesById->get($part['batch_id'] ?? null);
-                if (! $batch || ! $batch->investor_id) {
+                if (! $batch || ! $batch->investment_id) {
                     continue;
                 }
 
@@ -763,58 +798,4 @@ class SaleService
         }
     }
 
-    /**
-     * @param  array<string, mixed>  $payment
-     * @return array{
-     *     amount_afn: float,
-     *     amount_currency: float,
-     *     currency_id: int|null,
-     *     currency_code: string|null,
-     *     rate_to_ledger: string,
-     *     rate_kind: string
-     * }
-     */
-    private function resolvePaymentMoney(array $payment): array
-    {
-        $ledger = Currency::ledger();
-        $currencyId = $payment['currency_id'] ?? null;
-        $entered = $payment['amount'] ?? $payment['amount_afn'] ?? null;
-        $paidAt = $payment['paid_at'] ?? now();
-
-        if ($entered === null || $entered === '') {
-            throw ValidationException::withMessages([
-                'amount' => 'Payment amount is required.',
-            ]);
-        }
-
-        if (empty($currencyId) || ($ledger && (int) $currencyId === (int) $ledger->id)) {
-            $amount = round((float) $entered, 2);
-
-            return [
-                'amount_afn' => $amount,
-                'amount_currency' => $amount,
-                'currency_id' => $ledger?->id,
-                'currency_code' => $ledger?->code ?? (string) config('business.default_currency', 'AFN'),
-                'rate_to_ledger' => '1.00000000',
-                'rate_kind' => 'ledger',
-            ];
-        }
-
-        $currency = $this->currency->requireActive((int) $currencyId, 'currency_id');
-        $resolved = $this->currency->resolveAt($currency, $ledger ?? $currency, $paidAt);
-        $rate = (string) $resolved['rate'];
-        $afn = (float) \App\Support\Money::round(
-            \App\Support\Money::mul((string) $entered, $rate, 12),
-            2
-        );
-
-        return [
-            'amount_afn' => round($afn, 2),
-            'amount_currency' => round((float) $entered, 2),
-            'currency_id' => $currency->id,
-            'currency_code' => $currency->code,
-            'rate_to_ledger' => $rate,
-            'rate_kind' => $resolved['kind'] === 'catalog' ? 'catalog' : 'operational',
-        ];
-    }
 }

@@ -16,6 +16,9 @@ interface Receipt {
     receipt_number: string;
     receipt_type: 'sale_invoice' | 'payment_receipt';
     amount_afn: string;
+    amount_currency?: string | null;
+    currency_code?: string | null;
+    exchange_rate_to_afn?: string | null;
     remaining_due_afn: string;
     created_at: string;
     customer: { id: number; name: string; phone: string | null; current_due_afn: string } | null;
@@ -62,6 +65,11 @@ export default function ReceiptPrint({ receipt, company, printedAt }: Props) {
 
     const isInvoice = receipt.receipt_type === 'sale_invoice';
     const amount = parseFloat(receipt.amount_afn || '0');
+    const currencyCode = (receipt.currency_code || 'AFN').toUpperCase();
+    const amountCurrency = parseFloat(receipt.amount_currency || String(amount));
+    const showFx = currencyCode !== 'AFN';
+    const formatPaid = (afn: number) =>
+        showFx ? `${money(amountCurrency)} ${currencyCode} (${money(afn)} AFN)` : `${money(afn)} AFN`;
     const remaining = parseFloat(receipt.remaining_due_afn || '0');
     const saleTotal = parseFloat(receipt.sale?.total_afn || '0');
     const previousDue = isInvoice
@@ -135,7 +143,7 @@ export default function ReceiptPrint({ receipt, company, printedAt }: Props) {
                                 <dd>{money(parseFloat(receipt.sale?.grand_total_due_afn || '') || grand)} AFN</dd>
                             </div>
                         )}
-                        <div className={isInvoice ? '' : 'bill-grand'}><dt>{isInvoice ? 'Paid' : 'Paid now'}</dt><dd>{money(paid)} AFN</dd></div>
+                        <div className={isInvoice ? '' : 'bill-grand'}><dt>{isInvoice ? 'Paid' : 'Paid now'}</dt><dd>{formatPaid(paid)}</dd></div>
                         {!isInvoice && (
                             <div><dt>Method</dt><dd>{methodLabel(receipt.sale_payment?.payment_method)}</dd></div>
                         )}

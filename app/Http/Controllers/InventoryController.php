@@ -32,7 +32,8 @@ class InventoryController extends Controller
         $query = Inventory::query()
             ->with([
                 'branch:id,name,code',
-                'variant:id,product_id,name,volume_ml,concentration,minimum_stock,sale_price_afn',
+                'variant:id,product_id,name,volume_ml,concentration',
+                'variant.prices' => fn ($q) => $q->where('is_active', true),
                 'variant.product:id,name,brand_id',
                 'variant.product.brand:id,name',
             ])
@@ -46,10 +47,7 @@ class InventoryController extends Controller
 
         // Stock status filter
         if ($stockStatus === 'low') {
-            $query->whereHas('variant', function ($q) {
-                $q->whereColumn('inventories.quantity', '<=', 'product_variants.minimum_stock')
-                  ->where('inventories.quantity', '>', 0);
-            });
+            $query->lowStock();
         } elseif ($stockStatus === 'out') {
             $query->where('quantity', '<=', 0);
         } elseif ($stockStatus === 'in') {
@@ -60,6 +58,10 @@ class InventoryController extends Controller
             ->orderByDesc('quantity')
             ->paginate(20)
             ->withQueryString();
+
+        $inventories->getCollection()->each(
+            fn ($inv) => $inv->variant?->append('sale_price_afn')
+        );
 
         $stockTotals = Inventory::notTrashed()
             ->when($user?->isBranchScoped(), fn ($q) => $q->where('branch_id', $user->branch_id))
@@ -83,7 +85,19 @@ class InventoryController extends Controller
                     ->when($branchId && ! $user?->isBranchScoped(), fn ($q) => $q->where('inventories.branch_id', $branchId))
                     ->join('product_variants', 'product_variants.id', '=', 'inventories.variant_id')
                     ->where('product_variants.trash', false)
-                    ->sum(DB::raw('inventories.quantity * product_variants.sale_price_afn')),
+                    ->sum(DB::raw(
+                        "inventories.quantity * COALESCE((
+                            SELECT pp.amount FROM product_prices pp
+                            WHERE pp.variant_id = product_variants.id
+                              AND pp.price_type = 'sale'
+                              AND pp.currency_code = 'AFN'
+                              AND pp.is_active = 1
+                              AND (pp.valid_from IS NULL OR pp.valid_from <= CURDATE())
+                              AND (pp.valid_to IS NULL OR pp.valid_to >= CURDATE())
+                            ORDER BY pp.min_qty ASC, pp.id DESC
+                            LIMIT 1
+                        ), 0)"
+                    )),
             ],
         ]);
     }
@@ -166,9 +180,7 @@ class InventoryController extends Controller
                 'variant.product.brand:id,name',
             ])
             ->notTrashed()
-            ->whereHas('variant', function ($q) {
-                $q->whereColumn('inventories.quantity', '<=', 'product_variants.minimum_stock');
-            })
+            ->lowStock()
             ->orderBy('quantity')
             ->paginate(20);
 

@@ -44,9 +44,9 @@ final class OriginalCurrencyMoney
     public static function label(string $code): string
     {
         return match (strtoupper($code)) {
-            'AFN' => 'AFN (افغانی)',
-            'USD' => 'USD (دالر)',
-            'AED' => 'AED (درهم)',
+            'AFN' => 'AFN (Afghani)',
+            'USD' => 'USD (Dollar)',
+            'AED' => 'AED (Dirham)',
             self::UNKNOWN => 'Unknown',
             default => strtoupper($code),
         };
@@ -55,9 +55,9 @@ final class OriginalCurrencyMoney
     public static function shortLabel(string $code): string
     {
         return match (strtoupper($code)) {
-            'AFN' => 'افغانی',
-            'USD' => 'دالر',
-            'AED' => 'درهم',
+            'AFN' => 'Afghani',
+            'USD' => 'Dollar',
+            'AED' => 'Dirham',
             self::UNKNOWN => 'Unknown',
             default => strtoupper($code),
         };
@@ -224,12 +224,23 @@ final class OriginalCurrencyMoney
             ];
         }
 
-        $meta = self::resolveCode($sale->sale_currency_code, $sale->sale_currency_symbol);
+        $meta = self::resolveCode(
+            $saleReturn->return_currency_code ?: $sale->sale_currency_code,
+            $saleReturn->return_currency_symbol ?: $sale->sale_currency_symbol
+        );
 
         if (! $meta['known']) {
             return [
                 ...$meta,
                 'amount' => null,
+                'ledger_afn' => $ledger,
+            ];
+        }
+
+        if ($saleReturn->return_amount_currency !== null && $saleReturn->return_amount_currency !== '') {
+            return [
+                ...$meta,
+                'amount' => round((float) $saleReturn->return_amount_currency, 2),
                 'ledger_afn' => $ledger,
             ];
         }

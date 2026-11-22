@@ -16,6 +16,7 @@ import {
     LayoutGrid,
     Package,
     Receipt,
+    RefreshCw,
     RotateCcw,
     Settings,
     ShoppingBag,
@@ -189,6 +190,12 @@ const financialNavItems: NavItem[] = [
         title: 'Currencies',
         url: '/currencies',
         icon: Coins,
+        module: 'currencies',
+    },
+    {
+        title: 'Exchange Rates',
+        url: '/exchange-rates',
+        icon: RefreshCw,
         module: 'currencies',
     },
     {

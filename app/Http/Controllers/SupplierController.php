@@ -11,6 +11,7 @@ use App\Models\Supplier;
 use App\Models\SupplierInvoice;
 use App\Models\SupplierPayment;
 use App\Models\SupplierPaymentAllocation;
+use App\Services\ExchangeService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -255,12 +256,13 @@ class SupplierController extends Controller
             'amount_afn' => ['required', 'numeric', 'min:0.01'],
             'invoice_id' => ['nullable', 'integer'],
             'payment_date' => ['required', 'date'],
-            'exchange_rate' => ['required', 'numeric', 'min:0.01'],
             'payment_method' => ['required', 'in:cash,bank,mobile,other'],
             'notes' => ['nullable', 'string', 'max:1000'],
         ]);
 
-        $payment = DB::transaction(function () use ($data, $supplier) {
+        $boardRate = round((float) app(ExchangeService::class)->getRate('USD', 'AFN'), 2);
+
+        $payment = DB::transaction(function () use ($data, $supplier, $boardRate) {
             $supplier = Supplier::query()->whereKey($supplier->id)->lockForUpdate()->firstOrFail();
             $account = $supplier->account();
             $amount = round((float) $data['amount_afn'], 2);
@@ -311,7 +313,7 @@ class SupplierController extends Controller
                 'amount_afn' => $amount,
                 'balance_after' => round(max(0, $account['balance'] - $amount), 2),
                 'payment_date' => $data['payment_date'],
-                'exchange_rate' => round((float) $data['exchange_rate'], 2),
+                'exchange_rate' => $boardRate,
                 'payment_method' => $data['payment_method'],
                 'notes' => trim(($data['notes'] ?? '').' '.collect($allocations)->map(fn ($row) => $row['invoice_no'].': '.$row['amount_afn'])->implode(' | ')),
                 'user_id' => Auth::id(),

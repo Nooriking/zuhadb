@@ -65,13 +65,44 @@ class UpdateProductRequest extends FormRequest
 
                 foreach ([
                     'volume_ml',
-                    'purchase_price_afn', 'purchase_price_usd',
-                    'sale_price_afn', 'wholesale_price_afn', 'wholesale_min_qty',
-                    'profit_per_unit', 'minimum_stock', 'stock_quantity',
+                    'purchase_price_afn', 'purchase_price_usd', 'purchase_amount',
+                    'sale_price_afn', 'sale_amount',
+                    'wholesale_price_afn', 'wholesale_amount', 'wholesale_min_qty',
+                    'profit_per_unit', 'stock_quantity',
+                    'catalog_currency_id',
+                    'purchase_currency_id', 'sale_currency_id', 'wholesale_currency_id',
                 ] as $f) {
                     if (isset($variant[$f]) && $variant[$f] === '') {
                         $payload['variants'][$i][$f] = null;
                     }
+                }
+
+                $postedCurrencies = array_values(array_unique(array_filter([
+                    $payload['variants'][$i]['purchase_currency_id'] ?? null,
+                    $payload['variants'][$i]['sale_currency_id'] ?? null,
+                    $payload['variants'][$i]['wholesale_currency_id'] ?? null,
+                ], fn ($id) => $id !== null && $id !== '')));
+
+                $catalogCurrencyId = $payload['variants'][$i]['catalog_currency_id'] ?? null;
+
+                if (! empty($catalogCurrencyId) && count($postedCurrencies) <= 1) {
+                    $payload['variants'][$i]['catalog_currency_id'] = (int) $catalogCurrencyId;
+                    $payload['variants'][$i]['purchase_currency_id'] = (int) $catalogCurrencyId;
+                    $payload['variants'][$i]['sale_currency_id'] = (int) $catalogCurrencyId;
+                    $payload['variants'][$i]['wholesale_currency_id'] = (int) $catalogCurrencyId;
+                } elseif (empty($catalogCurrencyId) && count($postedCurrencies) === 1) {
+                    $payload['variants'][$i]['catalog_currency_id'] = (int) $postedCurrencies[0];
+                    $payload['variants'][$i]['purchase_currency_id'] = (int) $postedCurrencies[0];
+                    $payload['variants'][$i]['sale_currency_id'] = (int) $postedCurrencies[0];
+                    $payload['variants'][$i]['wholesale_currency_id'] = (int) $postedCurrencies[0];
+                }
+
+                if (
+                    (! isset($payload['variants'][$i]['sale_price_afn']) || $payload['variants'][$i]['sale_price_afn'] === null)
+                    && isset($payload['variants'][$i]['sale_amount'])
+                    && $payload['variants'][$i]['sale_amount'] !== null
+                ) {
+                    $payload['variants'][$i]['sale_price_afn'] = $payload['variants'][$i]['sale_amount'];
                 }
 
                 if (! empty($variant['concentration'])) {
@@ -259,8 +290,15 @@ class UpdateProductRequest extends FormRequest
         ...$this->variantMoneyRules(),
         'variants.*.wholesale_min_qty'   => ['nullable', 'integer', 'min:0'],
         'variants.*.profit_per_unit'     => ['nullable', 'numeric', 'min:0'],
-        'variants.*.minimum_stock'       => ['nullable', 'integer', 'min:0'],
         'variants.*.stock_quantity'      => ['nullable', 'integer', 'min:0'],
+        'variants.*.prices'                         => ['nullable', 'array'],
+        'variants.*.prices.*.id'                     => ['nullable', 'integer'],
+        'variants.*.prices.*.currency_id'            => ['required_with:variants.*.prices', 'integer', 'exists:currencies,id'],
+        'variants.*.prices.*.price_type'             => ['required_with:variants.*.prices', Rule::in(['purchase', 'sale', 'wholesale'])],
+        'variants.*.prices.*.amount'                 => ['required_with:variants.*.prices', 'numeric', 'min:0'],
+        'variants.*.prices.*.min_qty'                => ['nullable', 'integer', 'min:0'],
+        'variants.*.prices.*.is_active'              => ['nullable', 'boolean'],
+        'variants.*.prices.*._delete'                => ['nullable', 'boolean'],
 
         /* ─────────────── Barcodes ─────────────── */
         'variants.*.barcodes'                => ['nullable', 'array'],
@@ -279,7 +317,7 @@ class UpdateProductRequest extends FormRequest
         'purchases.*.id'                  => [
             'nullable',
             'integer',
-            Rule::exists('products', 'id')->whereNotNull('variant_id'),
+            Rule::exists('products', 'id')->whereNotNull('purchase_date'),
         ],
 
         'purchases.*.variant_index'       => ['required', 'integer', 'min:0'],
@@ -298,7 +336,7 @@ class UpdateProductRequest extends FormRequest
         'purchases.*.line_profit'         => ['nullable', 'numeric', 'min:0'],
         'purchases.*.invoice_number'      => ['nullable', 'string', 'max:100'],
         'purchases.*.purchase_date'       => ['nullable', 'date'],
-        'purchases.*.exchange_rate'       => ['nullable', 'numeric', 'min:0.01'],
+        'purchases.*.exchange_rate'       => ['nullable', 'numeric', 'min:0'],
         'purchases.*.paid_now'            => ['nullable', 'numeric', 'min:0'],
         'purchases.*.payment_status'      => ['nullable', Rule::in(['paid', 'unpaid', 'partial', 'credit'])],
         'purchases.*.notes'               => ['nullable', 'string', 'max:5000'],
@@ -312,19 +350,8 @@ class UpdateProductRequest extends FormRequest
     public function withValidator($validator): void
     {
         $validator->after(function ($validator) {
-            foreach ($this->input('variants', []) as $index => $variant) {
-                $purchase = (float) ($variant['purchase_price_afn'] ?? 0);
-                $sale = (float) ($variant['sale_price_afn'] ?? 0);
-
-                if ($purchase < 0 || $sale < 0) {
-                    $validator->errors()->add("variants.{$index}.sale_price_afn", 'Prices cannot be negative.');
-                }
-
-                if ($sale < $purchase) {
-                    $validator->errors()->add("variants.{$index}.sale_price_afn", 'Sale price cannot be less than the purchase price.');
-                }
-            }
-
+            // Compare after currency conversion in validateProductMoneyAndUnits —
+            // never compare raw entered amounts across different currencies.
             $this->validateProductMoneyAndUnits($validator);
         });
     }

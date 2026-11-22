@@ -25,7 +25,8 @@ class ProductSearchController extends Controller
         $barcodeMatches = ProductBarcode::query()
             ->where('barcode', 'like', $this->like($q))
             ->with([
-                'variant:id,product_id,volume_ml,concentration,sale_price_afn,purchase_price_afn,wholesale_price_afn',
+                'variant:id,product_id,volume_ml,concentration',
+                'variant.prices' => fn ($q) => $q->where('is_active', true),
                 'variant.product:id,name,brand_id',
                 'variant.product.brand:id,name',
             ])
@@ -34,7 +35,7 @@ class ProductSearchController extends Controller
 
         /* ─── 2) Name Search ─── */
         $nameMatches = Product::query()
-            ->whereNull('variant_id')
+            ->whereNull('purchase_date')
             ->where('trash', false)
             ->where(function ($sub) use ($q) {
                 $sub->where('name', 'like', $this->like($q))
@@ -46,6 +47,7 @@ class ProductSearchController extends Controller
                     ->where('trash', false)
                     ->with([
                         'barcodes:id,variant_id,barcode,barcode_type,is_primary,current_stock',
+                        'prices' => fn ($q) => $q->where('is_active', true),
                     ]),
             ])
             ->limit(5)

@@ -353,6 +353,11 @@ class InvestmentController extends Controller
                 'last_transaction_at' => now(),
             ]);
 
+            $rate = (float) ($investment->exchange_rate ?: 1);
+            $code = strtoupper((string) ($investment->currency_code ?: 'AFN'));
+            $amountCurrency = $rate > 0 ? round((float) $amount / $rate, 2) : (float) $amount;
+            $wallet->adjustCapital($code, -1 * $amountCurrency, -1 * (float) $amount, $rate);
+
             $investment->refresh();
             $investment->refreshStatus();
         });

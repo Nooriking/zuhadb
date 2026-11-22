@@ -15,7 +15,8 @@ return [
     | Inventory
     |--------------------------------------------------------------------------
     */
-    'default_low_stock_threshold' => (int) env('BUSINESS_LOW_STOCK', 5),
+    // Keep in sync with App\Models\Inventory::LOW_STOCK_THRESHOLD and resources/js/lib/inventory.ts
+    'default_low_stock_threshold' => (int) env('BUSINESS_LOW_STOCK', 2),
 
     /*
     |--------------------------------------------------------------------------

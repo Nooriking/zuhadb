@@ -10,8 +10,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link, router } from '@inertiajs/react';
-import { ArrowLeft, Save, Tag } from 'lucide-react';
+import { Head, router } from '@inertiajs/react';
+import { Save, Tag } from 'lucide-react';
 import { useState } from 'react';
 
 interface Props {
@@ -32,7 +32,6 @@ export default function BrandsCreate({ errors: initialErrors }: Props) {
         description: '',
         status: 'active' as 'active' | 'inactive',
     });
-    const [logo, setLogo] = useState<File | null>(null);
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
     const [loading, setLoading] = useState(false);
 
@@ -41,12 +40,7 @@ export default function BrandsCreate({ errors: initialErrors }: Props) {
         setLoading(true);
         setErrors({});
 
-        const formData = new FormData();
-        Object.entries(form).forEach(([key, value]) => formData.append(key, value));
-        if (logo) formData.append('logo', logo);
-
-        router.post('/brands', formData, {
-            forceFormData: true,
+        router.post('/brands', form, {
             onSuccess: () => {
                 toast({ title: 'Success', description: `Brand "${form.name}" was created successfully.` });
                 setLoading(false);
@@ -131,36 +125,21 @@ export default function BrandsCreate({ errors: initialErrors }: Props) {
                                 {errors.description && <p className="text-destructive text-sm">{errors.description}</p>}
                             </div>
 
-                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                {/* Logo */}
-                                <div className="space-y-2">
-                                    <Label>Logo</Label>
-                                    <Input
-                                        type="file"
-                                        accept="image/*"
-                                        onChange={(e) => setLogo(e.target.files?.[0] || null)}
-                                        className={errors.logo ? 'border-destructive' : ''}
-                                    />
-                                    {errors.logo && <p className="text-destructive text-sm">{errors.logo}</p>}
-                                    <p className="text-muted-foreground text-xs">JPG, PNG, WEBP, SVG. Max 2MB.</p>
-                                </div>
-
-                                {/* Status */}
-                                <div className="space-y-2">
-                                    <Label>
-                                        Status <span className="text-destructive">*</span>
-                                    </Label>
-                                    <Select value={form.status} onValueChange={(v) => handleChange('status', v as 'active' | 'inactive')}>
-                                        <SelectTrigger className={errors.status ? 'border-destructive' : ''}>
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="active">Active</SelectItem>
-                                            <SelectItem value="inactive">Inactive</SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                    {errors.status && <p className="text-destructive text-sm">{errors.status}</p>}
-                                </div>
+                            {/* Status */}
+                            <div className="max-w-md space-y-2">
+                                <Label>
+                                    Status <span className="text-destructive">*</span>
+                                </Label>
+                                <Select value={form.status} onValueChange={(v) => handleChange('status', v as 'active' | 'inactive')}>
+                                    <SelectTrigger className={errors.status ? 'border-destructive' : ''}>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="active">Active</SelectItem>
+                                        <SelectItem value="inactive">Inactive</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                {errors.status && <p className="text-destructive text-sm">{errors.status}</p>}
                             </div>
 
                             {/* Submit */}

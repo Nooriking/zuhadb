@@ -18,8 +18,14 @@ class SaleReturnItem extends Model
         'batch_id',
         'variant_id',
         'quantity',
+        'return_currency_code',
+        'unit_price_currency',
+        'total_currency',
         'unit_price_afn',
         'total_afn',
+        'cost_price_afn',
+        'cogs_reversal_afn',
+        'exchange_rate_to_afn',
         'condition',
         'reason',
         'expense_id',
@@ -28,12 +34,17 @@ class SaleReturnItem extends Model
     ];
 
     protected $casts = [
-        'quantity'            => 'integer',
-        'unit_price_afn'      => 'decimal:2',
-        'total_afn'           => 'decimal:2',
-        'expense_amount_afn'  => 'decimal:2',
-        'created_at'     => 'datetime',
-        'updated_at'     => 'datetime',
+        'quantity'               => 'integer',
+        'unit_price_currency'    => 'decimal:4',
+        'total_currency'         => 'decimal:2',
+        'unit_price_afn'         => 'decimal:2',
+        'total_afn'              => 'decimal:2',
+        'cost_price_afn'         => 'decimal:2',
+        'cogs_reversal_afn'      => 'decimal:2',
+        'exchange_rate_to_afn'   => 'decimal:8',
+        'expense_amount_afn'     => 'decimal:2',
+        'created_at'             => 'datetime',
+        'updated_at'             => 'datetime',
     ];
 
     /* =========================================================
@@ -164,5 +175,20 @@ class SaleReturnItem extends Model
     public function shouldReturnToStock(): bool
     {
         return $this->isGood();
+    }
+
+    /**
+     * Reverse original sale COGS (unit cost × return qty) — not just sale revenue.
+     * Uses the snapshot cost on the original sale_item; never live batch rates.
+     */
+    public function calculateFromOriginalSaleItem(): void
+    {
+        $original = SaleItem::findOrFail($this->sale_item_id);
+        $this->cost_price_afn = $original->cost_price_afn;
+        $this->cogs_reversal_afn = bcmul(
+            (string) $original->cost_price_afn,
+            (string) $this->quantity,
+            2
+        );
     }
 }

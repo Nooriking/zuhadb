@@ -159,6 +159,38 @@ class Currency extends Model
     }
 
     /**
+     * AFN units equal to 1 unit of this currency (alias of rate_to_default).
+     */
+    public function getAfnRateAttribute(): float
+    {
+        return (float) ($this->rate_to_default ?? 0);
+    }
+
+    /**
+     * Convert an amount in this currency into AFN.
+     */
+    public function toAfn(float|string $amount): float
+    {
+        return round((float) $amount * $this->afn_rate, 4);
+    }
+
+    /**
+     * Convert an AFN amount into this currency.
+     */
+    public function fromAfn(float|string $amountAfn): float
+    {
+        $rate = $this->afn_rate;
+
+        if ($rate <= 0) {
+            throw new \InvalidArgumentException(
+                "Currency {$this->code} has no positive rate_to_default for AFN conversion."
+            );
+        }
+
+        return round((float) $amountAfn / $rate, 4);
+    }
+
+    /**
      * Currencies offered on money fields. Inactive rows are included only when
      * they are already attached to the record being edited.
      *

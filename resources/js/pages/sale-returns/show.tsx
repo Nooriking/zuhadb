@@ -21,6 +21,8 @@ interface ReturnItem {
     quantity: number;
     unit_price_afn: string;
     total_afn: string;
+    cost_price_afn?: string | number | null;
+    cogs_reversal_afn?: string | number | null;
     expense_amount_afn: string;
     expense_bearer: 'shop' | 'customer';
     condition: 'good' | 'damaged' | 'expired' | 'other' | 'used';
@@ -50,6 +52,9 @@ interface SaleReturn {
     refund_method: string | null;
     reason: string | null;
     status: 'draft' | 'completed' | 'cancelled';
+    exchange_rate_to_afn?: string | number | null;
+    rate_effective_at?: string | null;
+    rate_source?: string | null;
     currency_code?: string | null;
     currency_label?: string;
     currency_known?: boolean;
@@ -286,6 +291,20 @@ export default function SaleReturnsShow({ saleReturn, expenses = [] }: Props) {
                                 <span className="text-right text-xs">{saleReturn.branch?.name}</span>
                                 <span className="text-muted-foreground">Created By:</span>
                                 <span className="text-right text-xs">{saleReturn.creator?.name || 'System'}</span>
+                                {saleReturn.exchange_rate_to_afn != null && (
+                                    <>
+                                        <span className="text-muted-foreground">FX rate:</span>
+                                        <span className="text-right font-mono text-xs">{formatPrice(saleReturn.exchange_rate_to_afn, 4)}</span>
+                                    </>
+                                )}
+                                {(saleReturn.rate_source || saleReturn.rate_effective_at) && (
+                                    <>
+                                        <span className="text-muted-foreground">FX snapshot:</span>
+                                        <span className="text-right text-xs">
+                                            {[saleReturn.rate_source, saleReturn.rate_effective_at].filter(Boolean).join(' · ')}
+                                        </span>
+                                    </>
+                                )}
                             </div>
 
                             {saleReturn.reason && (
@@ -353,6 +372,7 @@ export default function SaleReturnsShow({ saleReturn, expenses = [] }: Props) {
                                         <TableHead className="text-center">Qty</TableHead>
                                         <TableHead className="text-right">Unit Price</TableHead>
                                         <TableHead className="text-right">Total</TableHead>
+                                        <TableHead className="text-right">COGS reversal</TableHead>
                                         <TableHead>Condition</TableHead>
                                         <TableHead className="text-right">Item expense</TableHead>
                                         <TableHead>Reason</TableHead>
@@ -383,6 +403,11 @@ export default function SaleReturnsShow({ saleReturn, expenses = [] }: Props) {
                                             <TableCell className="text-center font-mono font-semibold">{item.quantity}</TableCell>
                                             <TableCell className="text-right font-mono text-xs">{money(item.display_unit_price ?? item.unit_price_afn)}</TableCell>
                                             <TableCell className="text-right font-mono font-semibold">{money(item.display_total ?? item.total_afn)}</TableCell>
+                                            <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                                                {item.cogs_reversal_afn != null && Number(item.cogs_reversal_afn) > 0
+                                                    ? `${formatPrice(item.cogs_reversal_afn)} AFN`
+                                                    : '—'}
+                                            </TableCell>
                                             <TableCell>{getConditionBadge(item.condition)}</TableCell>
                                             <TableCell className="text-right">
                                                 {itemExpense(item) > 0 ? (
@@ -392,7 +417,7 @@ export default function SaleReturnsShow({ saleReturn, expenses = [] }: Props) {
                                                             variant="outline"
                                                             className={item.expense_bearer === 'shop' ? 'border-blue-300 text-blue-700' : 'border-orange-300 text-orange-700'}
                                                         >
-                                                            {item.expense_bearer === 'shop' ? 'Shop (دوکان)' : 'Customer (مشتری)'}
+                                                            {item.expense_bearer === 'shop' ? 'Shop' : 'Customer'}
                                                         </Badge>
                                                         {item.expense && (
                                                             <Link href={`/expenses/${item.expense.id}`} className="font-mono text-xs hover:underline">

@@ -20,7 +20,7 @@ class EnsureUserIsActive
 
             return redirect()
                 ->route('login')
-                ->withErrors(['email' => 'This account cannot sign in.']);
+                ->withErrors(['credentials' => 'This account cannot sign in.']);
         }
 
         return $next($request);

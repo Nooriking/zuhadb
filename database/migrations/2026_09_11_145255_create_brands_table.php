@@ -14,7 +14,6 @@ return new class extends Migration
             $table->string('name');
             $table->string('country')->nullable();
             $table->text('description')->nullable();
-            $table->string('logo')->nullable();
 
             $table->enum('status', ['active', 'inactive'])->default('active');
             $table->boolean('trash')->default(false);

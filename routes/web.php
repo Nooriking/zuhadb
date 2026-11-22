@@ -7,7 +7,6 @@ use App\Http\Controllers\BrandController;
 use App\Http\Controllers\CurrencyController;
 use App\Http\Controllers\BranchController;
 use App\Http\Controllers\CustomerController;
-use App\Http\Controllers\CustomerTransactionController;
 use App\Http\Controllers\AccountantDashboardController;
 use App\Http\Controllers\BranchDashboardController;
 use App\Http\Controllers\CashierDashboardController;
@@ -18,11 +17,8 @@ use App\Http\Controllers\StockDashboardController;
 use App\Http\Controllers\ExpenseController;
 use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\InvestmentController;
-use App\Http\Controllers\InvestmentProductAllocationController;
-use App\Http\Controllers\InvestmentPurchaseAllocationController;
 use App\Http\Controllers\InvestorController;
 use App\Http\Controllers\InvestorDashboardController;
-use App\Http\Controllers\InvestorProfitEntryController;
 use App\Http\Controllers\InvestorTransactionController;
 use App\Http\Controllers\InvestorWithdrawalController;
 use App\Http\Controllers\ProductBatchController;
@@ -222,6 +218,16 @@ Route::middleware(['auth', 'verified', 'lock.records'])->group(function () {
                 ->middleware('permission:currencies.create')->name('create');
             Route::post('/', [\App\Http\Controllers\ExchangeRateController::class, 'store'])
                 ->middleware('permission:currencies.create')->name('store');
+
+            Route::get('/history', [\App\Http\Controllers\ExchangeRateController::class, 'history'])
+                ->middleware('permission:currencies.view')->name('history');
+            Route::get('/trash', [\App\Http\Controllers\ExchangeRateController::class, 'trash'])
+                ->middleware('permission:currencies.view')->name('trash');
+            Route::post('/{id}/restore', [\App\Http\Controllers\ExchangeRateController::class, 'restore'])
+                ->middleware('permission:currencies.update')->whereNumber('id')->name('restore');
+            Route::delete('/{id}/force-delete', [\App\Http\Controllers\ExchangeRateController::class, 'forceDelete'])
+                ->middleware('permission:currencies.update')->whereNumber('id')->name('forceDelete');
+
             Route::get('/{exchangeRate}', [\App\Http\Controllers\ExchangeRateController::class, 'show'])
                 ->middleware('permission:currencies.view')->name('show');
             Route::get('/{exchangeRate}/edit', [\App\Http\Controllers\ExchangeRateController::class, 'edit'])
@@ -394,13 +400,6 @@ Route::middleware(['auth', 'verified', 'lock.records'])->group(function () {
         Route::delete('/{id}/force-delete', [CustomerController::class, 'forceDelete'])->whereNumber('id')->name('forceDelete');
         Route::patch('/{customer}/toggle-status', [CustomerController::class, 'toggleStatus'])->name('toggleStatus');
 
-        /* ⭐ Customer Ledger — Per Customer */
-        Route::get('/{customer}/transactions', [CustomerTransactionController::class, 'byCustomer'])
-            ->name('transactions');
-
-        Route::post('/{customer}/transactions/adjustment', [CustomerTransactionController::class, 'storeAdjustment'])
-            ->name('transactions.adjustment');
-
         Route::post('/{customer}/payments', [CustomerController::class, 'receivePayment'])
             ->middleware('permission:sales.create')
             ->name('payments.store');
@@ -413,17 +412,6 @@ Route::middleware(['auth', 'verified', 'lock.records'])->group(function () {
             ->middleware('permission:customers.update')->name('update');
         Route::delete('/{customer}', [CustomerController::class, 'destroy'])
             ->middleware('permission:customers.delete')->name('destroy');
-    });
-
-    /* ═══════════════════════════════════════════════════════
-     |  CUSTOMER TRANSACTIONS (Global Ledger)  ⭐
-     ═══════════════════════════════════════════════════════ */
-    Route::middleware(['role:admin,accountant,branch_manager,cashier,salesperson', 'module:customers'])
-        ->prefix('customer-transactions')->name('customer-transactions.')->group(function () {
-
-        Route::get('/', [CustomerTransactionController::class, 'index'])->name('index');
-        Route::get('/{transaction}', [CustomerTransactionController::class, 'show'])->name('show');
-        Route::delete('/{transaction}', [CustomerTransactionController::class, 'destroy'])->name('destroy');
     });
 
     /* ═══════════════════════════════════════════════════════
@@ -636,52 +624,14 @@ Route::get('/report', [SaleController::class, 'report'])->name('sales.report');
     });
 
     /* ═══════════════════════════════════════════════════════
-     |  INVESTMENT ALLOCATIONS
+     |  INVESTOR TRANSACTIONS (source of truth for profit/capital)
      ═══════════════════════════════════════════════════════ */
-    Route::middleware(['role:admin,accountant', 'module:investments'])
-        ->prefix('investment-purchase-allocations')->name('investment-purchase-allocations.')->group(function () {
-
-        Route::get('/', [InvestmentPurchaseAllocationController::class, 'index'])->name('index');
-        Route::get('/create', [InvestmentPurchaseAllocationController::class, 'create'])->name('create');
-        Route::post('/', [InvestmentPurchaseAllocationController::class, 'store'])->name('store');
-        Route::get('/{allocation}', [InvestmentPurchaseAllocationController::class, 'show'])->name('show');
-        Route::delete('/{allocation}', [InvestmentPurchaseAllocationController::class, 'destroy'])->name('destroy');
-    });
-
-    Route::middleware(['role:admin,accountant', 'module:investments'])
-        ->prefix('investment-product-allocations')->name('investment-product-allocations.')->group(function () {
-
-        Route::get('/', [InvestmentProductAllocationController::class, 'index'])->name('index');
-        Route::get('/create', [InvestmentProductAllocationController::class, 'create'])->name('create');
-        Route::post('/', [InvestmentProductAllocationController::class, 'store'])->name('store');
-        Route::get('/{allocation}', [InvestmentProductAllocationController::class, 'show'])->name('show');
-        Route::delete('/{allocation}', [InvestmentProductAllocationController::class, 'destroy'])->name('destroy');
-    });
-
-    /* ═══════════════════════════════════════════════════════
-     |  PROFIT ENTRIES & TRANSACTIONS
-     ═══════════════════════════════════════════════════════ */
-    Route::middleware(['role:admin,accountant,investor', 'module:investor-profit-entries'])
-        ->prefix('investor-profit-entries')->name('investor-profit-entries.')->group(function () {
-
-        Route::get('/', [InvestorProfitEntryController::class, 'index'])->name('index');
-        Route::get('/by-investor/{investor}', [InvestorProfitEntryController::class, 'byInvestor'])->name('byInvestor');
-        Route::get('/by-investment/{investment}', [InvestorProfitEntryController::class, 'byInvestment'])->name('byInvestment');
-        Route::get('/{entry}', [InvestorProfitEntryController::class, 'show'])->name('show');
-    });
-
     Route::middleware(['role:admin,accountant,investor', 'module:investor-transactions'])
         ->prefix('investor-transactions')->name('investor-transactions.')->group(function () {
 
         Route::get('/', [InvestorTransactionController::class, 'index'])->name('index');
         Route::get('/by-investor/{investor}', [InvestorTransactionController::class, 'byInvestor'])->name('byInvestor');
         Route::get('/{transaction}', [InvestorTransactionController::class, 'show'])->name('show');
-    });
-
-    Route::middleware('role:admin,accountant')->group(function () {
-        Route::post('investor-profit-entries/bulk-pay', [InvestorProfitEntryController::class, 'markBatchAsPaid'])->name('investor-profit-entries.bulkPay');
-        Route::patch('investor-profit-entries/{entry}/mark-as-paid', [InvestorProfitEntryController::class, 'markAsPaid'])->name('investor-profit-entries.markAsPaid');
-        Route::patch('investor-profit-entries/{entry}/cancel', [InvestorProfitEntryController::class, 'cancel'])->name('investor-profit-entries.cancel');
     });
 
     /* ═══════════════════════════════════════════════════════

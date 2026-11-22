@@ -28,10 +28,15 @@ class AuthenticatedSessionController extends Controller
         $sessionUntil = (int) $request->session()->get('login.lockout_until', 0);
         if ($sessionUntil > time()) {
             $lockoutSeconds = max($lockoutSeconds, $sessionUntil - time());
+        } else {
+            $request->session()->forget('login.lockout_until');
         }
 
+        // Stale browser cookie must not keep the form locked after DB lock expired.
         if ($lockoutSeconds > 0) {
             $lockouts->queueLockCookie($lockoutSeconds);
+        } else {
+            $lockouts->forgetLockCookie();
         }
 
         return Inertia::render('auth/login', [

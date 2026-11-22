@@ -16,7 +16,11 @@ class CustomerTransaction extends Model
     protected $fillable = [
         'customer_id',
         'type',
+        'currency_id',
+        'currency_code',
         'amount_afn',
+        'amount_currency',
+        'exchange_rate_to_afn',
         'balance_after',
         'reference_type',
         'reference_id',
@@ -25,10 +29,12 @@ class CustomerTransaction extends Model
     ];
 
     protected $casts = [
-        'amount_afn'    => 'decimal:2',
-        'balance_after' => 'decimal:2',
-        'created_at'    => 'datetime',
-        'updated_at'    => 'datetime',
+        'amount_afn'           => 'decimal:2',
+        'amount_currency'      => 'decimal:2',
+        'exchange_rate_to_afn' => 'decimal:8',
+        'balance_after'        => 'decimal:2',
+        'created_at'           => 'datetime',
+        'updated_at'           => 'datetime',
     ];
 
     /* =========================================================

@@ -19,13 +19,6 @@ class SaleItem extends Model
         'product_name_snapshot',
         'sku_snapshot',
         'barcode_snapshot',
-        'sale_currency_code',
-        'sale_unit_amount',
-        'sale_line_amount',
-        'unit_amount_usd',
-        'unit_amount_aed',
-        'line_amount_usd',
-        'line_amount_aed',
         'quantity',
         'cost_price_afn',
         'sale_price_afn',
@@ -39,12 +32,6 @@ class SaleItem extends Model
 
     protected $casts = [
         'quantity'             => 'integer',
-        'sale_unit_amount'     => 'decimal:4',
-        'sale_line_amount'     => 'decimal:2',
-        'unit_amount_usd'      => 'decimal:4',
-        'unit_amount_aed'      => 'decimal:4',
-        'line_amount_usd'      => 'decimal:2',
-        'line_amount_aed'      => 'decimal:2',
         'cost_price_afn'       => 'decimal:2',
         'sale_price_afn'       => 'decimal:2',
         'discount_afn'         => 'decimal:2',
@@ -79,6 +66,36 @@ class SaleItem extends Model
     /* =========================================================
      |  Helpers
      ========================================================= */
+
+    /**
+     * Calculate cost, gross profit and cost breakdown from the item's batch.
+     * Uses the batch's AFN unit cost (fixed at purchase time) so profit is
+     * not affected by later exchange-rate changes.
+     */
+    public function calculateFromBatch(): void
+    {
+        $batch = ProductBatch::findOrFail($this->batch_id);
+        $this->cost_price_afn = $batch->unit_cost_afn;
+
+        $quantity     = (string) $this->quantity;
+        $revenueAfn   = bcmul((string) $this->sale_price_afn, $quantity, 2);
+        $cogsAfn      = bcmul((string) $batch->unit_cost_afn, $quantity, 2);
+        $profitAfn    = bcsub($revenueAfn, $cogsAfn, 2);
+
+        $this->gross_profit_afn = $profitAfn;
+
+        // `cost_breakdown` is cast to array, so assign the array (not a JSON string)
+        // to avoid double-encoding.
+        $this->cost_breakdown = [
+            'batch_id'      => $batch->id,
+            'purchase_fx'   => $batch->usd_to_afn_rate,
+            'unit_cost_afn' => $batch->unit_cost_afn,
+            'sale_fx'       => $this->sale?->usd_to_afn_rate,
+            'revenue_afn'   => $revenueAfn,
+            'cogs_afn'      => $cogsAfn,
+            'profit_afn'    => $profitAfn,
+        ];
+    }
 
     public function getTotalProfitAfnAttribute(): float
     {

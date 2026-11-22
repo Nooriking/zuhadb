@@ -2,6 +2,7 @@
 
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { formatCatalogAmount } from '@/lib/inventory';
 import { cn } from '@/lib/utils';
 import { Link, router } from '@inertiajs/react';
 import { AlertTriangle, Barcode as BarcodeIcon, Boxes, Edit, Eye, Loader2, Package, Search, X } from 'lucide-react';
@@ -35,7 +36,7 @@ interface SearchResult {
  |  Helpers
  ═══════════════════════════════════════════════════════ */
 
-const formatPrice = (v: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(v || 0);
+const formatPrice = (v: number) => formatCatalogAmount(v, 'AFN');
 
 /* ═══════════════════════════════════════════════════════
  |  Component

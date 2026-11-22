@@ -19,7 +19,10 @@ use App\Models\SalePayment;
 use App\Models\SaleReturn;
 use App\Models\User;
 use App\Services\CurrencyService;
+use App\Services\ExchangeService;
+use App\Services\PriceResolver;
 use App\Services\SaleService;
+use App\Support\FxBoard;
 use App\Support\OriginalCurrencyMoney;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -37,6 +40,8 @@ class SaleController extends Controller
     public function __construct(
         private readonly SaleService $sales,
         private readonly CurrencyService $currency,
+        private readonly ExchangeService $exchange,
+        private readonly PriceResolver $priceResolver,
     ) {}
 
     /* =========================================================
@@ -285,12 +290,12 @@ class SaleController extends Controller
                 ->with([
                     'product:id,name,brand_id',
                     'product.brand:id,name',
+                    'prices' => fn ($q) => $q->where('is_active', true)->orderBy('currency_code')->orderBy('min_qty'),
+                    'prices.currency:id,code,symbol,name',
                 ])
-                ->select(
-                    'id', 'product_id', 'name', 'volume_ml', 'concentration',
-                    'sale_price_afn', 'wholesale_price_afn', 'wholesale_min_qty', 'purchase_price_afn'
-                )
-                ->get(),
+                ->select('id', 'product_id', 'name', 'volume_ml', 'concentration')
+                ->get()
+                ->map(fn (ProductVariant $variant) => $this->saleVariantPayload($variant)),
             'nextNumber' => Sale::generateInvoiceNumber(),
             'supplierCredits' => \App\Models\Product::supplierCredits(),
             'currencies' => Currency::formOptions(),
@@ -328,7 +333,7 @@ class SaleController extends Controller
             'creator:id,name,email',
             'items.variant.product:id,name',
             'items.variant.product.brand:id,name',
-            'items.batch:id,batch_code,investor_id',
+            'items.batch:id,batch_code,investment_id',
             'items.batch.investor:id,name',
             'payments.receiver:id,name',
             'payments.customer:id,name,phone',
@@ -441,6 +446,56 @@ class SaleController extends Controller
             'payments.customer:id,name,phone',
         ]);
 
+        // Historical receipt: use transaction snapshots only — never live Exchange Board rates.
+        $money = OriginalCurrencyMoney::forSale($sale);
+        $sale->setAttribute('sale_currency_known', $money['known']);
+        $sale->setAttribute('sale_currency_label', $money['label']);
+        $sale->setAttribute('display_total', $money['amount']);
+        $sale->setAttribute(
+            'display_subtotal',
+            OriginalCurrencyMoney::fromLedgerAfn((float) $sale->subtotal_afn, $money['code'], $sale)
+        );
+        $sale->setAttribute(
+            'display_discount',
+            OriginalCurrencyMoney::fromLedgerAfn((float) $sale->discount_afn, $money['code'], $sale)
+        );
+        $sale->setAttribute(
+            'display_paid',
+            OriginalCurrencyMoney::fromLedgerAfn((float) ($sale->received_now_afn ?: $sale->paid_afn), $money['code'], $sale)
+        );
+        $sale->setAttribute(
+            'display_remaining',
+            OriginalCurrencyMoney::fromLedgerAfn((float) ($sale->remaining_due_afn ?: $sale->due_afn), $money['code'], $sale)
+        );
+        $sale->setAttribute(
+            'display_previous_due',
+            OriginalCurrencyMoney::fromLedgerAfn((float) ($sale->previous_due_afn ?? 0), $money['code'], $sale)
+        );
+        $sale->setAttribute(
+            'display_new_sale_amount',
+            OriginalCurrencyMoney::fromLedgerAfn((float) ($sale->new_sale_amount_afn ?: $sale->total_afn), $money['code'], $sale)
+        );
+        $sale->setAttribute(
+            'display_grand_total_due',
+            OriginalCurrencyMoney::fromLedgerAfn((float) ($sale->grand_total_due_afn ?: $sale->total_afn), $money['code'], $sale)
+        );
+
+        $sale->items->each(function (SaleItem $item) use ($money, $sale) {
+            $item->setAttribute(
+                'display_line_total',
+                $item->sale_line_amount !== null
+                    ? round((float) $item->sale_line_amount, 2)
+                    : OriginalCurrencyMoney::fromLedgerAfn((float) $item->line_total_afn, $money['code'], $sale)
+            );
+            $item->setAttribute(
+                'display_unit_price',
+                $item->sale_unit_amount !== null
+                    ? round((float) $item->sale_unit_amount, 4)
+                    : OriginalCurrencyMoney::fromLedgerAfn((float) $item->sale_price_afn, $money['code'], $sale)
+            );
+            $item->setAttribute('display_currency_code', $item->sale_currency_code ?: $money['code']);
+        });
+
         return Inertia::render('sales/receipt', [
             'sale'    => $sale,
             'company' => \App\Models\AppSetting::bill(),
@@ -481,12 +536,14 @@ class SaleController extends Controller
                 ->get(),
             'variants'  => ProductVariant::query()
                 ->notTrashed()
-                ->with(['product:id,name,brand_id', 'product.brand:id,name'])
-                ->select(
-                    'id', 'product_id', 'name', 'volume_ml', 'concentration',
-                    'sale_price_afn', 'wholesale_price_afn', 'wholesale_min_qty', 'purchase_price_afn'
-                )
-                ->get(),
+                ->with([
+                    'product:id,name,brand_id',
+                    'product.brand:id,name',
+                    'prices' => fn ($q) => $q->where('is_active', true)->orderBy('currency_code')->orderBy('min_qty'),
+                ])
+                ->select('id', 'product_id', 'name', 'volume_ml', 'concentration')
+                ->get()
+                ->each->append(['sale_price_afn', 'wholesale_price_afn', 'wholesale_min_qty', 'purchase_price_afn']),
             'canEditCompleted' => $user?->isSuperAdmin() ?? false,
         ]);
     }
@@ -535,14 +592,21 @@ class SaleController extends Controller
                     }
                 }
             } else {
-                Log::warning('SaleController@update: ستون موجودی در product_batches پیدا نشد.');
+                Log::warning('SaleController@update: No quantity column found on product_batches.');
             }
 
             // برگرداندن قرض مشتری قبلی
             if ($sale->customer_id && (float) $sale->remaining_due_afn > 0) {
                 $oldCustomer = Customer::lockForUpdate()->find($sale->customer_id);
                 if ($oldCustomer) {
-                    $oldCustomer->decrement('current_due_afn', (float) $sale->remaining_due_afn);
+                    $dueAfn = (float) $sale->remaining_due_afn;
+                    $oldCustomer->decrement('current_due_afn', $dueAfn);
+                    $code = strtoupper((string) ($sale->sale_currency_code ?: 'AFN'));
+                    $rate = $sale->rateToAfn();
+                    $dueCurrency = $sale->sale_amount_currency !== null && (float) $sale->total_afn > 0
+                        ? round(((float) $sale->sale_amount_currency) * ($dueAfn / max((float) $sale->total_afn, 0.01)), 2)
+                        : ($rate > 0 ? round($dueAfn / $rate, 2) : $dueAfn);
+                    $oldCustomer->adjustBalance($code, -1 * $dueCurrency, -1 * $dueAfn, $rate);
                 }
             }
 
@@ -573,8 +637,42 @@ class SaleController extends Controller
             $totalCostAfn = 0.0;
             $lineData     = [];
 
+            // Preserve the sale's recorded currency + FX snapshot when recalculating lines.
+            $saleCurrency = $sale->sale_currency_id
+                ? Currency::query()->find((int) $sale->sale_currency_id)
+                : Currency::ledger();
+            $boardOverrides = [];
+            if ($sale->usd_to_afn_rate !== null && (float) $sale->usd_to_afn_rate > 0) {
+                $boardOverrides['usd_to_afn'] = (string) $sale->usd_to_afn_rate;
+            }
+            if ($sale->aed_to_afn_rate !== null && (float) $sale->aed_to_afn_rate > 0) {
+                $boardOverrides['aed_to_afn'] = (string) $sale->aed_to_afn_rate;
+            }
+            $boardOverrides['source'] = (string) ($sale->rate_source ?: 'transaction');
+            if (
+                empty($boardOverrides['usd_to_afn'])
+                || empty($boardOverrides['aed_to_afn'])
+                || (float) $boardOverrides['usd_to_afn'] <= 0
+                || (float) $boardOverrides['aed_to_afn'] <= 0
+            ) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'exchange_rate' => 'This sale is missing a Central Exchange Board snapshot. Cannot recalculate without stored USD/AED rates.',
+                ]);
+            }
+            $editBoard = $this->currency->boardAt(
+                $sale->rate_effective_at ?: $sale->sale_date ?: now(),
+                $boardOverrides,
+                allowCatalogFallback: false,
+            );
+
             foreach ($items as $item) {
-                $prepared = $this->sales->prepareSaleLine($branchId, $item, $variants);
+                $prepared = $this->sales->prepareSaleLine(
+                    $branchId,
+                    $item,
+                    $variants,
+                    $saleCurrency,
+                    $editBoard,
+                );
 
                 $subtotalAfn  = round($subtotalAfn + $prepared['line_subtotal_afn'], 2);
                 $totalCostAfn = round($totalCostAfn + $prepared['line_cost_afn'], 2);
@@ -601,7 +699,14 @@ class SaleController extends Controller
             if ($sale->customer_id && (float) $sale->remaining_due_afn > 0) {
                 $newCustomer = Customer::lockForUpdate()->find($sale->customer_id);
                 if ($newCustomer) {
-                    $newCustomer->increment('current_due_afn', (float) $sale->remaining_due_afn);
+                    $dueAfn = (float) $sale->remaining_due_afn;
+                    $newCustomer->increment('current_due_afn', $dueAfn);
+                    $code = strtoupper((string) ($sale->sale_currency_code ?: 'AFN'));
+                    $rate = $sale->rateToAfn();
+                    $dueCurrency = $sale->sale_amount_currency !== null && (float) $sale->total_afn > 0
+                        ? round(((float) $sale->sale_amount_currency) * ($dueAfn / max((float) $sale->total_afn, 0.01)), 2)
+                        : ($rate > 0 ? round($dueAfn / $rate, 2) : $dueAfn);
+                    $newCustomer->adjustBalance($code, $dueCurrency, $dueAfn, $rate);
                 }
             }
         });
@@ -655,13 +760,13 @@ class SaleController extends Controller
             foreach ($candidates as $col) {
                 if (in_array($col, $columns, true)) {
                     self::$batchQtyColumnCache = $col;
-                    Log::info("SaleController: از ستون '{$col}' برای موجودی product_batches استفاده می‌شود.");
+                    Log::info("SaleController: Using column '{$col}' for product_batches quantity.");
                     return $col;
                 }
             }
 
             Log::error(
-                'SaleController: هیچ ستون موجودی در product_batches پیدا نشد. ستون‌های موجود: '
+                'SaleController: No quantity column found on product_batches. Available columns: '
                 . implode(', ', $columns)
             );
         } catch (\Throwable $e) {
@@ -736,9 +841,11 @@ class SaleController extends Controller
             ->where('barcode', $barcode)
             ->where('status', 'active')
             ->with([
-                'variant:id,product_id,name,volume_ml,concentration,sale_price_afn,wholesale_price_afn,wholesale_min_qty,purchase_price_afn',
+                'variant:id,product_id,name,volume_ml,concentration',
                 'variant.product:id,name,brand_id',
                 'variant.product.brand:id,name',
+                'variant.prices' => fn ($q) => $q->where('is_active', true)->orderBy('currency_code')->orderBy('min_qty'),
+                'variant.prices.currency:id,code,symbol,name',
             ])
             ->first();
 
@@ -750,27 +857,12 @@ class SaleController extends Controller
         }
 
         $variant = $productBarcode->variant;
+        $payload = $this->saleVariantPayload($variant);
+        $payload['barcode'] = $productBarcode->barcode;
 
         return response()->json([
             'found'   => true,
-            'variant' => [
-                'id'                  => $variant->id,
-                'name'                => $variant->name,
-                'volume_ml'           => $variant->volume_ml,
-                'concentration'       => $variant->concentration,
-                'sale_price_afn'      => (float) $variant->sale_price_afn,
-                'wholesale_price_afn' => (float) $variant->wholesale_price_afn,
-                'wholesale_min_qty'   => (int) $variant->wholesale_min_qty,
-                'purchase_price_afn'  => (float) $variant->purchase_price_afn,
-                'product'             => [
-                    'id'    => $variant->product?->id,
-                    'name'  => $variant->product?->name,
-                    'brand' => $variant->product?->brand
-                        ? ['id' => $variant->product->brand->id, 'name' => $variant->product->brand->name]
-                        : null,
-                ],
-                'barcode' => $productBarcode->barcode,
-            ],
+            'variant' => $payload,
         ]);
     }
 
@@ -838,15 +930,26 @@ class SaleController extends Controller
     public function printReceipt(Request $request, Sale $sale): RedirectResponse
     {
         DB::transaction(function () use ($request, $sale) {
+            $rate = $sale->rateToAfn();
+            $amountAfn = (float) $sale->received_now_afn;
+            $amountCurrency = $sale->sale_amount_currency !== null && (float) $sale->total_afn > 0
+                ? round(((float) $sale->sale_amount_currency) * ($amountAfn / max((float) $sale->total_afn, 0.01)), 2)
+                : ($rate > 0 ? round($amountAfn / $rate, 2) : $amountAfn);
+
             Receipt::create([
-                'customer_id'       => $sale->customer_id,
-                'sale_id'           => $sale->id,
-                'sale_payment_id'   => null,
-                'receipt_number'    => Receipt::generateReceiptNumber(),
-                'amount_afn'        => $sale->received_now_afn,
-                'remaining_due_afn' => $sale->remaining_due_afn,
-                'receipt_type'      => $request->input('receipt_type', 'sale_invoice'),
-                'created_by'        => Auth::id(),
+                'customer_id'          => $sale->customer_id,
+                'sale_id'              => $sale->id,
+                'sale_payment_id'      => null,
+                'receipt_number'       => Receipt::generateReceiptNumber(),
+                'currency_id'          => $sale->sale_currency_id,
+                'currency_code'        => $sale->sale_currency_code ?: 'AFN',
+                'amount_afn'           => $amountAfn,
+                'amount_currency'      => $amountCurrency,
+                'exchange_rate_to_afn' => $rate,
+                'rate_effective_at'    => now(),
+                'remaining_due_afn'    => $sale->remaining_due_afn,
+                'receipt_type'         => $request->input('receipt_type', 'sale_invoice'),
+                'created_by'           => Auth::id(),
             ]);
 
             $sale->markAsPrinted(Auth::id());
@@ -1220,5 +1323,109 @@ class SaleController extends Controller
             ],
             'canEditCompleted' => $user?->isSuperAdmin() ?? false,
         ]);
+    }
+
+    /**
+     * POS variant payload with original catalog currency + live board-resolved sale prices.
+     *
+     * Live AFN/USD/AED equivalents are computed from the original sale amount via the
+     * Central Exchange Board — not from stale catalog USD/AED columns.
+     *
+     * @return array<string, mixed>
+     */
+    private function saleVariantPayload(ProductVariant $variant): array
+    {
+        $salePrices = [];
+        foreach (['AFN', 'USD', 'AED'] as $code) {
+            try {
+                $resolved = $this->priceResolver->resolveUnitPrice((int) $variant->id, $code, 1);
+                $salePrices[$code] = [
+                    'amount' => $resolved['amount'],
+                    'source' => $resolved['source'],
+                ];
+            } catch (\Throwable) {
+                $salePrices[$code] = null;
+            }
+        }
+
+        // Original catalog sale price = latest active base sale row in product_prices.
+        $variant->loadMissing('prices');
+        $originalRow = $variant->prices
+            ->filter(fn ($p) => $p->price_type === 'sale' && $p->is_active && (float) $p->amount > 0 && (int) $p->min_qty <= 1)
+            ->sortByDesc('id')
+            ->first();
+
+        $originalCode = strtoupper((string) ($originalRow?->currency_code ?: 'AFN'));
+        $originalAmount = (float) ($originalRow?->amount ?? 0);
+        $originalCurrencyId = $originalRow?->currency_id;
+        $originalCurrencySymbol = $originalRow?->currency?->symbol;
+        if ($originalAmount <= 0) {
+            $originalAmount = (float) $variant->sale_price_afn;
+            $originalCode = 'AFN';
+            $originalCurrencyId = null;
+            $originalCurrencySymbol = null;
+        }
+
+        $liveEquivalents = null;
+        try {
+            if ($originalAmount > 0 && in_array($originalCode, ['AFN', 'USD', 'AED'], true)) {
+                // Display conversion uses Central Exchange Board only (no catalog fallback).
+                $current = $this->exchange->getCurrentRates();
+                $board = FxBoard::fromArray([
+                    'usd_to_afn' => (string) $current['usd_to_afn'],
+                    'aed_to_afn' => (string) $current['aed_to_afn'],
+                    'usd_to_aed' => (string) ($current['usd_to_aed'] ?? ''),
+                    'effective_at' => $current['effective_at'] ?? null,
+                    'source' => (string) ($current['source'] ?? 'exchange_rates'),
+                    'kind' => 'operational',
+                ]);
+                $eq = $board->equivalents((string) $originalAmount, $originalCode, 4);
+                $liveEquivalents = [
+                    'afn' => (float) $eq['afn'],
+                    'usd' => (float) $eq['usd'],
+                    'aed' => (float) $eq['aed'],
+                    'rate_source' => $board->source,
+                    'rate_kind' => $board->kind,
+                    'rate_effective_at' => $board->effectiveAt,
+                ];
+            }
+        } catch (\Throwable) {
+            $liveEquivalents = null;
+        }
+
+        return [
+            'id' => $variant->id,
+            'name' => $variant->name,
+            'volume_ml' => $variant->volume_ml,
+            'concentration' => $variant->concentration,
+            'sale_amount' => $originalAmount > 0 ? $originalAmount : null,
+            'sale_currency_id' => $originalCurrencyId,
+            'sale_currency_code' => $originalCode,
+            'sale_currency_symbol' => $originalCurrencySymbol,
+            'sale_price_afn' => (float) ($liveEquivalents['afn'] ?? $salePrices['AFN']['amount'] ?? $variant->sale_price_afn),
+            'sale_prices' => $salePrices,
+            'live_equivalents' => $liveEquivalents,
+            'prices' => $variant->relationLoaded('prices')
+                ? $variant->prices->map(fn ($price) => [
+                    'id' => $price->id,
+                    'price_type' => $price->price_type,
+                    'currency_id' => $price->currency_id,
+                    'currency_code' => $price->currency_code,
+                    'amount' => (float) $price->amount,
+                    'min_qty' => (int) $price->min_qty,
+                    'is_active' => (bool) $price->is_active,
+                ])->values()->all()
+                : [],
+            'wholesale_price_afn' => (float) $variant->wholesale_price_afn,
+            'wholesale_min_qty' => (int) $variant->wholesale_min_qty,
+            'purchase_price_afn' => (float) $variant->purchase_price_afn,
+            'product' => [
+                'id' => $variant->product?->id,
+                'name' => $variant->product?->name,
+                'brand' => $variant->product?->brand
+                    ? ['id' => $variant->product->brand->id, 'name' => $variant->product->brand->name]
+                    : null,
+            ],
+        ];
     }
 }

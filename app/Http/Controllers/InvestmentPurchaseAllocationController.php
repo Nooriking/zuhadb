@@ -64,7 +64,7 @@ class InvestmentPurchaseAllocationController extends Controller
         // Purchases (draft یا received) که به سرمایه‌گذاری نیاز دارند
         $availablePurchases = Product::query()
             ->with('supplier:id,name')
-            ->whereNotNull('variant_id')
+            ->whereNotNull('purchase_date')
             ->where('trash', false)
             ->orderByDesc('purchase_date')
             ->limit(100)

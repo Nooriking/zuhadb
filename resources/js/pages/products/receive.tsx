@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { useExchange } from '@/hooks/useExchange';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
 import { Head, router } from '@inertiajs/react';
@@ -25,8 +26,6 @@ interface VariantOption {
     sale_price_afn: string;
     stock_quantity: number;
     barcodes: string[];
-    usd_to_afn_rate?: string | null;
-    usd_to_aed_rate?: string | null;
 }
 
 interface CurrencyOption {
@@ -63,7 +62,6 @@ interface Props {
     suppliers: SupplierOption[];
     currencies?: CurrencyOption[];
     fxBoard?: FxBoardContext;
-    canManageRates?: boolean;
     errors?: Record<string, string>;
 }
 
@@ -82,9 +80,10 @@ export default function ProductReceive({
     suppliers,
     currencies = [],
     fxBoard,
-    canManageRates = false,
     errors = {},
 }: Props) {
+    const { usdToAfn, aedToAfn } = useExchange();
+
     const ledgerId = useMemo(() => {
         const afn = currencies.find((c) => c.code === 'AFN');
         return afn ? String(afn.id) : currencies[0] ? String(currencies[0].id) : '';
@@ -99,8 +98,6 @@ export default function ProductReceive({
         funding_source: 'office' as 'office' | 'investor',
         investor_id: '',
         investment_id: '',
-        usd_to_afn_rate: fxBoard?.board?.usd_to_afn_rate ? String(fxBoard.board.usd_to_afn_rate) : '',
-        aed_to_afn_rate: fxBoard?.board?.aed_to_afn_rate ? String(fxBoard.board.aed_to_afn_rate) : '',
         profit_per_unit: '',
         profit_currency_id: ledgerId,
         purchase_date: new Date().toISOString().slice(0, 10),
@@ -131,13 +128,18 @@ export default function ProductReceive({
     );
     const qty = parseInt(form.quantity, 10) || 0;
     const unitOriginal = parseFloat(form.purchase_unit_amount) || 0;
-    const usdRate = parseFloat(form.usd_to_afn_rate) || 0;
-    const aedRate = parseFloat(form.aed_to_afn_rate) || 0;
+    const usdRate = usdToAfn || 0;
+    const aedRate = aedToAfn || 0;
     const eq = threeCurrencyEquivalents(unitOriginal, selectedCurrency?.code || 'AFN', usdRate, aedRate);
     const lineEq = threeCurrencyEquivalents(unitOriginal * qty, selectedCurrency?.code || 'AFN', usdRate, aedRate);
     const purchasePriceAfn = eq.afn;
     const profitOriginal = parseFloat(form.profit_per_unit) || 0;
-    const profitEq = threeCurrencyEquivalents(profitOriginal, profitCurrency?.code || 'AFN', usdRate, aedRate);
+    const profitEq = threeCurrencyEquivalents(
+        profitOriginal,
+        selectedCurrency?.code || profitCurrency?.code || 'AFN',
+        usdRate,
+        aedRate,
+    );
     const profitAfn = profitEq.afn;
     const totalCostAfn = lineEq.afn;
     const totalProfitAfn = profitAfn * qty;
@@ -231,15 +233,13 @@ export default function ProductReceive({
             investor_id: isInvestor ? form.investor_id : null,
             investment_id: isInvestor && form.investment_id ? form.investment_id : null,
             profit_per_unit: isInvestor ? form.profit_per_unit : '0',
-            profit_currency_id: isInvestor ? form.profit_currency_id || ledgerId : ledgerId,
+            profit_currency_id: isInvestor
+                ? form.purchase_currency_id || form.profit_currency_id || ledgerId
+                : ledgerId,
         };
-        if (!canManageRates) {
-            delete payload.usd_to_afn_rate;
-            delete payload.aed_to_afn_rate;
-            delete payload.rate_source;
-        } else {
-            payload.rate_source = 'transaction';
-        }
+        delete payload.usd_to_afn_rate;
+        delete payload.aed_to_afn_rate;
+        delete payload.rate_source;
         router.post('/products/receive', payload, {
             onFinish: () => setLoading(false),
             onError: (errs) => {
@@ -258,7 +258,7 @@ export default function ProductReceive({
                     <BackButton href="/products" />
                     <div>
                         <h1 className="text-2xl font-bold tracking-tight">Add stock</h1>
-                        <p className="text-muted-foreground text-sm">Confirm exchange rates, then receive inventory in the purchase currency</p>
+                        <p className="text-muted-foreground text-sm">Board rates are applied by the server; receive inventory in the purchase currency</p>
                     </div>
                 </div>
 
@@ -278,14 +278,7 @@ export default function ProductReceive({
                     </div>
                 )}
 
-                <TransactionExchangeRateSection
-                    usdToAfn={form.usd_to_afn_rate}
-                    aedToAfn={form.aed_to_afn_rate}
-                    onChange={(field, value) => setForm((prev) => ({ ...prev, [field]: value }))}
-                    context={fxBoard}
-                    canManageRates={canManageRates}
-                    errors={errors}
-                />
+                <TransactionExchangeRateSection context={fxBoard} />
 
                 <div className="rounded-lg border p-4">
                     <h2 className="mb-3 text-sm font-semibold">Purchase date & supplier</h2>
@@ -445,28 +438,17 @@ export default function ProductReceive({
                                 <div className="grid gap-4 md:grid-cols-3">
                                     <div className="space-y-2">
                                         <Label>Profit currency</Label>
-                                        <Select
-                                            value={form.profit_currency_id || ledgerId}
-                                            onValueChange={(v) => setForm((prev) => ({ ...prev, profit_currency_id: v }))}
-                                        >
-                                            <SelectTrigger>
-                                                <SelectValue placeholder="Currency" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {currencies
-                                                    .filter((c) => ['AFN', 'USD', 'AED'].includes(c.code))
-                                                    .map((c) => (
-                                                        <SelectItem key={c.id} value={String(c.id)}>
-                                                            {c.code}
-                                                        </SelectItem>
-                                                    ))}
-                                            </SelectContent>
-                                        </Select>
+                                        <Input
+                                            value={selectedCurrency?.code || profitCurrency?.code || 'AFN'}
+                                            readOnly
+                                            tabIndex={-1}
+                                        />
+                                        <p className="text-muted-foreground text-xs">Follows purchase currency.</p>
                                     </div>
                                     <div className="space-y-2 md:col-span-2">
                                         <Label className="flex items-center gap-2">
                                             <TrendingUp className="h-4 w-4" /> Fixed investor profit / unit (
-                                            {profitCurrency?.code || 'AFN'})
+                                            {selectedCurrency?.code || profitCurrency?.code || 'AFN'})
                                         </Label>
                                         <Input
                                             type="number"
@@ -557,7 +539,13 @@ export default function ProductReceive({
                             <Label>Purchase currency</Label>
                             <Select
                                 value={form.purchase_currency_id}
-                                onValueChange={(v) => setForm((prev) => ({ ...prev, purchase_currency_id: v }))}
+                                onValueChange={(v) =>
+                                    setForm((prev) => ({
+                                        ...prev,
+                                        purchase_currency_id: v,
+                                        profit_currency_id: v,
+                                    }))
+                                }
                             >
                                 <SelectTrigger>
                                     <SelectValue placeholder="Currency" />
@@ -597,29 +585,37 @@ export default function ProductReceive({
                         </div>
                     </div>
 
-                    <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-                        <div className="rounded-lg border p-3 text-sm">
-                            <p className="text-muted-foreground text-xs">Original</p>
-                            <p className="font-semibold">
-                                {money(unitOriginal)} {selectedCurrency?.code} / unit
-                            </p>
-                            <p>
-                                Total {money(unitOriginal * qty)} {selectedCurrency?.code}
-                            </p>
-                        </div>
-                        <div className="rounded-lg border p-3 text-sm">
-                            <p className="text-muted-foreground text-xs">AFN equivalent</p>
-                            <p className="font-semibold">{money(eq.afn)} AFN / unit</p>
-                            <p>Total {money(lineEq.afn)} AFN</p>
-                        </div>
-                        <div className="rounded-lg border p-3 text-sm">
-                            <p className="text-muted-foreground text-xs">USD / AED equivalents</p>
-                            <p>
-                                {money(eq.usd)} USD · {money(eq.aed)} AED / unit
-                            </p>
-                            <p>
-                                Total {money(lineEq.usd)} USD · {money(lineEq.aed)} AED
-                            </p>
+                    <div className="mt-4 space-y-2">
+                        <h3 className="text-sm font-semibold">Final currency equivalents</h3>
+                        <p className="text-muted-foreground text-xs">
+                            Converted with Central Exchange Board rates
+                            {selectedCurrency?.code ? ` · original in ${selectedCurrency.code}` : ''}.
+                        </p>
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+                            <div className="rounded-lg border p-3 text-sm">
+                                <p className="text-muted-foreground text-xs">Original</p>
+                                <p className="font-semibold">
+                                    {money(unitOriginal * qty)} {selectedCurrency?.code || '—'}
+                                </p>
+                                <p className="text-muted-foreground text-xs">
+                                    {money(unitOriginal)} / unit
+                                </p>
+                            </div>
+                            <div className="rounded-lg border p-3 text-sm">
+                                <p className="text-muted-foreground text-xs">AFN</p>
+                                <p className="font-semibold">{money(lineEq.afn)} AFN</p>
+                                <p className="text-muted-foreground text-xs">{money(eq.afn)} / unit</p>
+                            </div>
+                            <div className="rounded-lg border p-3 text-sm">
+                                <p className="text-muted-foreground text-xs">USD</p>
+                                <p className="font-semibold">{money(lineEq.usd)} USD</p>
+                                <p className="text-muted-foreground text-xs">{money(eq.usd)} / unit</p>
+                            </div>
+                            <div className="rounded-lg border p-3 text-sm">
+                                <p className="text-muted-foreground text-xs">AED</p>
+                                <p className="font-semibold">{money(lineEq.aed)} AED</p>
+                                <p className="text-muted-foreground text-xs">{money(eq.aed)} / unit</p>
+                            </div>
                         </div>
                     </div>
                     {isInvestor && qty > 0 ? (

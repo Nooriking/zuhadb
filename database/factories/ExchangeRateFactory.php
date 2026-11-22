@@ -18,6 +18,7 @@ class ExchangeRateFactory extends Factory
             'to_currency_id' => Currency::factory(),
             'rate' => 70,
             'effective_at' => now(),
+            'source' => 'manual',
             'trash' => false,
         ];
     }

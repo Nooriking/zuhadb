@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Customer;
+use App\Models\CustomerBalance;
 use App\Models\CustomerTransaction;
 use App\Services\CustomerLedgerService;
 use Illuminate\Http\RedirectResponse;
@@ -176,12 +177,11 @@ class CustomerTransactionController extends Controller
                 amountAfn:    $amountAfn,
                 balanceAfter: $newBalance,
                 notes:        $validated['notes'],
+                currencyCode: 'AFN',
+                amountCurrency: $amountAfn,
+                rate: 1,
             );
-
-            /* ═══ آپدیت customers ═══ */
-            $customer->update([
-                'current_due_afn' => $newBalance,
-            ]);
+            // customer_balances + current_due_afn rebuilt by CustomerBalance::recalculateFor
         });
 
         return back()->with('success', 'Adjustment saved.');
@@ -199,19 +199,12 @@ class CustomerTransactionController extends Controller
         }
 
         DB::transaction(function () use ($transaction) {
-            $customer = $transaction->customer;
-
-            if ($customer) {
-                /* ═══ برگرداندن اثر تعدیل ═══ */
-                $revertAmount = -1 * (float) $transaction->amount_afn;
-                $newBalance   = (float) $customer->current_due_afn + $revertAmount;
-
-                $customer->update([
-                    'current_due_afn' => max(0, $newBalance),
-                ]);
-            }
-
+            $customerId = $transaction->customer_id;
             $transaction->delete();
+
+            if ($customerId) {
+                CustomerBalance::recalculateFor((int) $customerId);
+            }
         });
 
         return back()->with('success', 'Adjustment deleted.');

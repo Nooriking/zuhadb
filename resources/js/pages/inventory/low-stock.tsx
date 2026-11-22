@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import AppLayout from '@/layouts/app-layout';
+import { LOW_STOCK_THRESHOLD } from '@/lib/inventory';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
 import { AlertTriangle, ArrowLeft, Eye, TrendingDown } from 'lucide-react';
@@ -18,7 +19,6 @@ interface Inventory {
         name: string | null;
         volume_ml: number | null;
         concentration: string | null;
-        minimum_stock: number;
         product: {
             id: number;
             name: string;
@@ -76,7 +76,7 @@ export default function LowStock({ inventories }: Props) {
                                 <TableHead>Product</TableHead>
                                 <TableHead>Branch</TableHead>
                                 <TableHead className="text-center">Quantity</TableHead>
-                                <TableHead className="text-center">Min Stock</TableHead>
+                                <TableHead className="text-center">Threshold</TableHead>
                                 <TableHead className="text-center">Status</TableHead>
                                 <TableHead className="text-center">Actions</TableHead>
                             </TableRow>
@@ -114,7 +114,7 @@ export default function LowStock({ inventories }: Props) {
                                         </TableCell>
                                         <TableCell className="text-center font-mono font-bold text-yellow-600">{inv.quantity}</TableCell>
                                         <TableCell className="text-center font-mono text-sm text-gray-500">
-                                            {inv.variant?.minimum_stock || 0}
+                                            {LOW_STOCK_THRESHOLD}
                                         </TableCell>
                                         <TableCell className="text-center">
                                             {inv.quantity <= 0 ? <Badge variant="destructive">Out</Badge> : <Badge variant="warning">Low</Badge>}

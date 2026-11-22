@@ -113,12 +113,12 @@ export default function Login({ status, canResetPassword, lockoutSeconds = null 
                 </div>
             )}
 
-            {!isLocked && errors.credentials && (
+            {!isLocked && (errors.credentials || errors.email || errors.password) && (
                 <div className="mb-5 flex items-start gap-3 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-3 text-sm text-red-200">
                     <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
                     <div>
                         <p className="font-semibold">Sign-in problem</p>
-                        <p className="text-red-200/90">{errors.credentials}</p>
+                        <p className="text-red-200/90">{errors.credentials || errors.email || errors.password}</p>
                     </div>
                 </div>
             )}
