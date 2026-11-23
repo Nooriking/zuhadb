@@ -78,6 +78,20 @@ class ReportsCatalog
     {
         return [
             [
+                'key' => 'overview',
+                'title' => 'Business Export',
+                'description' => 'Period filters and consolidated A4 PDF export.',
+                'reports' => [
+                    [
+                        'key' => 'period-pdf-export',
+                        'title' => 'Monthly & Custom PDF Export',
+                        'description' => 'Select any month, year, or custom range and export a full or sectioned business report as A4 PDF.',
+                        'href' => '/reports/export',
+                        'module' => 'reports',
+                    ],
+                ],
+            ],
+            [
                 'key' => 'sales',
                 'title' => 'Sales Reports',
                 'description' => 'Sales performance, returns, discounts, and payments.',

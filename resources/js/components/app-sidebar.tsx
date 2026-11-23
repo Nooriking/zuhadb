@@ -215,6 +215,11 @@ const reportNavItems: NavItem[] = [
                 module: 'reports',
             },
             {
+                title: 'PDF Export',
+                url: '/reports/export',
+                module: 'reports',
+            },
+            {
                 title: 'Sales Reports',
                 children: [
                     {

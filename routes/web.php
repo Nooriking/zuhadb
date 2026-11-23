@@ -686,17 +686,22 @@ Route::middleware(['auth', 'verified', 'lock.records'])->group(function () {
     });
 
     /* ═══════════════════════════════════════════════════════
-     |  REPORTS HUB
+     |  REPORTS HUB + PERIOD PDF EXPORT
      |  Implemented report pages keep their original routes.
-     |  This hub is the Reports Overview entry point only.
+     |  This hub is the Reports Overview entry point.
+     |  /reports/export builds monthly/custom A4 PDFs from live ledgers.
      ═══════════════════════════════════════════════════════ */
-    Route::get('/reports', [ReportController::class, 'index'])
-        ->middleware(['module:reports', 'permission:reports.view'])
-        ->name('reports.index');
+    Route::middleware(['module:reports', 'permission:reports.view'])->group(function () {
+        Route::get('/reports', [ReportController::class, 'index'])->name('reports.index');
+        Route::get('/reports/export', [ReportController::class, 'export'])->name('reports.export');
+        Route::get('/reports/export/preview', [ReportController::class, 'preview'])->name('reports.export.preview');
+        Route::get('/reports/export/pdf', [ReportController::class, 'pdf'])->name('reports.export.pdf');
+    });
 });
 
 
-// Profit report module removed — investor/store profit lives on InvestorDashboard + sales ledgers.
+// Legacy profit-report module removed — investor/store profit lives on InvestorDashboard + sales ledgers.
+// Period business PDF export is available at reports.export (BusinessReportService).
 
 /*
 |--------------------------------------------------------------------------

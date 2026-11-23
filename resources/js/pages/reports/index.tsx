@@ -3,12 +3,14 @@ import { Input } from '@/components/ui/input';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link } from '@inertiajs/react';
+import { Button } from '@/components/ui/button';
 import {
     ArrowRight,
     BarChart3,
     Building2,
     CircleDot,
     ClipboardList,
+    Download,
     Lock,
     Package,
     Search,
@@ -105,11 +107,18 @@ export default function ReportsIndex({ categories, stats }: Props) {
                         </div>
                         <h1 className="text-2xl font-semibold tracking-tight">Reports Overview</h1>
                         <p className="text-muted-foreground max-w-2xl text-sm">
-                            Open implemented reports from here. Planned reports are listed for roadmap visibility and are
-                            not linked until they are built.
+                            Open implemented reports from here. Use Monthly &amp; Custom PDF Export for period business
+                            summaries. Planned reports are listed for roadmap visibility.
                         </p>
                     </div>
 
+                    <div className="flex flex-col items-stretch gap-2 sm:items-end">
+                        <Button asChild>
+                            <Link href="/reports/export">
+                                <Download className="me-2 size-4" />
+                                Export PDF report
+                            </Link>
+                        </Button>
                     <div className="flex flex-wrap gap-2 text-sm">
                         <span className="bg-background rounded-md border px-3 py-1.5">
                             <span className="text-muted-foreground">Available </span>
@@ -123,6 +132,7 @@ export default function ReportsIndex({ categories, stats }: Props) {
                             <span className="text-muted-foreground">Categories </span>
                             <span className="font-medium">{stats.categories}</span>
                         </span>
+                    </div>
                     </div>
                 </div>
 
