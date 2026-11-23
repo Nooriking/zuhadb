@@ -7,7 +7,13 @@ import { defineConfig } from 'vite';
 export default defineConfig({
     plugins: [
         laravel({
-            input: ['resources/css/app.css', 'resources/js/app.tsx'],
+            input: [
+                'resources/css/app.css',
+                'resources/js/app.tsx',
+                // Explicit entry: avoids Windows/Vite chunk-name collision with components/dashboard/*
+                // that previously dropped pages/dashboard.tsx from the manifest.
+                'resources/js/pages/dashboards/overview.tsx',
+            ],
             ssr: 'resources/js/ssr.jsx',
             refresh: ['resources/views/**', 'routes/**'],
         }),

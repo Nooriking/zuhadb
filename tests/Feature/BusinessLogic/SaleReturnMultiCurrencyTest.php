@@ -431,7 +431,10 @@ test('multi-investor sale return reverses each investor profit independently', f
         ->and((float) InvestorProfitEntry::query()->where('investor_id', $invB->id)->where('sale_id', $sale->id)->sum('profit_amount_afn'))->toBe(300.0);
 
     $saleItem = SaleItem::query()->where('sale_id', $sale->id)->first();
-    $batchA = ProductBatch::query()->where('variant_id', $variant->id)->where('investor_id', $invA->id)->first();
+    $batchA = ProductBatch::query()
+        ->where('variant_id', $variant->id)
+        ->whereHas('investment', fn ($q) => $q->where('investor_id', $invA->id))
+        ->first();
 
     $return = srCreateDraftReturn($sale, $admin, $saleItem, $batchA, 6);
     srFinalize($return);

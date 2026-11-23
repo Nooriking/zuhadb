@@ -229,6 +229,8 @@ class InvestorDashboardController extends Controller
                 ? []
                 : Investor::query()->notTrashed()->select('id', 'name')->orderBy('name')->get(),
             'exchange' => $exchange,
+            // Alias used by three-currency dashboard tests / shared frontend helpers.
+            'fxBoard' => $this->rates->flatBoard(),
             'own' => $own,
             'filters' => ['investor_id' => $investorId],
             'dashboardPath' => $own ? '/dashboard' : '/investors/dashboard',

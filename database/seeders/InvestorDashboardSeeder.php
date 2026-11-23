@@ -8,7 +8,7 @@ use App\Models\Customer;
 use App\Models\Inventory;
 use App\Models\Investment;
 use App\Models\Investor;
-use App\Models\InvestorProfitEntry;
+use App\Models\InvestorTransaction;
 use App\Models\Product;
 use App\Models\ProductBarcode;
 use App\Models\ProductBatch;
@@ -30,24 +30,23 @@ class InvestorDashboardSeeder extends Seeder
 
         $investor = Investor::query()->where('email', 'investor@example.com')->first()
             ?? Investor::factory()->create([
-                'full_name' => 'Demo Investor',
+                'name' => 'Demo Investor',
                 'email' => 'investor@example.com',
             ]);
 
         $investment = Investment::query()->where('investor_id', $investor->id)->orderBy('id')->first()
             ?? Investment::factory()->create([
                 'investor_id' => $investor->id,
-                'investment_number' => 'INV-DEMO-0001',
-                'capital_amount_afn' => 100000,
-                'available_amount_afn' => 100000,
+                'amount_currency' => 100000,
+                'amount_afn' => 100000,
             ]);
 
         $branch = Branch::query()->first() ?? Branch::factory()->create();
         $brand = Brand::query()->first() ?? Brand::factory()->create(['name' => 'Investor House']);
         $customer = Customer::query()->first() ?? Customer::factory()->create(['name' => 'Investor Sale Customer']);
-        $adminId = User::query()->where('role', 'super_admin')->value('id');
+        $adminId = User::query()->where('role', 'super_admin')->value('id')
+            ?? User::query()->value('id');
 
-        $spentUsd = 0.0;
         $sold = [];
 
         foreach ([
@@ -60,9 +59,8 @@ class InvestorDashboardSeeder extends Seeder
         ] as $index => [$name, $rate, $qty, $soldQty]) {
             $unitAfn = 2800 + ($index * 200);
             $profitAfn = 700;
-            $profitUsd = round($profitAfn / $rate, 2);
             $lineAfn = $unitAfn * $qty;
-            $spentUsd += round($lineAfn / $rate, 2);
+            $purchaseDate = now()->subDays(12 - $index)->toDateString();
 
             $product = Product::factory()->create([
                 'brand_id' => $brand->id,
@@ -75,8 +73,6 @@ class InvestorDashboardSeeder extends Seeder
                 'sku' => 'INV-DASH-'.str_pad((string) ($index + 1), 2, '0', STR_PAD_LEFT),
                 'purchase_price_afn' => $unitAfn,
                 'sale_price_afn' => $unitAfn + 1200,
-                'profit_per_unit' => $profitAfn,
-                'stock_quantity' => $qty - $soldQty,
             ]);
 
             ProductBarcode::create([
@@ -88,36 +84,24 @@ class InvestorDashboardSeeder extends Seeder
                 'current_stock' => $qty - $soldQty,
             ]);
 
-            $purchase = Product::factory()->create([
-                'brand_id' => $brand->id,
-                'name' => $name,
-                'gender' => $product->gender,
-                'variant_id' => $variant->id,
-                'investor_id' => $investor->id,
-                'invoice_number' => 'INV-BILL-'.($index + 1),
-                'purchase_date' => now()->subDays(12 - $index)->toDateString(),
-                'exchange_rate' => $rate,
-                'quantity' => $qty,
-                'remaining_quantity' => $qty - $soldQty,
-                'purchase_price_afn' => $lineAfn,
-                'profit_per_unit' => $profitAfn,
-                'line_total' => $lineAfn,
-                'line_profit' => $profitAfn * $qty,
-                'payment_status' => 'paid',
-            ]);
-
             $batch = ProductBatch::factory()->create([
                 'branch_id' => $branch->id,
                 'variant_id' => $variant->id,
-                'purchase_item_id' => $purchase->id,
-                'investor_id' => $investor->id,
+                'investment_id' => $investment->id,
                 'batch_code' => 'B-INV-'.str_pad((string) ($index + 1), 4, '0', STR_PAD_LEFT),
+                'invoice_number' => 'INV-BILL-'.($index + 1),
+                'purchase_date' => $purchaseDate,
+                'payment_status' => 'paid',
                 'quantity' => $qty,
                 'remaining_quantity' => $qty - $soldQty,
+                'unit_cost_currency' => $unitAfn,
+                'exchange_rate' => $rate,
                 'unit_cost_afn' => $unitAfn,
                 'total_cost_afn' => $lineAfn,
-                'profit_per_unit_afn' => $profitUsd,
-                'received_date' => $purchase->purchase_date,
+                'purchase_amount_currency' => $lineAfn,
+                'profit_per_unit_afn' => $profitAfn,
+                'sale_price_afn' => $unitAfn + 1200,
+                'received_date' => $purchaseDate,
                 'status' => ($qty - $soldQty) > 0 ? 'active' : 'depleted',
             ]);
 
@@ -131,13 +115,14 @@ class InvestorDashboardSeeder extends Seeder
             );
 
             if ($soldQty > 0) {
-                $sold[] = [$variant, $batch, $soldQty, $profitUsd, $unitAfn];
+                $sold[] = [$variant, $batch, $soldQty, $profitAfn, $unitAfn];
             }
         }
 
-        foreach ($sold as $index => [$variant, $batch, $soldQty, $profitUsd, $unitAfn]) {
+        foreach ($sold as $index => [$variant, $batch, $soldQty, $profitAfn, $unitAfn]) {
             $price = (float) $variant->sale_price_afn;
             $total = round($price * $soldQty, 2);
+            $investorProfit = round($profitAfn * $soldQty, 2);
             $sale = Sale::create([
                 'branch_id' => $branch->id,
                 'customer_id' => $customer->id,
@@ -156,8 +141,8 @@ class InvestorDashboardSeeder extends Seeder
                 'due_afn' => 0,
                 'total_cost_afn' => $unitAfn * $soldQty,
                 'total_profit_afn' => round($total - ($unitAfn * $soldQty), 2),
-                'total_investor_profit_afn' => round($profitUsd * $soldQty, 2),
-                'store_profit_afn' => round($total - ($unitAfn * $soldQty) - ($profitUsd * $soldQty), 2),
+                'total_investor_profit_afn' => $investorProfit,
+                'store_profit_afn' => round($total - ($unitAfn * $soldQty) - $investorProfit, 2),
                 'sale_date' => now()->subDays($index + 1)->toDateString(),
                 'payment_status' => 'paid',
                 'status' => 'completed',
@@ -176,29 +161,27 @@ class InvestorDashboardSeeder extends Seeder
                 'sale_price_afn' => $price,
                 'discount_afn' => 0,
                 'line_total_afn' => $total,
-                'store_profit_afn' => round($total - ($unitAfn * $soldQty), 2),
-                'investor_profit_afn' => round($profitUsd * $soldQty, 2),
+                'store_profit_afn' => round($total - ($unitAfn * $soldQty) - $investorProfit, 2),
+                'investor_profit_afn' => $investorProfit,
             ]);
 
-            InvestorProfitEntry::recordProfit(
-                investorId: $investor->id,
-                investmentId: $investment->id,
-                productAllocationId: null,
-                saleId: $sale->id,
-                saleItemId: $item->id,
-                quantity: $soldQty,
-                profitPerUnitAfn: $profitUsd,
-                notes: 'Profit from '.$variant->sku,
-            );
+            InvestorTransaction::create([
+                'investor_id' => $investor->id,
+                'investment_id' => $investment->id,
+                'type' => 'profit_earned',
+                'amount_currency' => $investorProfit,
+                'amount_afn' => $investorProfit,
+                'balance_type' => 'profit',
+                'balance_before_afn' => 0,
+                'balance_after_afn' => $investorProfit,
+                'reference_type' => 'sale_item',
+                'reference_id' => $item->id,
+                'description' => 'Profit from '.$variant->sku,
+                'transaction_date' => $sale->sale_date,
+                'created_by' => $adminId,
+            ]);
         }
 
-        $spentUsd = round($spentUsd, 2);
-        $investment->update([
-            'allocated_amount_afn' => $spentUsd,
-            'available_amount_afn' => max(0, round((float) $investment->capital_amount_afn - $spentUsd, 2)),
-            'status' => 'partially_used',
-        ]);
-
-        $this->command?->info('Demo Investor now has stock purchases and profit entries.');
+        $this->command?->info('Demo Investor now has stock purchases and profit transactions.');
     }
 }

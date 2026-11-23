@@ -116,7 +116,7 @@ class InvestorWithdrawalController extends Controller
     {
         $withdrawal->load([
             'investor:id,name,phone,email',
-            'investment:id,investor_id,amount_afn',
+            'investment:id,investor_id,amount_afn,amount_currency,investment_date',
             'currency:id,code,name,symbol',
             'approvedBy:id,name',
             'paidBy:id,name',

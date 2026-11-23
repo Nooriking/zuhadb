@@ -149,7 +149,10 @@ test('acceptance B: AFN purchase preserves 7000 AFN with USD/AED equivalents', f
         ->and((float) $purchase->purchase_price_afn)->toBe(7000.0)
         ->and((float) $purchase->line_amount_usd)->toBe(100.0)
         ->and((float) $purchase->line_amount_aed)->toBe(368.42)
-        ->and(ProductBatch::query()->where('purchase_item_id', $purchase->id)->where('investor_id', $investor->id)->exists())->toBeTrue();
+        ->and(ProductBatch::query()
+            ->where('variant_id', $purchase->variant_id ?? $variant->id)
+            ->whereHas('investment', fn ($q) => $q->where('investor_id', $investor->id))
+            ->exists())->toBeTrue();
 });
 
 test('acceptance C: AED purchase preserves 100 AED with AFN/USD equivalents', function () {

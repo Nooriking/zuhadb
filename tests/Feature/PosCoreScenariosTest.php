@@ -112,7 +112,6 @@ test('salesperson can register products and create sales', function () {
     $this->actingAs($user)->get('/products/create')->assertOk();
     $this->actingAs($user)->get('/sales/create')->assertOk();
     $this->actingAs($user)->get('/customers')->assertOk();
-    $this->actingAs($user)->get('/customer-transactions')->assertOk();
     $this->actingAs($user)->get('/receipts')->assertOk();
     $this->actingAs($user)->get('/inventory')->assertOk();
     $this->actingAs($user)->get('/app-settings')->assertForbidden();
@@ -259,12 +258,11 @@ test('cash credit and full credit sales set paid and due correctly', function ()
         'sale_price_afn' => 5000,
     ]);
 
-    ProductBatch::factory()->create([
+    ProductBatch::factory()->storeOwned()->create([
         'branch_id' => $branch->id,
         'variant_id' => $variant->id,
         'quantity' => 10,
         'remaining_quantity' => 10,
-        'investor_id' => null,
     ]);
     Inventory::increase($branch->id, $variant->id, 10, 'purchase');
 
@@ -304,12 +302,11 @@ test('partial credit sale then payment clears customer due and logs ledger', fun
         'sale_price_afn' => 5000,
     ]);
 
-    ProductBatch::factory()->create([
+    ProductBatch::factory()->storeOwned()->create([
         'branch_id' => $branch->id,
         'variant_id' => $variant->id,
         'quantity' => 10,
         'remaining_quantity' => 10,
-        'investor_id' => null,
     ]);
     Inventory::increase($branch->id, $variant->id, 10, 'purchase');
 

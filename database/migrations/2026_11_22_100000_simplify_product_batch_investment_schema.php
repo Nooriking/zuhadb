@@ -119,64 +119,60 @@ return new class extends Migration
             }
         }
 
+        // Orphan investor-owned batches (no allocation row): always create a dedicated
+        // backfill investment per batch. Never reuse "latest investment" for an investor —
+        // that mis-attributes capital/profit when an investor has multiple investments.
         if (Schema::hasColumn('product_batches', 'investor_id')) {
             $orphanBatches = DB::table('product_batches')
                 ->whereNotNull('investor_id')
                 ->whereNull('investment_id')
+                ->orderBy('id')
                 ->get();
 
             foreach ($orphanBatches as $batch) {
-                $investmentId = DB::table('investments')
-                    ->where('investor_id', $batch->investor_id)
-                    ->where('trash', false)
-                    ->orderByDesc('id')
-                    ->value('id');
+                $currencyId = $batch->purchase_currency_id
+                    ?? DB::table('currencies')->where('code', 'AFN')->value('id');
+                $amountCurrency = $batch->purchase_amount_currency
+                    ?? $batch->total_cost_afn
+                    ?? 0;
+                $amountAfn = $batch->total_cost_afn ?? 0;
+                $rate = (float) ($batch->exchange_rate ?: 1);
 
-                if (! $investmentId) {
-                    $currencyId = $batch->purchase_currency_id
-                        ?? DB::table('currencies')->where('code', 'AFN')->value('id');
-                    $amountCurrency = $batch->purchase_amount_currency
-                        ?? $batch->total_cost_afn
-                        ?? 0;
-                    $amountAfn = $batch->total_cost_afn ?? 0;
-                    $rate = (float) ($batch->exchange_rate ?: 1);
+                $payload = [
+                    'investor_id' => $batch->investor_id,
+                    'currency_id' => $currencyId,
+                    'exchange_rate' => $rate,
+                    'amount_currency' => $amountCurrency,
+                    'amount_afn' => $amountAfn,
+                    'investment_date' => $batch->purchase_date
+                        ?? $batch->received_date
+                        ?? now()->toDateString(),
+                    'status' => 'active',
+                    'notes' => 'Backfilled from product_batches #'.$batch->id.' during schema simplify',
+                    'created_by' => $batch->user_id,
+                    'trash' => 0,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ];
 
-                    $payload = [
-                        'investor_id' => $batch->investor_id,
-                        'currency_id' => $currencyId,
-                        'exchange_rate' => $rate,
-                        'amount_currency' => $amountCurrency,
-                        'amount_afn' => $amountAfn,
-                        'investment_date' => $batch->purchase_date
-                            ?? $batch->received_date
-                            ?? now()->toDateString(),
-                        'status' => 'active',
-                        'notes' => 'Backfilled from product_batches during schema simplify',
-                        'created_by' => $batch->user_id,
-                        'trash' => 0,
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ];
+                $legacy = [
+                    'source_type' => 'goods',
+                    'investment_number' => 'BF-'.date('Ymd').'-'.$batch->id,
+                    'capital_amount_currency' => $amountCurrency,
+                    'capital_amount_afn' => $amountAfn,
+                    'available_amount_afn' => 0,
+                    'allocated_amount_afn' => $amountAfn,
+                    'profit_amount_afn' => 0,
+                    'withdrawn_amount_afn' => 0,
+                ];
 
-                    $legacy = [
-                        'source_type' => 'goods',
-                        'investment_number' => 'BF-'.date('Ymd').'-'.$batch->id,
-                        'capital_amount_currency' => $amountCurrency,
-                        'capital_amount_afn' => $amountAfn,
-                        'available_amount_afn' => 0,
-                        'allocated_amount_afn' => $amountAfn,
-                        'profit_amount_afn' => 0,
-                        'withdrawn_amount_afn' => 0,
-                    ];
-
-                    foreach ($legacy as $col => $value) {
-                        if (Schema::hasColumn('investments', $col)) {
-                            $payload[$col] = $value;
-                        }
+                foreach ($legacy as $col => $value) {
+                    if (Schema::hasColumn('investments', $col)) {
+                        $payload[$col] = $value;
                     }
-
-                    $investmentId = DB::table('investments')->insertGetId($payload);
                 }
+
+                $investmentId = DB::table('investments')->insertGetId($payload);
 
                 DB::table('product_batches')
                     ->where('id', $batch->id)
@@ -266,6 +262,10 @@ return new class extends Migration
         // ---------------------------------------------------------------
         // 7) Drop FKs / columns on product_batches
         // ---------------------------------------------------------------
+        $this->dropForeignOnColumn('product_batches', 'purchase_item_id');
+        $this->dropForeignOnColumn('product_batches', 'investor_id');
+        $this->dropForeignOnColumn('product_batches', 'profit_currency_id');
+        // Also try Laravel-default names if information_schema lookup differs
         $this->dropForeignIfExists('product_batches', 'product_batches_purchase_item_id_foreign');
         $this->dropForeignIfExists('product_batches', 'product_batches_investor_id_foreign');
         $this->dropForeignIfExists('product_batches', 'product_batches_profit_currency_id_foreign');
@@ -292,13 +292,15 @@ return new class extends Migration
         });
 
         Schema::table('product_batches', function (Blueprint $table) {
-            if (Schema::hasColumn('product_batches', 'investment_id')) {
+            if (Schema::hasColumn('product_batches', 'investment_id')
+                && ! $this->foreignKeyExists('product_batches', 'product_batches_investment_id_foreign')) {
                 $table->foreign('investment_id')
                     ->references('id')
                     ->on('investments')
                     ->nullOnDelete();
             }
-            if (Schema::hasColumn('product_batches', 'purchase_currency_id')) {
+            if (Schema::hasColumn('product_batches', 'purchase_currency_id')
+                && ! $this->foreignKeyExists('product_batches', 'product_batches_purchase_currency_id_foreign')) {
                 $table->foreign('purchase_currency_id')
                     ->references('id')
                     ->on('currencies')
@@ -390,7 +392,8 @@ return new class extends Migration
         Schema::dropIfExists('investment_purchase_allocations');
         Schema::dropIfExists('investor_wallets');
         Schema::dropIfExists('customer_transactions');
-        Schema::dropIfExists('customer_balances');
+        // Keep customer_balances — required by multi-currency customer due
+        // (2026_11_22_151000). Dropping it here caused empty recreate + data loss.
         Schema::dropIfExists('investor_user_migration_map');
         Schema::dropIfExists('investors_legacy');
     }
@@ -401,10 +404,10 @@ return new class extends Migration
         throw new RuntimeException('This schema simplification migration cannot be reversed automatically.');
     }
 
-    private function dropForeignIfExists(string $table, string $constraint): void
+    private function foreignKeyExists(string $table, string $constraint): bool
     {
         if (! Schema::hasTable($table)) {
-            return;
+            return false;
         }
 
         $db = DB::getDatabaseName();
@@ -414,10 +417,39 @@ return new class extends Migration
             [$db, $table, $constraint, 'FOREIGN KEY']
         );
 
-        if ($exists) {
-            Schema::table($table, function (Blueprint $blueprint) use ($constraint) {
-                $blueprint->dropForeign($constraint);
-            });
+        return (bool) $exists;
+    }
+
+    private function dropForeignIfExists(string $table, string $constraint): void
+    {
+        if (! $this->foreignKeyExists($table, $constraint)) {
+            return;
+        }
+
+        Schema::table($table, function (Blueprint $blueprint) use ($constraint) {
+            $blueprint->dropForeign($constraint);
+        });
+    }
+
+    /**
+     * Drop any foreign key whose COLUMN_NAME matches (handles non-default constraint names).
+     */
+    private function dropForeignOnColumn(string $table, string $column): void
+    {
+        if (! Schema::hasTable($table) || ! Schema::hasColumn($table, $column)) {
+            return;
+        }
+
+        $db = DB::getDatabaseName();
+        $rows = DB::select(
+            'SELECT DISTINCT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE
+             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?
+               AND REFERENCED_TABLE_NAME IS NOT NULL',
+            [$db, $table, $column]
+        );
+
+        foreach ($rows as $row) {
+            $this->dropForeignIfExists($table, $row->CONSTRAINT_NAME);
         }
     }
 

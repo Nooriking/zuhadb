@@ -308,18 +308,33 @@ class StockTransferController extends Controller
                     throw new \Exception("Not enough stock in batch {$fromBatch->batch_code}.");
                 }
 
-                // 1. Create new Batch in destination branch
+                // 1. Create new Batch in destination branch (preserve ownership + cost snapshot)
                 $toBatch = ProductBatch::create([
-                    'branch_id'          => $stockTransfer->to_branch_id,
-                    'variant_id'         => $fromBatch->variant_id,
-                    'purchase_item_id'   => null,
-                    'batch_code'         => ProductBatch::generateBatchCode(),
-                    'quantity'           => $item->quantity,
+                    'branch_id' => $stockTransfer->to_branch_id,
+                    'variant_id' => $fromBatch->variant_id,
+                    'investment_id' => $fromBatch->investment_id,
+                    'batch_code' => ProductBatch::generateBatchCode(),
+                    'invoice_number' => $fromBatch->invoice_number,
+                    'purchase_date' => $fromBatch->purchase_date,
+                    'payment_status' => $fromBatch->payment_status,
+                    'bill_image' => $fromBatch->bill_image,
+                    'notes' => $fromBatch->notes,
+                    'purchase_currency_id' => $fromBatch->purchase_currency_id,
+                    'purchase_amount_currency' => $fromBatch->unit_cost_currency !== null
+                        ? round((float) $fromBatch->unit_cost_currency * (int) $item->quantity, 2)
+                        : null,
+                    'quantity' => $item->quantity,
                     'remaining_quantity' => $item->quantity,
-                    'unit_cost_afn'      => $fromBatch->unit_cost_afn,
-                    'received_date'      => now(),
-                    'status'             => 'active',
-                    'user_id'            => Auth::id(),
+                    'unit_cost_currency' => $fromBatch->unit_cost_currency,
+                    'exchange_rate' => $fromBatch->exchange_rate,
+                    'unit_cost_afn' => $fromBatch->unit_cost_afn,
+                    'total_cost_afn' => round((float) $fromBatch->unit_cost_afn * (int) $item->quantity, 2),
+                    'profit_per_unit_afn' => $fromBatch->profit_per_unit_afn,
+                    'store_profit_per_unit_afn' => $fromBatch->store_profit_per_unit_afn,
+                    'sale_price_afn' => $fromBatch->sale_price_afn,
+                    'received_date' => now(),
+                    'status' => 'active',
+                    'user_id' => Auth::id(),
                 ]);
 
                 // 2. Deduct from source Batch

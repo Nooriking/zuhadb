@@ -103,7 +103,7 @@ test('admin dashboard exposes kpis3c and fxBoard for AFN USD AED', function () {
     $this->get('/dashboard')
         ->assertOk()
         ->assertInertia(fn ($page) => $page
-            ->component('dashboard')
+            ->component('dashboards/overview')
             ->has('kpis3c.today_sales')
             ->has('fxBoard')
             ->where('kpis3c.today_sales.afn', fn ($v) => (float) $v === (float) $expected['afn'])
@@ -244,7 +244,7 @@ test('branch manager dashboard is scoped and includes three-currency KPIs', func
     $this->get('/dashboard/branch')
         ->assertOk()
         ->assertInertia(fn ($page) => $page
-            ->component('dashboard')
+            ->component('dashboards/overview')
             ->where('kpis3c.today_sales.afn', fn ($v) => (float) $v === (float) $expected['afn'])
             ->where('kpis3c.today_sales.usd', fn ($v) => (float) $v === (float) $expected['usd'])
         );
@@ -261,22 +261,18 @@ test('investor admin dashboard exposes three-currency capital and profit KPIs', 
     $this->actingAs(User::factory()->create(['role' => User::ROLE_ADMIN]));
 
     $investor = \App\Models\Investor::factory()->create();
-    \App\Models\InvestorWallet::factory()->create([
-        'investor_id' => $investor->id,
+    \App\Models\InvestorWalletBalance::forInvestor($investor->id, 'AFN')->update([
         'capital_balance_afn' => 700,
+        'capital_balance_currency' => 700,
         'profit_balance_afn' => 70,
-        'total_invested_afn' => 700,
-        'total_profit_earned_afn' => 70,
-        'total_withdrawn_afn' => 0,
+        'profit_balance_currency' => 70,
     ]);
     \App\Models\Investment::factory()->create([
         'investor_id' => $investor->id,
-        'capital_amount_afn' => 700,
-        'available_amount_afn' => 200,
-        'allocated_amount_afn' => 500,
-        'source_type' => 'cash',
+        'amount_currency' => 700,
+        'amount_afn' => 700,
         'investment_date' => now()->toDateString(),
-        'status' => 'partially_used',
+        'status' => 'active',
     ]);
 
     $expected = app(CurrencyService::class)->threeCurrencyFromLedger(700);

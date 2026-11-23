@@ -1,4 +1,4 @@
-// resources/js/pages/dashboard.tsx
+// resources/js/pages/dashboards/overview.tsx
 
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';

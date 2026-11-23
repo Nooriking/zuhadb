@@ -573,7 +573,7 @@ class DashboardController extends Controller
                 'created_at' => optional($item->created_at)->diffForHumans(),
             ]);
 
-        return Inertia::render('dashboard', [
+        return Inertia::render('dashboards/overview', [
             'dueCustomers' => $dueCustomers,
             'period' => $period,
             'from' => $from->toDateString(),

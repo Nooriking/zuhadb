@@ -58,7 +58,7 @@ test('admin dashboard reports ledger totals in the configured reporting currency
     $this->get('/dashboard')
         ->assertOk()
         ->assertInertia(fn ($page) => $page
-            ->component('dashboard')
+            ->component('dashboards/overview')
             ->where('kpis.today_sales', fn ($value) => (float) $value === (float) $money->reportAmount(1000))
             ->where('kpis.today_collected', fn ($value) => (float) $value === (float) $money->reportAmount(1000))
             ->where('kpis.today_profit', fn ($value) => (float) $value === (float) $money->reportAmount(200))

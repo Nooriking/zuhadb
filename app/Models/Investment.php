@@ -38,10 +38,36 @@ class Investment extends Model
         'deleted_at' => 'datetime',
     ];
 
+    /**
+     * Legacy UI aliases after schema simplify removed investment_number / capital_amount_*.
+     *
+     * @var list<string>
+     */
+    protected $appends = [
+        'investment_number',
+        'capital_amount_afn',
+        'capital_amount_currency',
+    ];
+
     public const STATUS_LABELS = [
         'active' => 'Active',
         'closed' => 'Closed',
     ];
+
+    public function getInvestmentNumberAttribute(): string
+    {
+        return '#'.$this->id;
+    }
+
+    public function getCapitalAmountAfnAttribute(): string
+    {
+        return (string) ($this->attributes['amount_afn'] ?? '0');
+    }
+
+    public function getCapitalAmountCurrencyAttribute(): string
+    {
+        return (string) ($this->attributes['amount_currency'] ?? '0');
+    }
 
     /* =========================================================
      |  Relationships

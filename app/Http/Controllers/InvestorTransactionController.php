@@ -35,7 +35,7 @@ class InvestorTransactionController extends Controller
         $transactions = InvestorTransaction::query()
             ->with([
                 'investor:id,name,phone',
-                'investment:id,investment_number',
+                'investment:id,amount_afn,amount_currency,investment_date',
                 'creator:id,name',
             ])
             ->when($investorId, fn ($q, $v) => $q->where('investor_id', $v))
@@ -75,7 +75,7 @@ class InvestorTransactionController extends Controller
 
         $transaction->load([
             'investor:id,name,phone,email',
-            'investment:id,investment_number,capital_amount_afn',
+            'investment:id,amount_afn,amount_currency,investment_date',
             'creator:id,name,email',
         ]);
 
@@ -96,7 +96,7 @@ class InvestorTransactionController extends Controller
         }
 
         $transactions = InvestorTransaction::query()
-            ->with(['investment:id,investment_number', 'creator:id,name'])
+            ->with(['investment:id,amount_afn,amount_currency,investment_date', 'creator:id,name'])
             ->where('investor_id', $investor->id)
             ->orderByDesc('transaction_date')
             ->orderByDesc('id')

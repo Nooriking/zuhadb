@@ -48,9 +48,14 @@ class ProductBatchNoSnapshotColumnsTest extends TestCase
             'investment_purchase_allocations',
             'investment_product_allocations',
             'investor_wallets',
-            'customer_balances',
             'customer_transactions',
         ];
+
+        // customer_balances is intentionally retained for multi-currency customer due.
+        $this->assertTrue(
+            Schema::hasTable('customer_balances'),
+            'customer_balances must remain for multi-currency customer due'
+        );
 
         foreach ($droppedTables as $table) {
             $this->assertFalse(

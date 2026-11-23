@@ -629,40 +629,17 @@ class ProductController extends Controller
      */
     private function attachOriginalProfitFromBatches($purchases): void
     {
+        // purchase_item_id / profit snapshot columns were removed from product_batches.
+        // Investor profit is AFN ledger (profit_per_unit_afn) on the linked batch via investment.
         if ($purchases->isEmpty()) {
             return;
         }
 
-        $batches = ProductBatch::query()
-            ->whereIn('purchase_item_id', $purchases->pluck('id')->all())
-            ->where('trash', false)
-            ->get(['purchase_item_id', 'profit_per_unit_currency', 'profit_currency_id', 'profit_currency_code', 'profit_per_unit_afn', 'profit_per_unit_usd', 'profit_per_unit_aed'])
-            ->keyBy('purchase_item_id');
-
         foreach ($purchases as $purchase) {
-            $batch = $batches->get($purchase->id);
-            if (! $batch) {
-                $purchase->setAttribute('profit_per_unit_original', null);
-                continue;
-            }
-
-            $original = $batch->profit_per_unit_currency;
-            if ($original === null || (float) $original <= 0) {
-                $code = strtoupper((string) ($batch->profit_currency_code ?? 'AFN'));
-                $original = match ($code) {
-                    'USD' => $batch->profit_per_unit_usd,
-                    'AED' => $batch->profit_per_unit_aed,
-                    default => $batch->profit_per_unit_afn,
-                };
-            }
-
-            $purchase->setAttribute('profit_per_unit_original', $original);
-            if ($batch->profit_currency_id) {
-                $purchase->setAttribute('profit_currency_id', $batch->profit_currency_id);
-            }
-            if ($batch->profit_currency_code) {
-                $purchase->setAttribute('profit_currency_code', $batch->profit_currency_code);
-            }
+            $purchase->setAttribute(
+                'profit_per_unit_original',
+                $purchase->profit_per_unit_afn ?? $purchase->profit_per_unit ?? null
+            );
         }
     }
 
@@ -693,7 +670,7 @@ class ProductController extends Controller
         foreach ($purchases as $purchase) {
             $batches = $purchase->relationLoaded('purchaseBatches')
                 ? $purchase->purchaseBatches
-                : ProductBatch::query()->where('purchase_item_id', $purchase->id)->where('trash', false)->get();
+                : collect(); // purchase_item_id link removed; valuation uses ProductBatch::valuationSummary
 
             foreach ($batches as $batch) {
                 $remaining = max(0, (int) $batch->remaining_quantity);

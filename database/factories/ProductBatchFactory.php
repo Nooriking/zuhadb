@@ -46,6 +46,15 @@ class ProductBatchFactory extends Factory
         ];
     }
 
+    /** Store-owned inventory (no linked investment). */
+    public function storeOwned(): static
+    {
+        return $this->state(fn () => [
+            'investment_id' => null,
+            'profit_per_unit_afn' => 0,
+        ]);
+    }
+
     public function usd(float $unitCost = 20, float $rate = 56000, int $qty = 4): static
     {
         return $this->state(function () use ($unitCost, $rate, $qty) {

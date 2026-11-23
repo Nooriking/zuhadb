@@ -53,9 +53,13 @@ class PurchaseItem extends Model
         return $this->belongsTo(Investor::class, 'investor_id');
     }
 
+    /**
+     * Legacy relation — product_batches.purchase_item_id was removed in
+     * 2026_11_22_100000. Kept as an empty relation so old callers fail soft.
+     */
     public function batches(): HasMany
     {
-        return $this->hasMany(ProductBatch::class, 'purchase_item_id');
+        return $this->hasMany(ProductBatch::class, 'id', 'id')->whereRaw('1 = 0');
     }
 
     /* =========================================================
