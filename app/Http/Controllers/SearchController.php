@@ -12,7 +12,7 @@ use Illuminate\Http\Request;
 class SearchController extends Controller
 {
     /**
-     * ✅ جستجوی محصولات بر اساس name یا barcode
+     * ✅ Search products by name or barcode
      */
     public function products(Request $request): JsonResponse
     {
@@ -26,7 +26,7 @@ class SearchController extends Controller
         }
 
         /* ─────────────────────────────────────────────
-         |  1) جستجو در barcode ها
+         |  1) Search barcodes
          ───────────────────────────────────────────── */
         $barcodeMatches = ProductBarcode::query()
             ->where('barcode', 'like', "%{$q}%")
@@ -40,7 +40,7 @@ class SearchController extends Controller
             ->get();
 
         /* ─────────────────────────────────────────────
-         |  2) جستجو در نام محصولات
+         |  2) Search product names
          ───────────────────────────────────────────── */
         $nameMatches = Product::query()
             ->whereNull('purchase_date')
@@ -77,7 +77,7 @@ class SearchController extends Controller
                 ->pluck('stock', 'variant_id');
 
         /* ─────────────────────────────────────────────
-         |  3) ساخت نتایج یکپارچه
+         |  3) Build unified results
          ───────────────────────────────────────────── */
         $results = collect();
 
@@ -149,7 +149,7 @@ class SearchController extends Controller
             ]);
         }
 
-        // حذف تکراری‌ها و ترتیب
+        // Remove duplicates and order
         $results = $results
             ->unique(fn ($r) => $r['type'] . '-' . ($r['product_id'] ?? 0) . '-' . ($r['barcode'] ?? ''))
             ->take(10)

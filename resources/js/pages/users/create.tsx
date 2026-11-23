@@ -247,7 +247,7 @@ export default function UsersCreate({ branches, roles, defaultBranchId, isBranch
         }
     };
 
-    /* ⭐ آیا role انتخاب‌شده Branch Manager است؟ */
+    /* ⭐ Is the selected role Branch Manager? */
     const isBranchManagerRole = form.role === 'branch_manager';
     const branchIsEmpty = form.branch_id === 'none';
 

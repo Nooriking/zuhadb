@@ -9,7 +9,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('sale_items', function (Blueprint $table) {
-            // Snapshot برای فاکتور قدیمی
+            // Snapshot for historical invoices
             $table->string('product_name_snapshot')
                   ->nullable()
                   ->after('batch_id');
@@ -22,7 +22,7 @@ return new class extends Migration
                   ->nullable()
                   ->after('sku_snapshot');
 
-            // سود سهم سرمایه‌گذار (این فروش)
+            // Investor profit share (this sale)
             $table->decimal('investor_profit_currency', 18, 2)
                   ->default(0)
                   ->after('store_profit_afn');

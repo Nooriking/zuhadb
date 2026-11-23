@@ -86,7 +86,7 @@ function ThemeToggle() {
 }
 
 /* =========================================================
- |  ⭐ Simple Search Dialog (صفحه‌ای)
+ |  ⭐ Simple Search Dialog (full-page)
  ========================================================= */
 
 interface SearchItem {
@@ -270,12 +270,12 @@ export function AppHeader({ breadcrumbs = [] }: AppHeaderProps) {
 
                     {/* ⭐ Right Side */}
                     <div className="ml-auto flex items-center gap-2">
-                        {/* ⭐ Product Search Bar — دسکتاپ */}
+                        {/* ⭐ Product Search Bar — desktop */}
                         <div className="hidden w-72 md:block lg:w-80">
                             <ProductSearchBar />
                         </div>
 
-                        {/* ⭐ Search Button — Search Dialog صفحه‌ای */}
+                        {/* ⭐ Search Button — full-page Search Dialog */}
                         <TooltipProvider delayDuration={0}>
                             <Tooltip>
                                 <TooltipTrigger asChild>

@@ -73,7 +73,7 @@ class ProductPriceHistory extends Model
     /* Static helper */
 
     /**
-     * ثبت تاریخچه تغییر قیمت.
+     * Record a price-change history entry.
      */
     public static function record(
         int $variantId,

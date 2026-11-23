@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 
 class AppSetting extends Model
@@ -28,6 +29,16 @@ class AppSetting extends Model
         // Address
         'address',
 
+        // Tax / registration
+        'tax_number',
+        'registration_no',
+
+        // Invoice / receipt
+        'invoice_title',
+        'invoice_footer_text',
+        'thank_you_message',
+        'invoice_show_logo',
+
         // Social
         'social_facebook',
         'social_instagram',
@@ -36,8 +47,14 @@ class AppSetting extends Model
     ];
 
     protected $casts = [
+        'invoice_show_logo' => 'boolean',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
+    ];
+
+    protected $appends = [
+        'logo_url',
+        'display_name',
     ];
 
     /* ═══════════════════════════════════════════════════════
@@ -45,42 +62,105 @@ class AppSetting extends Model
      ═══════════════════════════════════════════════════════ */
 
     /**
-     * ⭐ Get the current settings (only one row)
+     * Get the current settings (single-row company profile).
      */
     public static function current(): ?self
     {
-        return self::first();
-    }
-
-    public static function bill(): array
-    {
-        $setting = self::current();
-
-        $supportPhone = filled($setting?->phone)
-            ? (string) $setting->phone
-            : (string) config('business.support_phone', '0744442863');
-
-        $phone = collect([$supportPhone, $setting?->phone_2])
-            ->filter(fn ($value) => filled($value))
-            ->unique()
-            ->implode(' / ');
-
-        return [
-            'name' => $setting?->display_name ?? 'ZUHA PERFUME',
-            'phone' => $phone,
-            'support_phone' => $supportPhone,
-            'manufacturer' => (string) config('business.manufacturer', 'Tezhoshan'),
-            'exchange_window_days' => (int) config('business.sale_exchange_window_days', 3),
-            'default_currency' => Currency::getDefault()?->code
-                ?? (string) config('business.default_currency', 'AFN'),
-            'address' => $setting?->address ?? '',
-            'slogan' => $setting?->company_name_local ?? '',
-            'logo' => $setting?->logo_url ?: '/images/logo.png',
-        ];
+        return Cache::remember('app_settings.current', 300, fn () => self::query()->first());
     }
 
     /**
-     * ⭐ Get a single field value
+     * Forget cached company profile (call after create/update/delete).
+     */
+    public static function forgetCache(): void
+    {
+        Cache::forget('app_settings.current');
+        Cache::forget('app_settings.bill');
+    }
+
+    /**
+     * Receipt / bill payload driven by System Settings (App Settings).
+     * No hardcoded store logo. Empty optional fields stay empty.
+     *
+     * @return array{
+     *     name: string,
+     *     phone: string,
+     *     phone_primary: string,
+     *     phone_secondary: string,
+     *     support_phone: string,
+     *     email: string,
+     *     website: string,
+     *     address: string,
+     *     slogan: string,
+     *     logo: string|null,
+     *     show_logo: bool,
+     *     tax_number: string,
+     *     registration_no: string,
+     *     invoice_title: string,
+     *     invoice_footer: string,
+     *     thank_you_message: string,
+     *     social_facebook: string,
+     *     social_instagram: string,
+     *     social_whatsapp: string,
+     *     social_telegram: string,
+     *     manufacturer: string,
+     *     exchange_window_days: int,
+     *     default_currency: string
+     * }
+     */
+    public static function bill(): array
+    {
+        return Cache::remember('app_settings.bill', 300, function () {
+            $setting = self::current();
+
+            $phonePrimary = filled($setting?->phone) ? (string) $setting->phone : '';
+            $phoneSecondary = filled($setting?->phone_2) ? (string) $setting->phone_2 : '';
+            $phone = collect([$phonePrimary, $phoneSecondary])
+                ->filter()
+                ->unique()
+                ->implode(' / ');
+
+            $showLogo = $setting?->invoice_show_logo !== false;
+            $logo = ($showLogo && $setting?->logo_url) ? $setting->logo_url : null;
+
+            // Local/display slogan for the store only — never surface software-vendor placeholders.
+            $slogan = trim((string) ($setting?->company_name_local ?? ''));
+            if ($slogan !== '' && preg_match('/tezhoshan/i', $slogan)) {
+                $slogan = '';
+            }
+
+            return [
+                'name' => $setting?->display_name ?? (string) config('app.name', 'Company'),
+                'phone' => $phone,
+                'phone_primary' => $phonePrimary,
+                'phone_secondary' => $phoneSecondary,
+                // Software vendor support (not store identity) — kept for license/support screens only.
+                'support_phone' => (string) config('business.support_phone', ''),
+                'email' => (string) ($setting?->email ?? ''),
+                'website' => (string) ($setting?->website ?? ''),
+                'address' => (string) ($setting?->address ?? ''),
+                'slogan' => $slogan,
+                'logo' => $logo,
+                'show_logo' => $showLogo,
+                'tax_number' => (string) ($setting?->tax_number ?? ''),
+                'registration_no' => (string) ($setting?->registration_no ?? ''),
+                'invoice_title' => (string) ($setting?->invoice_title ?: 'Invoice'),
+                'invoice_footer' => (string) ($setting?->invoice_footer_text ?? ''),
+                'thank_you_message' => trim((string) ($setting?->thank_you_message ?? '')),
+                'social_facebook' => (string) ($setting?->social_facebook ?? ''),
+                'social_instagram' => (string) ($setting?->social_instagram ?? ''),
+                'social_whatsapp' => (string) ($setting?->social_whatsapp ?? ''),
+                'social_telegram' => (string) ($setting?->social_telegram ?? ''),
+                'manufacturer' => (string) config('business.manufacturer', 'Tezhoshan'),
+                'exchange_window_days' => (int) config('business.sale_exchange_window_days', 3),
+                'default_currency' => Currency::getDefault()?->code
+                    ?? (string) config('business.default_currency', 'AFN'),
+            ];
+        });
+    }
+
+    /**
+     * Get a single field value.
      */
     public static function get(string $field, mixed $default = null): mixed
     {
@@ -94,11 +174,11 @@ class AppSetting extends Model
     }
 
     /**
-     * ⭐ Set a single field value
+     * Set a single field value.
      */
     public static function set(string $field, mixed $value): void
     {
-        $setting = self::current();
+        $setting = self::query()->first();
 
         if (! $setting) {
             $setting = self::create([
@@ -107,6 +187,7 @@ class AppSetting extends Model
         }
 
         $setting->update([$field => $value]);
+        self::forgetCache();
     }
 
     /* ═══════════════════════════════════════════════════════
@@ -114,7 +195,7 @@ class AppSetting extends Model
      ═══════════════════════════════════════════════════════ */
 
     /**
-     * ⭐ Full logo URL
+     * Relative logo URL safe for browser print (avoids absolute 127.0.0.1 hosts).
      */
     public function getLogoUrlAttribute(): ?string
     {
@@ -122,25 +203,32 @@ class AppSetting extends Model
             return null;
         }
 
-        if (! Storage::disk('public')->exists($this->logo)) {
+        $path = ltrim((string) $this->logo, '/');
+
+        // Reject path traversal / absolute URLs stored in DB.
+        if (str_contains($path, '..') || preg_match('#^(https?:)?//#i', $path)) {
             return null;
         }
 
-        return Storage::disk('public')->url($this->logo);
+        if (! Storage::disk('public')->exists($path)) {
+            return null;
+        }
+
+        return '/storage/'.$path;
     }
 
     /**
-     * ⭐ Display name
+     * Display name for receipts and UI.
      */
     public function getDisplayNameAttribute(): string
     {
         return $this->company_name
-            ?? $this->name
-            ?? 'Company';
+            ?: $this->name
+            ?: 'Company';
     }
 
     /**
-     * ⭐ WhatsApp link
+     * WhatsApp link.
      */
     public function getWhatsappLinkAttribute(): ?string
     {
@@ -151,5 +239,11 @@ class AppSetting extends Model
         $number = preg_replace('/\D/', '', $this->social_whatsapp);
 
         return $number ? "https://wa.me/{$number}" : null;
+    }
+
+    protected static function booted(): void
+    {
+        static::saved(fn () => self::forgetCache());
+        static::deleted(fn () => self::forgetCache());
     }
 }

@@ -6,6 +6,10 @@ interface Withdrawal {
     id: number;
     withdrawal_number: string;
     type: 'profit' | 'capital';
+    currency_code: string | null;
+    currency_symbol: string | null;
+    amount_currency: string | null;
+    exchange_rate: string | null;
     amount_afn: string;
     balance_before_afn: string;
     balance_after_afn: string;
@@ -16,6 +20,7 @@ interface Withdrawal {
     paid_at: string | null;
     investor: { id: number; full_name: string; phone: string | null; email: string | null } | null;
     investment: { id: number; investment_number: string } | null;
+    currency: { id: number; code: string; name: string; symbol: string | null } | null;
     approved_by: { id: number; name: string } | null;
     paid_by: { id: number; name: string } | null;
     creator: { id: number; name: string } | null;
@@ -31,8 +36,11 @@ const breadcrumbs = (withdrawal: Withdrawal): BreadcrumbItem[] => [
     { title: withdrawal.withdrawal_number, href: `/investor-withdrawals/${withdrawal.id}` },
 ];
 
-const formatPrice = (value: string | number) =>
-    new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(typeof value === 'string' ? parseFloat(value) : value);
+const formatPrice = (value: string | number, digits = 2) =>
+    new Intl.NumberFormat('en-US', {
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits,
+    }).format(typeof value === 'string' ? parseFloat(value) : value);
 
 const formatDate = (date: string | null) => {
     if (!date) return '—';
@@ -100,18 +108,27 @@ export default function InvestorWithdrawalShow({ withdrawal }: Props) {
                 </div>
 
                 <div className="rounded-lg border bg-white p-6 text-center shadow-sm">
-                    <p className="text-xs uppercase text-gray-500">Amount</p>
-                    <p className="mt-2 font-mono text-4xl font-bold">{formatPrice(withdrawal.amount_afn)} USD</p>
+                    <p className="text-xs uppercase text-gray-500">Withdrawal amount</p>
+                    <p className="mt-2 font-mono text-4xl font-bold">
+                        {formatPrice(withdrawal.amount_currency ?? withdrawal.amount_afn)}{' '}
+                        {withdrawal.currency?.code || withdrawal.currency_code || 'AFN'}
+                    </p>
+                    <p className="mt-2 font-mono text-sm text-gray-600">
+                        Ledger: {formatPrice(withdrawal.amount_afn)} AFN
+                        {withdrawal.exchange_rate && Number(withdrawal.exchange_rate) !== 1
+                            ? ` · Rate ${formatPrice(withdrawal.exchange_rate, 4)}`
+                            : ''}
+                    </p>
                 </div>
 
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                     <div className="rounded-lg border bg-white p-4">
-                        <p className="text-xs text-gray-500">Before</p>
-                        <p className="font-mono text-xl font-bold">{formatPrice(withdrawal.balance_before_afn)} USD</p>
+                        <p className="text-xs text-gray-500">Before (AFN)</p>
+                        <p className="font-mono text-xl font-bold">{formatPrice(withdrawal.balance_before_afn)} AFN</p>
                     </div>
                     <div className="rounded-lg border bg-white p-4">
-                        <p className="text-xs text-gray-500">After</p>
-                        <p className="font-mono text-xl font-bold">{formatPrice(withdrawal.balance_after_afn)} USD</p>
+                        <p className="text-xs text-gray-500">After (AFN)</p>
+                        <p className="font-mono text-xl font-bold">{formatPrice(withdrawal.balance_after_afn)} AFN</p>
                     </div>
                     <div className="rounded-lg border bg-white p-4">
                         <p className="text-xs text-gray-500">Investor</p>

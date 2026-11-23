@@ -65,7 +65,7 @@ export default function StockTransfersCreate({ branches, batches, nextNumber, er
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
     const [loading, setLoading] = useState(false);
 
-    // Batches فیلترشده بر اساس from_branch_id
+    // Batches filtered by from_branch_id
     const availableBatches = useMemo(() => {
         return batches.filter((b) => String(b.branch_id) === form.from_branch_id);
     }, [batches, form.from_branch_id]);

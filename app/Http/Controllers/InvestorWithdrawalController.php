@@ -7,33 +7,29 @@ use App\Models\AppSetting;
 use App\Models\Currency;
 use App\Models\Investor;
 use App\Models\InvestorTransaction;
+use App\Models\InvestorWalletBalance;
 use App\Models\InvestorWithdrawal;
-use App\Services\CurrencyService;
-use App\Services\PriceResolver;
+use App\Services\InvestorWithdrawalService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class InvestorWithdrawalController extends Controller
 {
     public function __construct(
-        private readonly CurrencyService $currencies,
-        private readonly PriceResolver $prices,
+        private readonly InvestorWithdrawalService $withdrawals,
     ) {}
-
-    /* =========================================================
-     |  INDEX — همه برداشت‌ها
-     ========================================================= */
 
     public function index(Request $request): Response
     {
-        $search      = $request->query('search');
-        $investorId  = $request->query('investor_id');
-        $status      = $request->query('status');
-        $type        = $request->query('type');
+        $search = $request->query('search');
+        $investorId = $request->query('investor_id');
+        $status = $request->query('status');
+        $type = $request->query('type');
 
         $withdrawals = InvestorWithdrawal::query()
             ->with([
@@ -53,122 +49,75 @@ class InvestorWithdrawalController extends Controller
             ->withQueryString();
 
         $stats = [
-            'total_pending'  => InvestorWithdrawal::pending()->count(),
+            'total_pending' => InvestorWithdrawal::pending()->count(),
             'total_approved' => InvestorWithdrawal::approved()->count(),
-            'total_paid'     => InvestorWithdrawal::paid()->count(),
+            'total_paid' => InvestorWithdrawal::paid()->count(),
             'total_amount_paid_afn' => (float) InvestorWithdrawal::paid()->sum('amount_afn'),
         ];
 
         return Inertia::render('investor-withdrawals/index', [
             'withdrawals' => $withdrawals,
-            'investors'   => Investor::notTrashed()->select('id', 'name')->orderBy('name')->get(),
-            'filters'     => [
-                'search'      => $search,
+            'investors' => Investor::notTrashed()->select('id', 'name')->orderBy('name')->get(),
+            'filters' => [
+                'search' => $search,
                 'investor_id' => $investorId,
-                'status'      => $status,
-                'type'        => $type,
+                'status' => $status,
+                'type' => $type,
             ],
             'stats' => $stats,
         ]);
     }
 
-    /* =========================================================
-     |  CREATE
-     ========================================================= */
-
     public function create(Request $request): Response
     {
         $investorId = $request->query('investor_id');
 
+        $investors = Investor::notTrashed()->active()
+            ->select('id', 'name', 'phone')
+            ->orderBy('name')
+            ->get()
+            ->map(function (Investor $investor) {
+                $summary = $this->withdrawals->balanceSummary($investor);
+
+                return [
+                    'id' => $investor->id,
+                    'full_name' => $investor->full_name,
+                    'phone' => $investor->phone,
+                    'wallet' => [
+                        'capital_balance_afn' => (string) $summary['capital_afn'],
+                        'profit_balance_afn' => (string) $summary['profit_afn'],
+                        'by_currency' => $summary['by_currency'],
+                    ],
+                ];
+            });
+
         return Inertia::render('investor-withdrawals/create', [
-            'investors'  => Investor::notTrashed()->active()
-                                ->with('wallet')
-                                ->select('id', 'name', 'phone')
-                                ->orderBy('name')
-                                ->get(),
-            'selectedInvestorId' => $investorId,
+            'investors' => $investors,
+            'selectedInvestorId' => $investorId ? (int) $investorId : null,
             'nextNumber' => InvestorWithdrawal::generateWithdrawalNumber(),
             'currencies' => Currency::formOptions(),
         ]);
     }
 
-    /* =========================================================
-     |  STORE
-     ========================================================= */
-
     public function store(StoreInvestorWithdrawalRequest $request): RedirectResponse
     {
-        $withdrawal = DB::transaction(function () use ($request) {
-            $data = $request->validated();
-
-            $investor = Investor::findOrFail($data['investor_id']);
-            $wallet   = $investor->getOrCreateWallet();
-
-            $currency = $this->currencies->requireActive((int) $data['currency_id']);
-            $amountEntered = (float) ($data['amount'] ?? $data['amount_afn'] ?? 0);
-            $currencyCode = strtoupper((string) $currency->code);
-            $rate = $this->prices->getTodayRate($currencyCode, 'AFN');
-            $amountAfn = round($amountEntered * $rate, 2);
-            $snap = $this->currencies->snapshot($currency);
-            $data['currency_id'] = $snap['id'];
-            $data['currency_code'] = $snap['code'];
-            $data['currency_symbol'] = $snap['symbol'];
-            $data['exchange_rate'] = $rate;
-            $data['amount_currency'] = $amountEntered;
-            unset($data['amount']);
-
-            $mcBalance = $wallet->balanceFor($currencyCode);
-
-            // Profit withdrawals only from payable (pending) profit balance on the cash wallet.
-            // Capital withdrawals only from cash capital — goods capital is not cash.
-            if ($data['type'] === 'profit') {
-                // Profit is credited to wallet at sale time (profit_earned); withdraw from wallet balance.
-                $availableCurrency = (float) ($mcBalance?->profit_balance_currency ?? 0);
-                $availableMcAfn = (float) ($mcBalance?->profit_balance_afn ?? 0);
-                if ($currencyCode === 'AFN' || ! $mcBalance) {
-                    $availableCurrency = max($availableCurrency, (float) $wallet->profit_balance_afn);
-                    $availableMcAfn = max($availableMcAfn, (float) $wallet->profit_balance_afn);
-                }
-                $availableAfn = min((float) $wallet->profit_balance_afn, max($availableMcAfn, (float) $wallet->profit_balance_afn));
-                if ($amountEntered > $availableCurrency + 0.01 || $amountAfn > $availableAfn + 0.01) {
-                    throw new \Exception('The withdrawal is larger than the payable profit available in '.$currencyCode.'.');
-                }
-                $balanceBefore = (float) $wallet->profit_balance_afn;
-            } else {
-                $availableCurrency = (float) ($mcBalance?->capital_balance_currency ?? 0);
-                if ($currencyCode === 'AFN' || ! $mcBalance) {
-                    $availableCurrency = max($availableCurrency, (float) $wallet->capital_balance_afn);
-                }
-                if ($amountEntered > $availableCurrency + 0.01 || $amountAfn > (float) $wallet->capital_balance_afn + 0.01) {
-                    throw new \Exception('The withdrawal is larger than the cash capital available in '.$currencyCode.'. Goods capital cannot be withdrawn as cash.');
-                }
-                $balanceBefore = (float) $wallet->capital_balance_afn;
-            }
-
-            $data['withdrawal_number']  = InvestorWithdrawal::generateWithdrawalNumber();
-            $data['amount_afn']         = $amountAfn;
-            $data['balance_before_afn'] = $balanceBefore;
-            $data['balance_after_afn']  = $balanceBefore - $amountAfn;
-            $data['created_by']         = Auth::id();
-            $data['status']             = $data['status'] ?? 'pending';
-
-            return InvestorWithdrawal::create($data);
-        });
+        try {
+            $withdrawal = $this->withdrawals->create($request->validated(), Auth::id());
+        } catch (ValidationException $e) {
+            return back()->withErrors($e->errors())->withInput();
+        }
 
         return redirect()
             ->route('investor-withdrawals.show', $withdrawal->id)
             ->with('success', "Withdrawal \"{$withdrawal->withdrawal_number}\" created successfully.");
     }
 
-    /* =========================================================
-     |  SHOW
-     ========================================================= */
-
     public function show(InvestorWithdrawal $withdrawal): Response
     {
         $withdrawal->load([
             'investor:id,name,phone,email',
             'investment:id,investor_id,amount_afn',
+            'currency:id,code,name,symbol',
             'approvedBy:id,name',
             'paidBy:id,name',
             'creator:id,name',
@@ -178,10 +127,6 @@ class InvestorWithdrawalController extends Controller
             'withdrawal' => $withdrawal,
         ]);
     }
-
-    /* =========================================================
-     |  APPROVE
-     ========================================================= */
 
     public function approve(InvestorWithdrawal $withdrawal): RedirectResponse
     {
@@ -194,10 +139,6 @@ class InvestorWithdrawalController extends Controller
         return back()->with('success', 'Withdrawal approved.');
     }
 
-    /* =========================================================
-     |  REJECT
-     ========================================================= */
-
     public function reject(Request $request, InvestorWithdrawal $withdrawal): RedirectResponse
     {
         if (! $withdrawal->isPending()) {
@@ -209,54 +150,15 @@ class InvestorWithdrawalController extends Controller
         return back()->with('success', 'Withdrawal rejected.');
     }
 
-    /* =========================================================
-     |  MARK AS PAID — کم کردن از Wallet + ثبت تراکنش
-     ========================================================= */
-
     public function markAsPaid(InvestorWithdrawal $withdrawal): RedirectResponse
     {
-        if (! $withdrawal->isPaid() === false && $withdrawal->status === 'paid') {
-            return back()->with('error', 'Already paid.');
+        try {
+            $this->withdrawals->markAsPaid($withdrawal, Auth::id());
+        } catch (ValidationException $e) {
+            $message = collect($e->errors())->flatten()->first() ?: 'Unable to mark withdrawal as paid.';
+
+            return back()->with('error', $message);
         }
-
-        if ($withdrawal->status === 'rejected') {
-            return back()->with('error', 'Rejected withdrawals cannot be paid.');
-        }
-
-        DB::transaction(function () use ($withdrawal) {
-            $investor = $withdrawal->investor;
-            $wallet   = $investor->getOrCreateWallet();
-
-            $amountAfn = (float) $withdrawal->amount_afn;
-            $amountCurrency = (float) ($withdrawal->amount_currency ?? $amountAfn);
-            $currencyCode = strtoupper((string) ($withdrawal->currency_code ?: 'AFN'));
-            $rate = (float) ($withdrawal->exchange_rate ?: 1);
-
-            if ($withdrawal->isProfitWithdrawal()) {
-                $wallet->adjustProfit($currencyCode, -1 * $amountCurrency, -1 * $amountAfn, $rate);
-                $txType = 'profit_withdrawn';
-            } else {
-                $wallet->adjustCapital($currencyCode, -1 * $amountCurrency, -1 * $amountAfn, $rate);
-                $txType = 'capital_withdrawn';
-            }
-
-            // ثبت تراکنش سرمایه‌گذار
-            InvestorTransaction::record(
-                investorId: $investor->id,
-                type: $txType,
-                amountAfn: $amountAfn,
-                balanceType: $withdrawal->isProfitWithdrawal() ? 'profit' : 'capital',
-                options: [
-                    'investment_id'    => $withdrawal->investment_id,
-                    'reference_type'   => InvestorWithdrawal::class,
-                    'reference_id'     => $withdrawal->id,
-                    'description'      => "Withdrawal {$withdrawal->withdrawal_number}",
-                    'transaction_date' => $withdrawal->withdrawal_date,
-                ]
-            );
-
-            $withdrawal->markAsPaid(Auth::id());
-        });
 
         return back()->with('success', 'Withdrawal marked as paid.');
     }
@@ -280,25 +182,33 @@ class InvestorWithdrawalController extends Controller
     private function settleAccount(Investor $investor): InvestorWithdrawal
     {
         return DB::transaction(function () use ($investor) {
-            $wallet = $investor->getOrCreateWallet();
-            $capital = round((float) $wallet->capital_balance_afn, 2);
-            $profit = round((float) $wallet->profit_balance_afn, 2);
+            $locked = Investor::query()->whereKey($investor->id)->lockForUpdate()->firstOrFail();
+            $capital = round($this->withdrawals->availableCapitalAfn($locked), 2);
+            $profit = round($this->withdrawals->availableProfitAfn($locked), 2);
             $total = round($capital + $profit, 2);
 
             if ($total <= 0) {
                 throw new \RuntimeException('This investor has no balance left to pay.');
             }
 
+            $ledger = Currency::ledger()
+                ?? Currency::query()->notTrashed()->where('code', 'AFN')->firstOrFail();
+
             $withdrawal = InvestorWithdrawal::create([
-                'investor_id' => $investor->id,
+                'investor_id' => $locked->id,
+                'currency_id' => $ledger->id,
+                'currency_code' => $ledger->code,
+                'currency_symbol' => $ledger->symbol,
+                'exchange_rate' => 1,
                 'withdrawal_number' => InvestorWithdrawal::generateWithdrawalNumber(),
                 'type' => $profit > 0 && $capital <= 0 ? 'profit' : 'capital',
+                'amount_currency' => $total,
                 'amount_afn' => $total,
                 'balance_before_afn' => $total,
                 'balance_after_afn' => 0,
                 'withdrawal_date' => now()->toDateString(),
                 'status' => 'paid',
-                'notes' => 'Full settlement. Capital '.number_format($capital, 2).' USD and profit '.number_format($profit, 2).' USD. Account balance is now zero.',
+                'notes' => 'Full settlement. Capital '.number_format($capital, 2).' AFN and profit '.number_format($profit, 2).' AFN. Account balance is now zero.',
                 'approved_by' => Auth::id(),
                 'approved_at' => now(),
                 'paid_by' => Auth::id(),
@@ -308,11 +218,16 @@ class InvestorWithdrawalController extends Controller
 
             if ($capital > 0) {
                 InvestorTransaction::record(
-                    investorId: $investor->id,
+                    investorId: $locked->id,
                     type: 'capital_withdrawn',
                     amountAfn: $capital,
                     balanceType: 'capital',
                     options: [
+                        'currency_id' => $ledger->id,
+                        'currency_code' => $ledger->code,
+                        'currency_symbol' => $ledger->symbol,
+                        'exchange_rate' => 1,
+                        'amount_currency' => $capital,
                         'reference_type' => InvestorWithdrawal::class,
                         'reference_id' => $withdrawal->id,
                         'description' => "Settlement {$withdrawal->withdrawal_number}",
@@ -323,11 +238,16 @@ class InvestorWithdrawalController extends Controller
 
             if ($profit > 0) {
                 InvestorTransaction::record(
-                    investorId: $investor->id,
+                    investorId: $locked->id,
                     type: 'profit_withdrawn',
                     amountAfn: $profit,
                     balanceType: 'profit',
                     options: [
+                        'currency_id' => $ledger->id,
+                        'currency_code' => $ledger->code,
+                        'currency_symbol' => $ledger->symbol,
+                        'exchange_rate' => 1,
+                        'amount_currency' => $profit,
                         'reference_type' => InvestorWithdrawal::class,
                         'reference_id' => $withdrawal->id,
                         'description' => "Settlement {$withdrawal->withdrawal_number}",
@@ -336,15 +256,8 @@ class InvestorWithdrawalController extends Controller
                 );
             }
 
-            $wallet->update([
-                'capital_balance_afn' => 0,
-                'profit_balance_afn' => 0,
-                'last_transaction_at' => now(),
-            ]);
-
-            // Zero multi-currency wallet rows as well.
-            \App\Models\InvestorWalletBalance::query()
-                ->where('investor_id', $investor->id)
+            InvestorWalletBalance::query()
+                ->where('investor_id', $locked->id)
                 ->update([
                     'capital_balance_currency' => 0,
                     'capital_balance_afn' => 0,
@@ -358,11 +271,11 @@ class InvestorWithdrawalController extends Controller
 
     public function receipt(InvestorWithdrawal $withdrawal): Response
     {
-        $withdrawal->load('investor:id,name,phone');
+        $withdrawal->load('investor:id,name,phone', 'currency:id,code,symbol');
         $notes = (string) $withdrawal->notes;
         $capital = 0.0;
         $profit = 0.0;
-        if (preg_match('/Capital ([0-9,.]+) USD and profit ([0-9,.]+) USD/', $notes, $match)) {
+        if (preg_match('/Capital ([0-9,.]+) (?:USD|AFN) and profit ([0-9,.]+) (?:USD|AFN)/', $notes, $match)) {
             $capital = (float) str_replace(',', '', $match[1]);
             $profit = (float) str_replace(',', '', $match[2]);
         } else {
@@ -381,6 +294,8 @@ class InvestorWithdrawalController extends Controller
             $lines[] = ['name' => 'Payout', 'quantity' => null, 'amount' => (float) $withdrawal->amount_afn];
         }
 
+        $code = $withdrawal->currency_code ?: 'AFN';
+
         return Inertia::render('investor-withdrawals/receipt', [
             'company' => AppSetting::bill(),
             'investor' => [
@@ -395,15 +310,14 @@ class InvestorWithdrawalController extends Controller
                 'title' => 'Investor payout receipt',
                 'lines' => $lines,
                 'amount' => (float) $withdrawal->amount_afn,
+                'amount_currency' => (float) ($withdrawal->amount_currency ?? $withdrawal->amount_afn),
+                'currency_code' => $code,
+                'exchange_rate' => (float) ($withdrawal->exchange_rate ?? 1),
                 'balance' => (float) $withdrawal->balance_after_afn,
                 'notes' => $withdrawal->notes,
             ],
         ]);
     }
-
-    /* =========================================================
-     |  DESTROY
-     ========================================================= */
 
     public function destroy(InvestorWithdrawal $withdrawal): RedirectResponse
     {

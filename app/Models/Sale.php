@@ -265,7 +265,7 @@ class Sale extends Model
     {
         return match ($this->payment_status) {
             'unpaid'  => 'Unpaid',
-            'partial' => 'Partial',
+            'partial' => 'Partially Paid',
             'paid'    => 'Paid',
             default   => ucfirst($this->payment_status ?? 'unknown'),
         };
@@ -276,7 +276,7 @@ class Sale extends Model
      ========================================================= */
 
     /**
-     * محاسبه مجموع مبلغ قابل پرداخت این فروش + قرض قبلی
+     * Calculate grand total due for this sale + previous debt
      */
     public function calculateGrandTotalDue(): float
     {
@@ -284,7 +284,7 @@ class Sale extends Model
     }
 
     /**
-     * محاسبه باقی‌مانده قرض بعد از پرداخت
+     * Calculate remaining debt after payment
      */
     public function calculateRemainingDue(): float
     {
@@ -292,7 +292,7 @@ class Sale extends Model
     }
 
     /**
-     * آیا این فروش باقی‌مانده دارد؟
+     * Does this sale still have a remaining balance?
      */
     public function hasRemainingDue(): bool
     {

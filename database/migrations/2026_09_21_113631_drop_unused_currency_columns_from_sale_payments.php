@@ -10,13 +10,13 @@ return new class extends Migration
     public function up(): void
     {
         /* ═══════════════════════════════════════════════════════
-         |  ⭐ ۱. پیدا کردن و حذف FK ها (اگر وجود دارند)
+         |  ⭐ 1. Find and drop FKs (if they exist)
          ═══════════════════════════════════════════════════════ */
 
         $foreignKeys = $this->getForeignKeys('sale_payments');
 
         foreach ($foreignKeys as $fk) {
-            // فقط FK هایی که به currency_id اشاره می‌کنند
+            // Only FKs that reference currency_id
             if (str_contains($fk->COLUMN_NAME, 'currency_id')) {
                 try {
                     DB::statement("ALTER TABLE `sale_payments` DROP FOREIGN KEY `{$fk->CONSTRAINT_NAME}`");
@@ -27,7 +27,7 @@ return new class extends Migration
         }
 
         /* ═══════════════════════════════════════════════════════
-         |  ⭐ ۲. حذف ستون‌ها
+         |  ⭐ 2. Drop columns
          ═══════════════════════════════════════════════════════ */
 
         Schema::table('sale_payments', function (Blueprint $table) {
@@ -69,7 +69,7 @@ return new class extends Migration
     }
 
     /**
-     * ⭐ لیست FK های یک جدول
+     * ⭐ List FKs for a table
      */
     private function getForeignKeys(string $table): array
     {

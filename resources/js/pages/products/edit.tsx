@@ -392,12 +392,12 @@ export default function ProductsEdit({
             return copy;
         });
 
-        // ✅ اگر purchase_price_afn تغییر کرد، purchases مرتبط را recalc کن
+        // ✅ If purchase_price_afn changed, recalc related purchases
         if (field === 'purchase_price_afn') {
             setPurchases((prev) =>
                 prev.map((p) => {
                     if (p.variant_index !== index) return p;
-                    return p; // recalc در render اتفاق می‌افتد
+                    return p; // recalc happens in render
                 }),
             );
         }
@@ -621,7 +621,7 @@ export default function ProductsEdit({
             return copy;
         });
 
-        // ✅ quantity یا investor_id → recalc
+        // ✅ quantity or investor_id → recalc
         if (field === 'quantity' || field === 'investor_id') {
             recalcPurchase(index);
         }

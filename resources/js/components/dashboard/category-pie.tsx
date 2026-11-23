@@ -14,13 +14,15 @@ interface Props {
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899', '#14b8a6', '#f97316', '#6366f1'];
 
-export default function CategoryPie({ data }: Props) {
+export default function CategoryPie({ data = [] }: Props) {
+    const safeData = data ?? [];
+
     return (
         <LazyChart height="h-80">
             <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                    <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={2}>
-                        {data.map((_, i) => (
+                    <Pie data={safeData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={2}>
+                        {safeData.map((_, i) => (
                             <Cell key={i} fill={COLORS[i % COLORS.length]} />
                         ))}
                     </Pie>

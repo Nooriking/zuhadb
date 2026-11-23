@@ -101,7 +101,7 @@ class Customer extends Model
      ========================================================= */
 
     /**
-     * آیا مشتری از سقف اعتبار عبور کرده؟
+     * Has the customer exceeded their credit limit?
      */
     public function hasExceededCreditLimit(): bool
     {
@@ -113,7 +113,7 @@ class Customer extends Model
     }
 
     /**
-     * باقی‌مانده اعتبار قابل استفاده
+     * Remaining usable credit
      */
     public function availableCreditAfn(): float
     {
@@ -125,7 +125,7 @@ class Customer extends Model
     }
 
     /**
-     * به‌روزرسانی مبلغ قرض فعلی (جمع وزن‌دهی‌شده AFN)
+     * Update current due amount (weighted AFN total)
      */
     public function updateCurrentDue(float $newBalance): void
     {

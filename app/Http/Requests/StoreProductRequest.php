@@ -54,7 +54,7 @@ class StoreProductRequest extends FormRequest
                     continue;
                 }
 
-                // ❌ حذف normalization مربوط به status
+                // ❌ Removed status-related normalization
 
                 foreach (['description', 'concentration'] as $f) {
                     if (isset($variant[$f]) && trim((string) $variant[$f]) === '') {
@@ -292,7 +292,7 @@ class StoreProductRequest extends FormRequest
             'variants.*.prices.*.min_qty'                => ['nullable', 'integer', 'min:0'],
             'variants.*.prices.*.is_active'              => ['nullable', 'boolean'],
             'variants.*.prices.*._delete'                => ['nullable', 'boolean'],
-            // ❌ حذف: 'variants.*.status'
+            // ❌ Removed: 'variants.*.status'
 
             /* ─────────────── Barcodes ─────────────── */
             'variants.*.barcodes'                => ['nullable', 'array'],
@@ -355,7 +355,7 @@ class StoreProductRequest extends FormRequest
 
             'variants.required'              => 'At least one variant is required.',
             'variants.min'                   => 'At least one variant is required.',
-            // ❌ حذف: variants.*.status messages
+            // ❌ Removed: variants.*.status messages
             'variants.*.concentration.in'    => 'The selected concentration is invalid.',
             'variants.*.volume_ml.integer'   => 'Volume must be an integer.',
             'variants.*.volume_ml.min'       => 'Volume cannot be negative.',
@@ -396,7 +396,7 @@ class StoreProductRequest extends FormRequest
             'variants.*.volume_ml'                => 'volume',
             'variants.*.concentration'            => 'concentration',
             'variants.*.sale_price_afn'           => 'sale price',
-            // ❌ حذف: 'variants.*.status' => 'variant status',
+            // ❌ Removed: 'variants.*.status' => 'variant status',
             'variants.*.barcodes.*.barcode'       => 'barcode',
             'variants.*.barcodes.*.barcode_type'  => 'barcode type',
 

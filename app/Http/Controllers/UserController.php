@@ -183,7 +183,7 @@ class UserController extends Controller
             abort(404);
         }
 
-        // ✅ Super Admin می‌تواند همه را ببیند، بقیه طبق قانون
+        // ✅ Super Admin can see everyone; others follow the rules
         if (
             ! $authUser->isSuperAdmin()
             && ! $authUser->canManageUser($user)
@@ -224,7 +224,7 @@ class UserController extends Controller
             abort(404);
         }
 
-        // ✅ Super Admin می‌تواند هر کاربری (از جمله خودش) را ویرایش کند
+        // ✅ Super Admin can edit any user (including themselves)
         if (! $authUser->isSuperAdmin() && ! $authUser->canManageUser($user)) {
             abort(403, 'You are not allowed to edit this user.');
         }
@@ -257,31 +257,31 @@ class UserController extends Controller
         /** @var User $authUser */
         $authUser = Auth::user();
 
-        // ✅ چک اول: آیا اجازه کلی دارد؟
+        // ✅ First check: do they have general permission?
         if (! $authUser->canUpdateUsers()) {
             abort(403, 'You are not allowed to update users.');
         }
 
-        // ✅ بررسی: آیا در حال ویرایش خودش است؟
+        // ✅ Check: are they editing themselves?
         $isEditingSelf = $authUser->id === $user->id;
 
         if ($isEditingSelf && $authUser->isSuperAdmin()) {
-            // 🔒 Super Admin نمی‌تواند role خودش را تغییر دهد
+            // 🔒 Super Admin cannot change their own role
             if (isset($data['role']) && $data['role'] !== User::ROLE_SUPER_ADMIN) {
                 return back()->with('error', 'You cannot change your own Super Admin role.');
             }
 
-            // 🔒 Super Admin نمی‌تواند status خودش را تغییر دهد
+            // 🔒 Super Admin cannot change their own status
             if (isset($data['status']) && $data['status'] !== 'active') {
                 return back()->with('error', 'You cannot change your own account status.');
             }
 
-            // 🔒 Super Admin به هیچ شعبه‌ای وابسته نیست
+            // 🔒 Super Admin is not tied to any branch
             $data['branch_id'] = null;
             $data['role']      = User::ROLE_SUPER_ADMIN;
             $data['status']    = 'active';
         } else {
-            // ✅ محافظت‌های معمول برای ویرایش دیگران
+            // ✅ Usual protections when editing others
             if (($data['role'] ?? null) === User::ROLE_SUPER_ADMIN) {
                 abort(403, 'Assigning Super Admin role is forbidden.');
             }

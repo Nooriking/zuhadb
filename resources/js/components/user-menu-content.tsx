@@ -19,16 +19,16 @@ export function UserMenuContent({ user }: UserMenuContentProps) {
 
         cleanup();
 
-        // پاک کردن کامل کش Inertia
+        // Fully clear the Inertia cache
         router.flushAll();
 
-        // ارسال درخواست logout
+        // Send logout request
         router.post(
             '/logout',
             {},
             {
                 onFinish: () => {
-                    // ✅ Force reload به login
+                    // ✅ Force reload to login
                     window.location.href = '/login';
                 },
             },

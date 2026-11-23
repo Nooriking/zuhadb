@@ -10,30 +10,30 @@ return new class extends Migration
     {
         Schema::table('sales', function (Blueprint $table) {
 
-            /* ⭐ فقط ستون‌هایی که در Migration اصلی نیستند */
+            /* ⭐ Only columns not already in the original migration */
 
-            // اگر customer_name_snapshot نیست → اضافه کن
+            // If customer_name_snapshot is missing → add it
             if (! Schema::hasColumn('sales', 'customer_name_snapshot')) {
                 $table->string('customer_name_snapshot')
                     ->nullable()
                     ->after('customer_id');
             }
 
-            // اگر customer_phone_snapshot نیست → اضافه کن
+            // If customer_phone_snapshot is missing → add it
             if (! Schema::hasColumn('sales', 'customer_phone_snapshot')) {
                 $table->string('customer_phone_snapshot', 50)
                     ->nullable()
                     ->after('customer_name_snapshot');
             }
 
-            // اگر printed_count نیست → اضافه کن
+            // If printed_count is missing → add it
             if (! Schema::hasColumn('sales', 'printed_count')) {
                 $table->unsignedInteger('printed_count')
                     ->default(0)
                     ->after('status');
             }
 
-            // اگر last_printed_at نیست → اضافه کن
+            // If last_printed_at is missing → add it
             if (! Schema::hasColumn('sales', 'last_printed_at')) {
                 $table->timestamp('last_printed_at')
                     ->nullable()

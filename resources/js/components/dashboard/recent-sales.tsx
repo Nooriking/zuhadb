@@ -37,7 +37,7 @@ const getStatusBadge = (status: string) => {
     return <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${map[status] || map.draft}`}>{status}</span>;
 };
 
-export default function RecentSales({ sales, embedded = false, currency }: Props) {
+export default function RecentSales({ sales = [], embedded = false, currency }: Props) {
     const list = (
         <div className="divide-border divide-y">
             {sales.length === 0 ? (

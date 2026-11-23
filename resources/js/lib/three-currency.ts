@@ -65,10 +65,10 @@ export function pickChartAmount(
 }
 
 export function chartSeriesFromTri(
-    rows: Array<{ date: string; count?: number; sales_3c?: ThreeCurrencyAmount; profit_3c?: ThreeCurrencyAmount; sales?: number; profit?: number }>,
+    rows: Array<{ date: string; count?: number; sales_3c?: ThreeCurrencyAmount; profit_3c?: ThreeCurrencyAmount; sales?: number; profit?: number }> | null | undefined,
     currency: ChartCurrency,
 ): Array<{ date: string; sales: number; profit: number; count: number }> {
-    return rows.map((row) => {
+    return (rows ?? []).map((row) => {
         const sales = pickChartAmount(row.sales_3c, currency);
         const profit = pickChartAmount(row.profit_3c, currency);
 

@@ -77,7 +77,7 @@ class Setting extends Model
      ========================================================= */
 
     /**
-     * خواندن یک تنظیم.
+     * Read a setting.
      */
     public static function get(string $key, $default = null)
     {
@@ -93,7 +93,7 @@ class Setting extends Model
     }
 
     /**
-     * ذخیره یک تنظیم.
+     * Save a setting.
      */
     public static function set(string $key, $value, ?string $type = null): self
     {
@@ -101,7 +101,7 @@ class Setting extends Model
 
         $type = $type ?? $setting?->type ?? 'string';
 
-        // تبدیل value به string
+        // Cast value to string
         if ($type === 'json' && is_array($value)) {
             $value = json_encode($value);
         } elseif ($type === 'boolean') {
@@ -129,7 +129,7 @@ class Setting extends Model
     }
 
     /**
-     * حذف کش همه تنظیمات.
+     * Clear cache for all settings.
      */
     public static function clearCache(): void
     {

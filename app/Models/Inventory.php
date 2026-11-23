@@ -83,11 +83,11 @@ class Inventory extends Model
     }
 
     /* =========================================================
-     |  Static Helpers — هسته‌ی مدیریت انبار
+     |  Static Helpers — inventory management core
      ========================================================= */
 
     /**
-     * دریافت یا ساخت رکورد Inventory برای (شعبه، واریانت)
+     * Get or create an Inventory record for (branch, variant)
      */
     public static function getOrCreate(int $branchId, int $variantId): self
     {
@@ -104,7 +104,7 @@ class Inventory extends Model
     }
 
     /**
-     * افزایش موجودی (ورود کالا)
+     * Increase stock (goods in)
      */
     public static function increase(
         int $branchId,
@@ -123,7 +123,7 @@ class Inventory extends Model
             $before = $inventory->quantity;
             $after  = $before + $qty;
 
-            // محاسبه‌ی میانگین قیمت تمام‌شده (Weighted Average)
+            // Calculate weighted average cost
             $newAvgCost = $inventory->average_cost_afn;
             if ($qty > 0 && $unitCostAfn > 0) {
                 $totalValue = ($before * $inventory->average_cost_afn) + ($qty * $unitCostAfn);
@@ -160,7 +160,7 @@ class Inventory extends Model
     }
 
     /**
-     * کاهش موجودی (خروج کالا)
+     * Decrease stock (goods out)
      */
     public static function decrease(
         int $branchId,
@@ -215,7 +215,7 @@ class Inventory extends Model
     }
 
     /**
-     * تنظیم دستی موجودی
+     * Manual stock adjustment
      */
     public static function adjust(
         int $branchId,

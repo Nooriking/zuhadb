@@ -31,9 +31,7 @@ class InvestorDashboardController extends Controller
         $exchange = $this->rates->board();
         $tri = fn (float $afn): array => $this->rates->threeFromAfn($afn);
 
-        // ═══════════════════════════════════════════════
-        // بخش ۱: Wallet + investment KPIs (aggregated SQL)
-        // ═══════════════════════════════════════════════
+        // Section 1: Wallet + investment KPIs (aggregated SQL)
 
         $wallet = InvestorWalletBalance::query()
             ->when($investorId, fn ($q) => $q->where('investor_id', $investorId))
@@ -65,16 +63,12 @@ class InvestorDashboardController extends Controller
         $totalProfitEarnedActual = (float) ($txTotals->profit_earned_afn ?? 0);
         $totalProfitPaid = (float) ($txTotals->profit_paid_afn ?? 0);
 
-        // ═══════════════════════════════════════════════
-        // بخش ۲: میانگین نرخ موزون سرمایه‌گذاری
+        // Section 2: Weighted average investment FX
         // avg = Σ amount_afn / Σ amount_currency  (per currency)
-        // ═══════════════════════════════════════════════
 
         $averageRates = $this->rates->investmentWeightedAverages($investorId);
 
-        // ═══════════════════════════════════════════════
-        // بخش ۳: موجودی — فقط SQL aggregate (بدون hydrate مدل)
-        // ═══════════════════════════════════════════════
+        // Section 3: Inventory — SQL aggregate only (no model hydrate)
 
         $inventoryAgg = DB::table('product_batches')
             ->join('investments', 'investments.id', '=', 'product_batches.investment_id')
@@ -102,8 +96,8 @@ class InvestorDashboardController extends Controller
         $inventoryVariantCount = (int) ($inventoryAgg->variant_count ?? 0);
 
         // ═══════════════════════════════════════════════
-        // بخش ۴: لیست جنس‌ها — فقط وقتی investor مشخص است
-        // (ادمین بدون فیلتر: لیست سنگین را skip می‌کنیم)
+        // Section 4: Goods list — only when a specific investor is selected
+        // (admin with no filter: skip the heavy list)
         // ═══════════════════════════════════════════════
 
         $inventoryItems = ($investorId || $own)
@@ -111,7 +105,7 @@ class InvestorDashboardController extends Controller
             : [];
 
         // ═══════════════════════════════════════════════
-        // بخش ۵: Monthly / byCurrency / top / recent
+        // Section 5: Monthly / byCurrency / top / recent
         // ═══════════════════════════════════════════════
 
         $monthly = InvestorTransaction::query()

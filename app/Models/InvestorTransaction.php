@@ -149,7 +149,7 @@ class InvestorTransaction extends Model
      ========================================================= */
 
     /**
-     * ثبت یک تراکنش سرمایهگذار
+     * Record an investor transaction
      *
      * @param  int    $investorId
      * @param  string $type            capital_deposit | profit_earned | ...

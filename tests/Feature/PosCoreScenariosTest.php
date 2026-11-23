@@ -401,16 +401,19 @@ test('inventory is separate per branch', function () {
 
 test('app bill exposes Tezhoshan manufacturer and support phone', function () {
     AppSetting::query()->delete();
+    AppSetting::forgetCache();
     AppSetting::factory()->create([
         'phone' => '0744442863',
         'website' => 'Tezhoshan',
     ]);
+    AppSetting::forgetCache();
 
     $bill = AppSetting::bill();
 
     expect($bill['manufacturer'])->toBe('Tezhoshan')
-        ->and($bill['support_phone'])->toBe('0744442863')
-        ->and($bill['phone'])->toContain('0744442863');
+        ->and($bill['support_phone'])->toBe((string) config('business.support_phone', '0744442863'))
+        ->and($bill['phone'])->toContain('0744442863')
+        ->and($bill['logo'])->toBeNull();
 });
 
 /* ═══════════════════════════════════════════════════════════

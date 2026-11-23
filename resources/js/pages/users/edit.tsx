@@ -45,7 +45,7 @@ interface Props {
 }
 
 /* =========================================================
- |  Password strength helper (اختیاری و ساده)
+ |  Password strength helper (optional and simple)
  ========================================================= */
 
 function getPasswordStrength(pw: string): { score: number; label: string; color: string } {
@@ -86,7 +86,7 @@ export default function UsersEdit({ user, branches, roles, isBranchLocked, defau
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
     const [loading, setLoading] = useState(false);
 
-    /* ⭐ نمایش / مخفی کردن پسورد */
+    /* ⭐ Show / hide password */
     const [showPassword, setShowPassword] = useState(false);
     const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
 
@@ -118,7 +118,7 @@ export default function UsersEdit({ user, branches, roles, isBranchLocked, defau
         setLoading(true);
         setErrors({});
 
-        // اگر کاربر پسورد جدید وارد نکرده، فیلدها را حذف کن
+        // If the user did not enter a new password, remove those fields
         const payload: Record<string, any> = {
             ...form,
             branch_id: form.branch_id === 'none' ? null : form.branch_id,
@@ -129,7 +129,7 @@ export default function UsersEdit({ user, branches, roles, isBranchLocked, defau
             delete payload.password_confirmation;
         }
 
-        // ✅ اصلاح شده: PUT به جای PATCH (مطابق روت لاراول)
+        // ✅ Fixed: PUT instead of PATCH (matches Laravel route)
         router.put(`/users/${user.id}`, payload, {
             preserveScroll: true,
             onSuccess: () => {
@@ -137,17 +137,16 @@ export default function UsersEdit({ user, branches, roles, isBranchLocked, defau
                     title: 'Success',
                     description: `User "${form.name}" was updated successfully.`,
                 });
-                setLoading(false);
             },
             onError: (err) => {
                 setErrors(err);
-                setLoading(false);
                 toast({
                     title: 'Error',
-                    description: 'There was a problem updating the user.',
+                    description: Object.values(err)[0] || 'There was a problem updating the user.',
                     variant: 'destructive',
                 });
             },
+            onFinish: () => setLoading(false),
         });
     };
 

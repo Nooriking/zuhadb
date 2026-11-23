@@ -17,7 +17,7 @@ interface Props {
     items: Item[];
 }
 
-export default function LowStock({ items }: Props) {
+export default function LowStock({ items = [] }: Props) {
     if (items.length === 0) {
         return (
             <div className="bg-card flex h-full items-center justify-center rounded-lg border p-6 text-sm text-muted-foreground">

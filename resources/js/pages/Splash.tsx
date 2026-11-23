@@ -43,7 +43,7 @@ export default function Splash({ app }: SplashProps) {
                     {/* Welcome */}
                     <p className="mb-12 text-sm tracking-[10px] text-gray-300 uppercase">Welcome</p>
 
-                    {/* Enter Button — بدون Ziggy */}
+                    {/* Enter Button — without Ziggy */}
                     <div className={`transition-all duration-700 ${showEnter ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}>
                         <Link
                             href="/dashboard"

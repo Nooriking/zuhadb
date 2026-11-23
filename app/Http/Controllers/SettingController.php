@@ -53,7 +53,7 @@ class AppSettingController extends Controller
     ];
 
     /* ═══════════════════════════════════════════════════════
-     |  INDEX — نمایش فرم تنظیمات
+     |  INDEX — show settings form
      ═══════════════════════════════════════════════════════ */
 
     public function index(): Response
@@ -70,7 +70,7 @@ class AppSettingController extends Controller
             }
         }
 
-        // URL کامل لوگو و favicon
+        // Full logo and favicon URLs
         $logoUrl = null;
         if (! empty($settings['company_logo'])) {
             $logoUrl = Storage::disk('public')->url($settings['company_logo']);
@@ -90,12 +90,12 @@ class AppSettingController extends Controller
     }
 
     /* ═══════════════════════════════════════════════════════
-     |  UPDATE — ذخیره تنظیمات
+     |  UPDATE — save settings
      ═══════════════════════════════════════════════════════ */
 
     public function update(Request $request): RedirectResponse
     {
-        // قوانین اعتبارسنجی
+        // Validation rules
         $rules = [];
         foreach (self::COMPANY_FIELDS as $key => $meta) {
             $rules[$key] = $meta['rules'];
@@ -103,17 +103,17 @@ class AppSettingController extends Controller
 
         $validated = $request->validate($rules);
 
-        // ذخیره‌ی تک‌تک فیلدها
+        // Save each field
         foreach (self::COMPANY_FIELDS as $key => $meta) {
             if ($meta['type'] === 'image') {
                 if ($request->hasFile($key)) {
-                    // حذف تصویر قبلی
+                    // Delete previous image
                     $oldPath = AppSetting::get($key);
                     if ($oldPath && Storage::disk('public')->exists($oldPath)) {
                         Storage::disk('public')->delete($oldPath);
                     }
 
-                    // ذخیره‌ی تصویر جدید
+                    // Save new image
                     $path = $request->file($key)->store('settings', 'public');
                     AppSetting::set($key, $path, 'string', 'company');
                 }

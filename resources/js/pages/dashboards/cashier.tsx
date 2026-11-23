@@ -60,7 +60,7 @@ export default function CashierDashboard({
     kpis,
     kpis3c = null,
     paymentCurrencyTotals = [],
-    recentSales,
+    recentSales = [],
     reporting = FALLBACK_REPORTING,
     fxBoard = null,
 }: Props) {

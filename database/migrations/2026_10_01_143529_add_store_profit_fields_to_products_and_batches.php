@@ -9,7 +9,7 @@ return new class extends Migration
     public function up(): void
     {
         /* ═══════════════════════════════════════════════════
-         |  products — سود دوکان
+         |  products — store profit
          ═══════════════════════════════════════════════════ */
         Schema::table('products', function (Blueprint $table) {
             if (! Schema::hasColumn('products', 'store_profit_per_unit')) {
@@ -28,7 +28,7 @@ return new class extends Migration
         });
 
         /* ═══════════════════════════════════════════════════
-         |  product_batches — قیمت فروش + سود دوکان
+         |  product_batches — sale price + store profit
          ═══════════════════════════════════════════════════ */
         Schema::table('product_batches', function (Blueprint $table) {
             if (! Schema::hasColumn('product_batches', 'sale_price_afn')) {

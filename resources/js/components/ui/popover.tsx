@@ -76,7 +76,7 @@ const PopoverTrigger = React.forwardRef<HTMLButtonElement, PopoverTriggerProps>(
             setOpen(!open);
         };
 
-        // اگر asChild → به فرزند props می‌دهیم
+        // If asChild → pass props to the child
         if (asChild && React.isValidElement(children)) {
             return React.cloneElement(children as React.ReactElement<any>, {
                 ref: setRefs,
@@ -124,7 +124,7 @@ const PopoverContent = React.forwardRef<HTMLDivElement, PopoverContentProps>(
             width: 0,
         });
 
-        /* ─── محاسبه موقعیت ─── */
+        /* ─── Position calculation ─── */
         React.useLayoutEffect(() => {
             if (!open || !triggerRef.current) return;
 
@@ -136,7 +136,7 @@ const PopoverContent = React.forwardRef<HTMLDivElement, PopoverContentProps>(
                 const scrollY = window.scrollY;
                 const scrollX = window.scrollX;
 
-                // چک می‌کنیم اگر پایین جا نیست، بالا باز شود
+                // If there isn't enough space below, open above
                 const spaceBelow = window.innerHeight - rect.bottom;
                 const contentHeight = contentRef.current?.offsetHeight ?? 200;
                 const shouldFlip = spaceBelow < contentHeight + 20;
@@ -162,7 +162,7 @@ const PopoverContent = React.forwardRef<HTMLDivElement, PopoverContentProps>(
 
             updatePosition();
 
-            // بعد از رندر یک‌بار دیگر (برای گرفتن ارتفاع دقیق)
+            // Re-run once after render (to get accurate height)
             const raf = requestAnimationFrame(updatePosition);
 
             window.addEventListener('scroll', updatePosition, true);
@@ -175,7 +175,7 @@ const PopoverContent = React.forwardRef<HTMLDivElement, PopoverContentProps>(
             };
         }, [open, align, sideOffset, side]);
 
-        /* ─── بستن با کلیک بیرون ─── */
+        /* ─── Close on outside click ─── */
         React.useEffect(() => {
             if (!open) return;
 
@@ -197,7 +197,7 @@ const PopoverContent = React.forwardRef<HTMLDivElement, PopoverContentProps>(
                 }
             };
 
-            // با تأخیر اضافه می‌کنیم تا کلیک باز کردن trigger باعث بستن نشود
+            // Delay so the trigger click that opened the popover doesn't close it
             const timer = setTimeout(() => {
                 document.addEventListener('mousedown', handleClickOutside);
             }, 0);
@@ -246,7 +246,7 @@ const PopoverContent = React.forwardRef<HTMLDivElement, PopoverContentProps>(
 PopoverContent.displayName = 'PopoverContent';
 
 /* ═══════════════════════════════════════════════════════
- |  Anchor (اختیاری — برای سازگاری API)
+ |  Anchor (optional — for API compatibility)
  ═══════════════════════════════════════════════════════ */
 
 const PopoverAnchor = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(

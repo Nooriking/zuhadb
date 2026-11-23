@@ -79,24 +79,24 @@ class AuthenticatedSessionController extends Controller
      */
     public function destroy(Request $request): RedirectResponse
     {
-        // ۱. خروج از گارد وب
+        // 1. Log out of the web guard
         Auth::guard('web')->logout();
 
-        // ۲. ابتدا Session را regenerate کن (شناسه جدید)
+        // 2. First regenerate the session (new ID)
         $request->session()->regenerate();
 
-        // ۳. سپس Session را کاملاً بی‌اعتبار کن (پاک کردن همه داده‌ها)
+        // 3. Then fully invalidate the session (clear all data)
         $request->session()->invalidate();
 
-        // ۴. توکن CSRF جدید بساز
+        // 4. Generate a new CSRF token
         $request->session()->regenerateToken();
 
-        // ۵. پاک کردن کوکی‌های Session و XSRF
+        // 5. Clear Session and XSRF cookies
         cookie()->queue(cookie()->forget(config('session.cookie')));
         cookie()->queue(cookie()->forget('XSRF-TOKEN'));
         cookie()->queue(cookie()->forget('laravel_session'));
 
-        // ۶. ریدایرکت مستقیم به صفحه لاگین
+        // 6. Redirect directly to the login page
         return redirect()->route('login');
     }
 }

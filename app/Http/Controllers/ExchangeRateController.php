@@ -206,6 +206,15 @@ class ExchangeRateController extends Controller
         }
 
         $data = $request->validated();
+        $from = Currency::query()->findOrFail($data['from_currency_id']);
+        $to = Currency::query()->findOrFail($data['to_currency_id']);
+
+        // Same board convention as store/postRate: AFN→USD/AED is flipped to foreign→AFN.
+        if (strtoupper((string) $from->code) === 'AFN' && in_array(strtoupper((string) $to->code), ['USD', 'AED'], true)) {
+            $data['from_currency_id'] = $to->id;
+            $data['to_currency_id'] = $from->id;
+        }
+
         $data['created_by'] = Auth::id();
 
         $exchangeRate->update($data);

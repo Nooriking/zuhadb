@@ -9,7 +9,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('product_batches', function (Blueprint $table) {
-            /* ⭐ purchase_item_id → FK به products */
+            /* ⭐ purchase_item_id → FK to products */
             if (! Schema::hasColumn('product_batches', 'purchase_item_id')) {
                 $table->foreignId('purchase_item_id')
                     ->nullable()

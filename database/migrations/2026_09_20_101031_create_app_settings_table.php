@@ -15,27 +15,27 @@ return new class extends Migration
              |  COMPANY INFO
              ═══════════════════════════════════════════════════════ */
 
-            $table->string('name');                              // نام نمایشی
-            $table->string('company_name')->nullable();          // نام رسمی شرکت
-            $table->string('company_name_local')->nullable();    // نام محلی
+            $table->string('name');                              // Display name
+            $table->string('company_name')->nullable();          // Official company name
+            $table->string('company_name_local')->nullable();    // Local name
 
-            /* ─── لوگو ─── */
-            $table->string('logo')->nullable();                  // مسیر لوگو
+            /* ─── Logo ─── */
+            $table->string('logo')->nullable();                  // Logo path
 
             /* ═══════════════════════════════════════════════════════
              |  CONTACT INFO
              ═══════════════════════════════════════════════════════ */
 
-            $table->string('phone', 50)->nullable();             // شماره تماس اصلی
-            $table->string('phone_2', 50)->nullable();           // شماره تماس دوم
-            $table->string('email')->nullable();                 // ایمیل
-            $table->string('website')->nullable();               // وبسایت
+            $table->string('phone', 50)->nullable();             // Primary phone
+            $table->string('phone_2', 50)->nullable();           // Secondary phone
+            $table->string('email')->nullable();                 // Email
+            $table->string('website')->nullable();               // Website
 
             /* ═══════════════════════════════════════════════════════
              |  ADDRESS
              ═══════════════════════════════════════════════════════ */
 
-            $table->text('address')->nullable();                 // آدرس کامل
+            $table->text('address')->nullable();                 // Full address
 
             /* ═══════════════════════════════════════════════════════
              |  SOCIAL MEDIA

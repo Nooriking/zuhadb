@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\DB;
 class InventoryService
 {
     /**
-     * ✅ وقتی purchase جدید ساخته شد → inventory را افزایش بده
+     * ✅ When a new purchase is created → increase inventory
      */
     public function increaseFromPurchase(
         int $variantId,
@@ -64,7 +64,7 @@ class InventoryService
     }
 
     /**
-     * ✅ وقتی فروش انجام شد → inventory را کاهش بده
+     * ✅ When a sale is completed → decrease inventory
      */
     public function decreaseFromSale(
         int $variantId,
@@ -90,8 +90,8 @@ class InventoryService
     }
 
     /**
-     * ✅ Recalculate inventory از purchase rows
-     * برای یک variant در یک branch
+     * ✅ Recalculate inventory from purchase rows
+     * for one variant in one branch
      */
     public function recalculate(
         int $variantId,
@@ -140,7 +140,7 @@ class InventoryService
     }
 
     /**
-     * ✅ Recalculate برای همه variants یک product
+     * ✅ Recalculate for all variants of a product
      */
     public function recalculateForProduct(Product $product, int $branchId): void
     {

@@ -9,7 +9,7 @@ use App\Models\User;
 class SaleNotifier
 {
     /**
-     * هر فروش تکمیل‌شده به بخش‌هایی که آن کاربر به آن‌ها دسترسی دارد خبر می‌دهد.
+     * Notify every section the user can access when a sale is completed.
      */
     public function notify(Sale $sale): void
     {

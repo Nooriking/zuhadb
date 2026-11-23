@@ -21,7 +21,7 @@ return new class extends Migration
             $table->boolean('is_primary')->default(false);
             $table->enum('status', ['active', 'inactive'])->default('active');
 
-            // ستون موجودی فعلی
+            // Current stock column
             $table->integer('current_stock')->default(0);
 
             $table->timestamps();

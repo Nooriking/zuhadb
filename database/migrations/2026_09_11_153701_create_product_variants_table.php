@@ -28,7 +28,7 @@ return new class extends Migration
             $table->string('sku', 100)->nullable()->index()
                   ->comment('Stock Keeping Unit');
 
-            // ❌ description حذف شد — در Product Information هست
+            // ❌ description removed — lives on Product Information
 
             $table->string('image', 255)->nullable()
                   ->comment('Variant image path');
@@ -43,7 +43,7 @@ return new class extends Migration
             $table->decimal('purchase_price_afn', 14, 2)->default(0)
                   ->comment('Last purchase price in AFN (source of truth)');
 
-            // ❌ purchase_price_usd حذف شد — از afn ÷ exchange_rate محاسبه می‌شود
+            // ❌ purchase_price_usd removed — derived from afn ÷ exchange_rate
 
             $table->decimal('sale_price_afn', 14, 2)->default(0);
             $table->decimal('wholesale_price_afn', 14, 2)->default(0);

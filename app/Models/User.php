@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
@@ -17,14 +18,21 @@ class User extends Authenticatable
      |  Role Constants
      ========================================================= */
 
-    public const ROLE_SUPER_ADMIN    = 'super_admin';
-    public const ROLE_ADMIN          = 'admin';
+    public const ROLE_SUPER_ADMIN = 'super_admin';
+
+    public const ROLE_ADMIN = 'admin';
+
     public const ROLE_BRANCH_MANAGER = 'branch_manager';
-    public const ROLE_CASHIER        = 'cashier';
-    public const ROLE_ACCOUNTANT     = 'accountant';
-    public const ROLE_INVESTOR       = 'investor';
-    public const ROLE_SALESPERSON    = 'salesperson';
-    public const ROLE_STOCK_KEEPER   = 'stock_keeper';
+
+    public const ROLE_CASHIER = 'cashier';
+
+    public const ROLE_ACCOUNTANT = 'accountant';
+
+    public const ROLE_INVESTOR = 'investor';
+
+    public const ROLE_SALESPERSON = 'salesperson';
+
+    public const ROLE_STOCK_KEEPER = 'stock_keeper';
 
     public const ROLES = [
         self::ROLE_SUPER_ADMIN,
@@ -38,14 +46,14 @@ class User extends Authenticatable
     ];
 
     public const ROLE_LABELS = [
-        self::ROLE_SUPER_ADMIN    => 'Super Admin',
-        self::ROLE_ADMIN          => 'Admin',
+        self::ROLE_SUPER_ADMIN => 'Super Admin',
+        self::ROLE_ADMIN => 'Admin',
         self::ROLE_BRANCH_MANAGER => 'Branch Manager',
-        self::ROLE_CASHIER        => 'Cashier',
-        self::ROLE_ACCOUNTANT     => 'Accountant',
-        self::ROLE_INVESTOR       => 'Investor',
-        self::ROLE_SALESPERSON    => 'Salesperson',
-        self::ROLE_STOCK_KEEPER   => 'Stock Keeper',
+        self::ROLE_CASHIER => 'Cashier',
+        self::ROLE_ACCOUNTANT => 'Accountant',
+        self::ROLE_INVESTOR => 'Investor',
+        self::ROLE_SALESPERSON => 'Salesperson',
+        self::ROLE_STOCK_KEEPER => 'Stock Keeper',
     ];
 
     public const SELECTABLE_ROLES = [
@@ -260,15 +268,15 @@ class User extends Authenticatable
     {
         return [
             'email_verified_at' => 'datetime',
-            'last_login_at'     => 'datetime',
-            'password'          => 'hashed',
-            'two_factor_secret'  => 'encrypted',
+            'last_login_at' => 'datetime',
+            'password' => 'hashed',
+            'two_factor_secret' => 'encrypted',
             'two_factor_recovery_codes' => 'encrypted:array',
             'two_factor_confirmed_at' => 'datetime',
-            'trash'             => 'boolean',
-            'created_at'        => 'datetime',
-            'updated_at'        => 'datetime',
-            'deleted_at'        => 'datetime',
+            'trash' => 'boolean',
+            'created_at' => 'datetime',
+            'updated_at' => 'datetime',
+            'deleted_at' => 'datetime',
         ];
     }
 
@@ -303,12 +311,17 @@ class User extends Authenticatable
 
     public function purchases(): HasMany
     {
-        return $this->hasMany(Product::class, 'user_id')->whereNotNull('purchase_date');
+        return $this->hasMany(ProductBatch::class, 'user_id')->whereNotNull('purchase_date');
     }
 
     public function expenses(): HasMany
     {
         return $this->hasMany(Expense::class, 'created_by');
+    }
+
+    public function aiConversations(): HasMany
+    {
+        return $this->hasMany(AiConversation::class, 'user_id');
     }
 
     /**
@@ -342,15 +355,35 @@ class User extends Authenticatable
      |  Scopes
      ========================================================= */
 
-    public function scopeActive($query)      { return $query->where('status', 'active'); }
-    public function scopeInactive($query)    { return $query->where('status', 'inactive'); }
-    public function scopeBlocked($query)     { return $query->where('status', 'blocked'); }
-    public function scopeNotTrashed($query)  { return $query->where('trash', false); }
+    public function scopeActive($query)
+    {
+        return $query->where('status', 'active');
+    }
+
+    public function scopeInactive($query)
+    {
+        return $query->where('status', 'inactive');
+    }
+
+    public function scopeBlocked($query)
+    {
+        return $query->where('status', 'blocked');
+    }
+
+    public function scopeNotTrashed($query)
+    {
+        return $query->where('trash', false);
+    }
+
     public function scopeOnlyTrashed($query)
     {
-        return $query->withoutGlobalScope(\Illuminate\Database\Eloquent\SoftDeletingScope::class)->where('trash', true);
+        return $query->withoutGlobalScope(SoftDeletingScope::class)->where('trash', true);
     }
-    public function scopeByRole($query, string $role) { return $query->where('role', $role); }
+
+    public function scopeByRole($query, string $role)
+    {
+        return $query->where('role', $role);
+    }
 
     public function scopeInvestors($query)
     {
@@ -381,7 +414,7 @@ class User extends Authenticatable
 
         if ($authUser->isBranchManager()) {
             return $query->where('branch_id', $authUser->branch_id)
-                         ->whereIn('role', self::CREATABLE_ROLES[self::ROLE_BRANCH_MANAGER] ?? []);
+                ->whereIn('role', self::CREATABLE_ROLES[self::ROLE_BRANCH_MANAGER] ?? []);
         }
 
         return $query->whereRaw('1 = 0');
@@ -391,11 +424,30 @@ class User extends Authenticatable
      |  Role Helpers
      ========================================================= */
 
-    public function hasRole(string $role): bool    { return $this->role === $role; }
-    public function hasAnyRole(array $roles): bool { return in_array($this->role, $roles, true); }
-    public function isSuperAdmin(): bool           { return $this->hasRole(self::ROLE_SUPER_ADMIN); }
-    public function isAdmin(): bool                { return $this->hasRole(self::ROLE_ADMIN); }
-    public function isBranchManager(): bool        { return $this->hasRole(self::ROLE_BRANCH_MANAGER); }
+    public function hasRole(string $role): bool
+    {
+        return $this->role === $role;
+    }
+
+    public function hasAnyRole(array $roles): bool
+    {
+        return in_array($this->role, $roles, true);
+    }
+
+    public function isSuperAdmin(): bool
+    {
+        return $this->hasRole(self::ROLE_SUPER_ADMIN);
+    }
+
+    public function isAdmin(): bool
+    {
+        return $this->hasRole(self::ROLE_ADMIN);
+    }
+
+    public function isBranchManager(): bool
+    {
+        return $this->hasRole(self::ROLE_BRANCH_MANAGER);
+    }
 
     public function isBranchScoped(): bool
     {
@@ -403,11 +455,31 @@ class User extends Authenticatable
             && ! $this->isSuperAdmin()
             && ! $this->isAdmin();
     }
-    public function isCashier(): bool              { return $this->hasRole(self::ROLE_CASHIER); }
-    public function isAccountant(): bool           { return $this->hasRole(self::ROLE_ACCOUNTANT); }
-    public function isInvestor(): bool             { return $this->hasRole(self::ROLE_INVESTOR); }
-    public function isSalesperson(): bool          { return $this->hasRole(self::ROLE_SALESPERSON); }
-    public function isStockKeeper(): bool          { return $this->hasRole(self::ROLE_STOCK_KEEPER); }
+
+    public function isCashier(): bool
+    {
+        return $this->hasRole(self::ROLE_CASHIER);
+    }
+
+    public function isAccountant(): bool
+    {
+        return $this->hasRole(self::ROLE_ACCOUNTANT);
+    }
+
+    public function isInvestor(): bool
+    {
+        return $this->hasRole(self::ROLE_INVESTOR);
+    }
+
+    public function isSalesperson(): bool
+    {
+        return $this->hasRole(self::ROLE_SALESPERSON);
+    }
+
+    public function isStockKeeper(): bool
+    {
+        return $this->hasRole(self::ROLE_STOCK_KEEPER);
+    }
 
     public function getRoleLabelAttribute(): string
     {

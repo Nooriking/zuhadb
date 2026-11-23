@@ -18,12 +18,12 @@ class ProductBarcode extends Model
         'barcode_type',
         'is_primary',
         'status',
-        'current_stock',   // ← اضافه شد
+        'current_stock',   // added
     ];
 
     protected $casts = [
         'is_primary'    => 'boolean',
-        'current_stock' => 'integer',   // ← اضافه شد
+        'current_stock' => 'integer',   // added
         'created_at'    => 'datetime',
         'updated_at'    => 'datetime',
     ];
@@ -38,7 +38,7 @@ class ProductBarcode extends Model
     }
 
     /* =========================================================
-     |  Scopes (اختیاری، مفید)
+     |  Scopes (optional, useful)
      ========================================================= */
 
     public function scopeActive($query)
@@ -57,7 +57,7 @@ class ProductBarcode extends Model
     }
 
     /* =========================================================
-     |  Helpers (اختیاری)
+     |  Helpers (optional)
      ========================================================= */
 
     public function getIsInStockAttribute(): bool

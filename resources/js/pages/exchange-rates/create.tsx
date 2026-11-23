@@ -34,9 +34,11 @@ const DEFAULT_SOURCES = ['manual', 'market', 'bank', 'other'];
 
 export default function ExchangeRatesCreate({ currencies, sources = DEFAULT_SOURCES, errors: initialErrors }: Props) {
     const { toast } = useToast();
+    const afnId = currencies.find((c) => c.code === 'AFN')?.id;
+    const usdId = currencies.find((c) => c.code === 'USD')?.id;
     const [form, setForm] = useState({
-        from_currency_id: '',
-        to_currency_id: '',
+        from_currency_id: usdId ? String(usdId) : '',
+        to_currency_id: afnId ? String(afnId) : '',
         rate: '',
         effective_at: new Date().toISOString().slice(0, 16),
         source: 'manual',
@@ -93,7 +95,9 @@ export default function ExchangeRatesCreate({ currencies, sources = DEFAULT_SOUR
                     <Card>
                         <CardHeader>
                             <CardTitle>Exchange Rate Information</CardTitle>
-                            <CardDescription>Define the rate between two currencies. Historical rows are preserved when you post a new rate.</CardDescription>
+                            <CardDescription>
+                                Post board rates as foreign → AFN (how many AFN equal 1 USD or 1 AED). Historical rows are preserved when you post a new rate.
+                            </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-6">
                             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -150,7 +154,9 @@ export default function ExchangeRatesCreate({ currencies, sources = DEFAULT_SOUR
                                         className={`font-mono ${errors.rate ? 'border-destructive' : ''}`}
                                     />
                                     {errors.rate && <p className="text-destructive text-sm">{errors.rate}</p>}
-                                    <p className="text-muted-foreground text-xs">1 unit of From = X units of To</p>
+                                    <p className="text-muted-foreground text-xs">
+                                        Example: From USD → To AFN, rate 65 means 1 USD = 65 AFN.
+                                    </p>
                                 </div>
 
                                 <div className="space-y-2">

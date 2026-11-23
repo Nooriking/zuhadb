@@ -16,10 +16,13 @@ export interface NavGroup {
 
 export interface NavItem {
     title: string;
-    url: string;
+    /** Leaf links require a URL; expandable parents may omit it. */
+    url?: string;
     icon?: LucideIcon | null;
     isActive?: boolean;
     module?: string;
+    /** Nested navigation; enables expandable sidebar groups. */
+    children?: NavItem[];
 }
 
 export interface SharedExchangeRates {

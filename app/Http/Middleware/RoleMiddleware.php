@@ -9,7 +9,7 @@ use Symfony\Component\HttpFoundation\Response;
 class RoleMiddleware
 {
     /**
-     * استفاده در routes:
+     * Usage in routes:
      *   ->middleware('role:admin')
      *   ->middleware('role:admin,branch_manager')   // OR
      *
@@ -23,7 +23,7 @@ class RoleMiddleware
             abort(401, 'Unauthenticated.');
         }
 
-        // Super Admin = دسترسی کامل
+        // Super Admin = full access
         if ($user->isSuperAdmin()) {
             return $next($request);
         }
@@ -32,7 +32,7 @@ class RoleMiddleware
             return $next($request);
         }
 
-        // OR — اگر یکی از نقش‌ها را داشت کافی است
+        // OR — having any one of the roles is enough
         if (! $user->hasAnyRole($roles)) {
             abort(403, 'You do not have permission to access this page.');
         }

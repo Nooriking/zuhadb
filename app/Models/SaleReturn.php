@@ -123,22 +123,23 @@ class SaleReturn extends Model
 
     public function scopeNotTrashed($query)
     {
-        return $query->where('trash', false);
+        return $query->where($query->getModel()->getTable().'.trash', false);
     }
 
     public function scopeOnlyTrashed($query)
     {
-        return $query->withoutGlobalScope(\Illuminate\Database\Eloquent\SoftDeletingScope::class)->where('trash', true);
+        return $query->withoutGlobalScope(\Illuminate\Database\Eloquent\SoftDeletingScope::class)
+            ->where($query->getModel()->getTable().'.trash', true);
     }
 
     public function scopeCompleted($query)
     {
-        return $query->where('status', self::STATUS_COMPLETED);
+        return $query->where($query->getModel()->getTable().'.status', self::STATUS_COMPLETED);
     }
 
     public function scopeDraft($query)
     {
-        return $query->where('status', self::STATUS_DRAFT);
+        return $query->where($query->getModel()->getTable().'.status', self::STATUS_DRAFT);
     }
 
     /* =========================================================
@@ -202,7 +203,7 @@ class SaleReturn extends Model
     }
 
     /**
-     * محاسبه اختلاف قرض مشتری قبل و بعد از برگشتی
+     * Calculate customer due reduction before vs after the return
      */
     public function getDueReductionAttribute(): float
     {

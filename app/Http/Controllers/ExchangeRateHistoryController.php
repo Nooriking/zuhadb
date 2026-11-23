@@ -143,7 +143,7 @@ class ExchangeRateHistoryController extends Controller
     }
 
     /* =========================================================
-     |  QUICK STORE — ثبت سریع نرخ امروز (برای داشبورد)
+     |  QUICK STORE — quickly record today's rate (for dashboard)
      ========================================================= */
 
     public function quickStore(Request $request): RedirectResponse

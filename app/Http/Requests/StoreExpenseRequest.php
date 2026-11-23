@@ -23,10 +23,27 @@ class StoreExpenseRequest extends FormRequest
             'branch_id' => ['required', 'integer', 'exists:branches,id'],
             'title' => SafeData::title(true),
             'category' => ['required', Rule::in(array_keys(Expense::CATEGORIES))],
-            'amount_afn' => SafeData::money(true, 0.01),
+            'currency_id' => [
+                'required',
+                'integer',
+                Rule::exists('currencies', 'id')->where(
+                    fn ($q) => $q->where('trash', false)->where('status', 'active')->whereNull('deleted_at')
+                ),
+            ],
+            'amount' => SafeData::money(true, 0.01),
             'expense_date' => ['required', 'date'],
             'payment_method' => ['required', Rule::in(array_keys(Expense::PAYMENT_METHODS))],
             'description' => SafeData::plainText(SafeData::NOTES_MAX),
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'currency_id.required' => 'Select a currency.',
+            'currency_id.exists' => 'The selected currency is invalid or inactive.',
+            'amount.required' => 'Enter the expense amount.',
+            'amount.min' => 'Expense amount must be greater than zero.',
         ];
     }
 }

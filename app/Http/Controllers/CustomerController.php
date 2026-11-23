@@ -295,7 +295,7 @@ class CustomerController extends Controller
     }
 
     /* =========================================================
-     |  RECEIVE PAYMENT — پرداخت قرض بدون خرید جدید
+     |  RECEIVE PAYMENT — collect debt without a new purchase
      ========================================================= */
 
     public function receivePayment(Request $request, Customer $customer): RedirectResponse

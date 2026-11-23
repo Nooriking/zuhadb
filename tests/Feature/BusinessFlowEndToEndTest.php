@@ -187,22 +187,22 @@ class BusinessFlowEndToEndTest extends TestCase
         $this->assertNotNull($variant->product);
         $this->assertEquals(100, $variant->volume_ml);
 
-        $this->assertNotNull($batch, 'Batch باید ساخته شود');
+        $this->assertNotNull($batch, 'Batch must be created');
         $this->assertEquals(10, $batch->quantity);
         $this->assertEquals(10, $batch->remaining_quantity);
         $this->assertEquals($this->afn->id, $batch->purchase_currency_id);
         // purchase_amount_currency = line total (unit × qty)
         $this->assertEquals(70000, (float) $batch->purchase_amount_currency);
         $this->assertEquals(7000, (float) $batch->unit_cost_currency);
-        $this->assertEquals(1.0, (float) $batch->exchange_rate, 'نرخ AFN→AFN باید 1 باشد');
+        $this->assertEquals(1.0, (float) $batch->exchange_rate, 'AFN→AFN rate must be 1');
         $this->assertEquals(7000, (float) $batch->unit_cost_afn);
         $this->assertEquals(70000, round((float) $batch->unit_cost_afn * (int) $batch->quantity, 2));
         $this->assertEquals(10000, (float) $batch->sale_price_afn);
         $this->assertEquals(3000, (float) $batch->store_profit_per_unit_afn);
-        $this->assertNotNull($batch->investment_id, 'Batch باید به investment وصل باشد');
+        $this->assertNotNull($batch->investment_id, 'Batch must be linked to an investment');
 
         $investment = Investment::where('investor_id', $this->investorAhmad->id)->first();
-        $this->assertNotNull($investment, 'Investment باید ساخته شود');
+        $this->assertNotNull($investment, 'Investment must be created');
         $this->assertEquals($this->afn->id, $investment->currency_id);
         $this->assertEquals(70000, (float) $investment->amount_currency);
         $this->assertEquals(70000, (float) $investment->amount_afn);
@@ -213,7 +213,7 @@ class BusinessFlowEndToEndTest extends TestCase
         $tx = InvestorTransaction::where('investor_id', $this->investorAhmad->id)
             ->where('type', 'goods_deposit')
             ->first();
-        $this->assertNotNull($tx, 'goods_deposit باید ثبت شود');
+        $this->assertNotNull($tx, 'goods_deposit must be recorded');
         $this->assertEquals($investment->id, $tx->investment_id);
         $this->assertEquals(70000, (float) $tx->amount_afn);
         $this->assertEquals('capital', $tx->balance_type);
@@ -223,14 +223,14 @@ class BusinessFlowEndToEndTest extends TestCase
             ->first();
         // Wallet row may be created for ledger snapshot, but goods do not inflate cash capital.
         if ($wallet) {
-            $this->assertEquals(0, (float) $wallet->capital_balance_afn, 'کالای سرمایه‌گذار نباید موجودی نقدی wallet را افزایش دهد');
+            $this->assertEquals(0, (float) $wallet->capital_balance_afn, 'Investor goods must not increase wallet cash balance');
             $this->assertEquals(0, (float) $wallet->profit_balance_afn);
         }
 
         $inventory = Inventory::where('variant_id', $variant->id)
             ->where('branch_id', $this->branch->id)
             ->first();
-        $this->assertNotNull($inventory, 'Inventory باید ساخته شود');
+        $this->assertNotNull($inventory, 'Inventory must be created');
         $this->assertEquals(10, $inventory->quantity);
         $this->assertEquals(10, $inventory->available_quantity);
         $this->assertEquals(7000, (float) $inventory->average_cost_afn);
@@ -238,7 +238,7 @@ class BusinessFlowEndToEndTest extends TestCase
         $invTx = InventoryTransaction::where('variant_id', $variant->id)
             ->where('type', 'purchase')
             ->first();
-        $this->assertNotNull($invTx, 'inventory_transaction باید ثبت شود');
+        $this->assertNotNull($invTx, 'inventory_transaction must be recorded');
         $this->assertEquals(10, $invTx->quantity);
         $this->assertEquals(0, $invTx->before_quantity);
         $this->assertEquals(10, $invTx->after_quantity);
@@ -257,7 +257,7 @@ class BusinessFlowEndToEndTest extends TestCase
             salePriceAfn: 1120000 * 1.5, // sale > cost
         );
 
-        $this->assertEquals(56000, (float) $batch->exchange_rate, 'exchange_rate باید از exchange_rates خوانده شود');
+        $this->assertEquals(56000, (float) $batch->exchange_rate, 'exchange_rate must be read from exchange_rates');
         $this->assertEquals($this->usd->id, $batch->purchase_currency_id);
         $this->assertEquals(100, (float) $batch->purchase_amount_currency, '5 * 20 = 100 USD line');
         $this->assertEquals(20, (float) $batch->unit_cost_currency);
@@ -346,7 +346,7 @@ class BusinessFlowEndToEndTest extends TestCase
         ], $this->admin);
 
         $inventory = Inventory::where('variant_id', $variant->id)->first();
-        $this->assertEquals(7, $inventory->available_quantity, 'موجودی از 10 به 7 کاهش یابد');
+        $this->assertEquals(7, $inventory->available_quantity, 'Stock should drop from 10 to 7');
 
         $batch->refresh();
         $this->assertEquals(7, $batch->remaining_quantity);
@@ -354,7 +354,7 @@ class BusinessFlowEndToEndTest extends TestCase
         $profitTx = InvestorTransaction::where('investor_id', $this->investorAhmad->id)
             ->where('type', 'profit_earned')
             ->first();
-        $this->assertNotNull($profitTx, 'profit_earned باید بعد از فروش ثبت شود');
+        $this->assertNotNull($profitTx, 'profit_earned must be recorded after the sale');
         $this->assertEquals(3000, (float) $profitTx->amount_afn, '3 × 1000 PPU');
 
         $wallet = InvestorWalletBalance::where('investor_id', $this->investorAhmad->id)
@@ -440,7 +440,7 @@ class BusinessFlowEndToEndTest extends TestCase
         });
 
         $wallet->refresh();
-        $this->assertEquals(2000, (float) $wallet->profit_balance_afn, 'سود از 5000 به 2000 کاهش یابد');
+        $this->assertEquals(2000, (float) $wallet->profit_balance_afn, 'Profit should drop from 5000 to 2000');
 
         $tx = InvestorTransaction::where('investor_id', $this->investorAhmad->id)
             ->where('type', 'profit_withdrawn')

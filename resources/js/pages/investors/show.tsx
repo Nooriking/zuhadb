@@ -1,232 +1,182 @@
-﻿// resources/js/pages/investors/show.tsx
-
-import CurrencySectionCards, {
-    type CurrencySectionMetric,
-    type ExchangeValuation,
-} from '@/components/investors/currency-section-cards';
-import { MoneyField } from '@/components/money-field';
+﻿import { MoneyField } from '@/components/money-field';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { useExchange } from '@/hooks/useExchange';
 import AppLayout from '@/layouts/app-layout';
 import { defaultCurrencyId, type CatalogCurrency } from '@/lib/currencies';
-import { formatMoney } from '@/lib/money';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
-import { ArrowLeft, Banknote, Calendar, Edit, Mail, MapPin, Package, Phone, TrendingUp, User as UserIcon, Wallet } from 'lucide-react';
-import { useState } from 'react';
+import type { LucideIcon } from 'lucide-react';
+import { ArrowLeft, Package, PiggyBank, TrendingUp, Wallet } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
 
-type MoneyCurrency = { id?: number; code: string; name?: string; symbol: string | null; decimal_places?: number } | null;
+type Tri = { afn: number; usd: number | null; aed: number | null };
 
-interface Wallet {
+type InvestorProfile = {
     id: number;
-    capital_balance_currency: string | null;
-    capital_balance_afn: string;
-    profit_balance_currency: string | null;
-    profit_balance_afn: string;
-    total_invested_afn: string;
-    total_profit_earned_afn: string;
-    total_withdrawn_afn: string;
-    last_transaction_at: string | null;
-    currency: MoneyCurrency;
-}
-
-interface Investment {
-    id: number;
-    investment_number: string;
-    capital_amount_currency: string | null;
-    capital_amount_afn: string;
-    available_amount_afn?: string;
-    allocated_amount_afn?: string;
-    profit_amount_currency?: string | null;
-    profit_amount_afn: string;
-    withdrawn_amount_afn?: string;
-    source_type?: string | null;
-    exchange_rate?: string | null;
-    investment_date: string;
-    status: string;
-    currency: MoneyCurrency;
-    currency_code?: string | null;
-    currency_symbol?: string | null;
-}
-
-interface Withdrawal {
-    id: number;
-    withdrawal_number: string;
-    type: 'profit' | 'capital';
-    amount_currency: string | null;
-    amount_afn: string;
-    status: 'pending' | 'approved' | 'paid' | 'rejected';
-    withdrawal_date: string;
-    currency: MoneyCurrency;
-    exchange_rate?: string | null;
-}
-
-interface Transaction {
-    id: number;
-    transaction_number: string;
-    type: string;
-    amount_currency?: string | null;
-    amount_afn: string;
-    balance_type: 'capital' | 'profit';
-    description: string | null;
-    transaction_date: string;
-    currency: MoneyCurrency;
-    exchange_rate?: string | null;
-}
-
-interface ProfitEntry {
-    id: number;
-    profit_amount_currency: string | null;
-    profit_amount_afn: string;
-    status: string;
-    entry_type?: string | null;
-    earned_at: string | null;
-    paid_at: string | null;
-    sale_id?: number | null;
-    sale?: { id: number; invoice_number: string | null; sale_date?: string | null } | null;
-    currency: MoneyCurrency;
-    exchange_rate?: string | null;
-}
-
-interface Batch {
-    id: number;
-    batch_code: string;
-    quantity: number;
-    remaining_quantity: number;
-    unit_cost_afn: string;
-    profit_per_unit_afn: string;
-    status: string;
-    received_date: string;
-    variant: {
-        id: number;
-        name: string | null;
-        product: { id: number; name: string } | null;
-    } | null;
-}
-
-interface Investor {
-    id: number;
-    full_name: string;
-    phone: string | null;
+    name: string;
     email: string | null;
-    address: string | null;
-    notes: string | null;
-    status: 'active' | 'inactive';
-    user: { id: number; name: string; email: string } | null;
-    creator: { id: number; name: string; email: string } | null;
-    wallet: Wallet | null;
-    investments: Investment[];
-    transactions: Transaction[];
-    withdrawals: Withdrawal[];
-    profit_entries?: ProfitEntry[];
-    batches: Batch[];
-    created_at: string;
-    updated_at: string;
-}
+    phone: string | null;
+    status: string;
+    created_at: string | null;
+};
 
-interface CurrencyBucket {
+type Totals = {
+    capital_afn: number;
+    profit_afn: number;
+    invested_afn: number;
+    withdrawn_afn: number;
+};
+
+type Inventory = {
+    quantity: number;
+    cost_afn: number;
+    sale_value_afn: number;
+    batch_count: number;
+    potential_profit_afn: number;
+};
+
+type WalletRow = {
     currency_code: string;
     currency_symbol: string | null;
-    decimal_places: number;
-    original_total: number;
-    ledger_afn: number;
-}
+    capital_currency: number;
+    capital_afn: number;
+    profit_currency: number;
+    profit_afn: number;
+};
 
-interface FundingSummary {
-    contributed_by_currency: CurrencyBucket[];
-    unallocated_by_currency: CurrencyBucket[];
-    current_balance_afn: number;
-    reporting_currency: string;
-    reporting_note: string;
-}
-
-interface FundedPurchase {
+type InvestmentRow = {
     id: number;
-    purchase_date: string | null;
-    invoice_number: string | null;
-    product_name: string;
-    variant_name: string | null;
-    quantity: number;
-    remaining_quantity: number;
-    unit_cost_afn: number;
-    line_total_afn: number;
-    original_currency: string | null;
-    original_currency_symbol: string | null;
-    original_line_amount: number | null;
-    exchange_rate: number | null;
-    supplier_name: string | null;
-    link_type: string;
-    investment_number: string | null;
-    allocated_amount_afn: number | null;
-    allocation_status: 'allocated' | 'unallocated';
-}
+    currency_code: string | null;
+    exchange_rate: number;
+    amount_currency: number;
+    amount_afn: number;
+    investment_date: string | null;
+    status: string;
+    batches_count: number;
+};
 
-interface Props {
-    investor: Investor;
-    stats: {
-        total_investments: number;
-        active_investments: number;
-        total_transactions: number;
-        total_withdrawals: number;
-        total_batches: number;
-        active_batches: number;
-        funded_purchases?: number;
-        realized_profit_afn?: number;
-        paid_profit_afn?: number | string;
-        pending_profit_afn?: number | string;
-        cash_capital_afn?: number | string;
-        goods_contribution_afn?: number | string;
-        goods_held_afn?: number | string;
-        goods_sold_afn?: number | string;
-        has_cash_capital?: boolean;
-        is_goods_investor?: boolean;
-        active_goods_value_afn?: number;
-        active_goods_count?: number;
-        available_cash_afn?: number;
-    };
-    funding?: FundingSummary;
-    funded_purchases?: FundedPurchase[];
+type TransactionRow = {
+    id: number;
+    date: string | null;
+    type: string;
+    currency_code: string | null;
+    amount_afn: number;
+    balance_after_afn: number;
+    description: string | null;
+};
+
+type WithdrawalRow = {
+    id: number;
+    withdrawal_number: string;
+    type: string;
+    currency_code: string | null;
+    amount_afn: number;
+    withdrawal_date: string | null;
+    status: string;
+};
+
+type Props = {
+    investor: InvestorProfile;
+    totals: Totals;
+    inventory: Inventory;
+    walletByCurrency: WalletRow[];
+    investments: InvestmentRow[];
+    transactions: TransactionRow[];
+    withdrawals: WithdrawalRow[];
     currencies?: CatalogCurrency[];
-    sourceTypes?: Record<string, string>;
-    currencySections?: Record<string, CurrencySectionMetric> | null;
-    exchangeValuation?: ExchangeValuation | null;
-    multiCurrencyLegacy?: {
-        profit_afn_without_currency?: string | number;
-        withdrawals_afn_without_currency?: string | number;
-        purchases_without_currency?: number;
-        note?: string;
-    } | null;
-    multiCurrencyLimitations?: string[];
-}
+};
 
-const breadcrumbs = (investor: Investor): BreadcrumbItem[] => [
+const breadcrumbs = (investor: InvestorProfile): BreadcrumbItem[] => [
     { title: 'Dashboard', href: '/dashboard' },
     { title: 'Investors', href: '/investors' },
-    { title: investor.full_name, href: `/investors/${investor.id}` },
+    { title: investor.name, href: `/investors/${investor.id}` },
 ];
+
+const nf = (n: number, digits = 2) =>
+    n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
 const formatDate = (date: string | null) => {
     if (!date) return '—';
     return new Date(date).toLocaleDateString('en-US', {
         year: 'numeric',
-        month: 'long',
+        month: 'short',
         day: 'numeric',
     });
 };
 
-const getStatusBadge = (status: string) => {
+const typeLabel = (type: string) =>
+    type
+        .split('_')
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ');
+
+function useTriFromAfn(afnAmount: number): Tri {
+    const { usdToAfn, aedToAfn } = useExchange();
+    return {
+        afn: afnAmount,
+        usd: usdToAfn && usdToAfn > 0 ? afnAmount / usdToAfn : null,
+        aed: aedToAfn && aedToAfn > 0 ? afnAmount / aedToAfn : null,
+    };
+}
+
+/** USD large (blue) on top; AFN + AED smaller grey below. */
+function AmountStack({ afnAmount, size = 'md' }: { afnAmount: number; size?: 'sm' | 'md' | 'lg' }) {
+    const t = useTriFromAfn(afnAmount);
+    const primary =
+        size === 'lg' ? 'text-2xl font-bold' : size === 'sm' ? 'text-sm font-semibold' : 'text-base font-bold';
+
+    return (
+        <div className="min-w-0">
+            <p className={`truncate tabular-nums text-blue-600 dark:text-blue-400 ${primary}`}>
+                {t.usd != null ? `$${nf(t.usd)}` : '—'}
+                <span className="ml-1 text-[10px] font-medium tracking-wide text-blue-400/80 uppercase">USD</span>
+            </p>
+            <p className="mt-0.5 truncate text-[11px] tabular-nums text-zinc-500">
+                AFN {nf(t.afn)} · AED {t.aed != null ? nf(t.aed) : '—'}
+            </p>
+        </div>
+    );
+}
+
+function KpiCard({
+    label,
+    afnAmount,
+    icon: Icon,
+}: {
+    label: string;
+    afnAmount: number;
+    icon: LucideIcon;
+}) {
+    return (
+        <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                    <p className="text-xs font-medium tracking-wide text-zinc-500 uppercase">{label}</p>
+                    <div className="mt-2">
+                        <AmountStack afnAmount={afnAmount} size="lg" />
+                    </div>
+                </div>
+                <div className="rounded-xl bg-zinc-100 p-2.5 text-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
+                    <Icon className="h-5 w-5" />
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function EmptyState() {
+    return <p className="py-8 text-center text-sm text-zinc-500">No data yet</p>;
+}
+
+function StatusBadge({ status }: { status: string }) {
     const map: Record<string, { variant: 'success' | 'outline' | 'destructive' | 'secondary'; label: string }> = {
         active: { variant: 'success', label: 'Active' },
         inactive: { variant: 'outline', label: 'Inactive' },
-        completed: { variant: 'secondary', label: 'Completed' },
-        partially_sold: { variant: 'secondary', label: 'Partially Sold' },
-        fully_sold: { variant: 'secondary', label: 'Fully Sold' },
-        cancelled: { variant: 'destructive', label: 'Cancelled' },
+        closed: { variant: 'secondary', label: 'Closed' },
         pending: { variant: 'outline', label: 'Pending' },
         approved: { variant: 'secondary', label: 'Approved' },
         paid: { variant: 'success', label: 'Paid' },
@@ -234,48 +184,22 @@ const getStatusBadge = (status: string) => {
     };
     const item = map[status] || { variant: 'outline' as const, label: status };
     return <Badge variant={item.variant}>{item.label}</Badge>;
-};
-
-const ledgerAfN = { code: 'AFN', symbol: '؋', decimal_places: 2 };
-
-function originalMoney(
-    amountCurrency: string | number | null | undefined,
-    amountAfn: string | number | null | undefined,
-    currency: MoneyCurrency,
-) {
-    if (currency?.code && amountCurrency !== null && amountCurrency !== undefined && String(amountCurrency) !== '') {
-        return formatMoney(amountCurrency, {
-            code: currency.code,
-            symbol: currency.symbol,
-            decimal_places: currency.decimal_places ?? 2,
-        });
-    }
-
-    return formatMoney(amountAfn ?? 0, ledgerAfN);
 }
+
+type TabId = 'investments' | 'transactions' | 'withdrawals';
 
 export default function InvestorsShow({
     investor,
-    stats,
-    funding,
-    funded_purchases = [],
+    totals,
+    inventory,
+    walletByCurrency,
+    investments,
+    transactions,
+    withdrawals,
     currencies = [],
-    currencySections = null,
-    exchangeValuation = null,
-    multiCurrencyLegacy = null,
-    multiCurrencyLimitations = [],
 }: Props) {
-    const profitEntries = investor.profit_entries ?? [];
-    const money = (
-        amountCurrency: string | number | null | undefined,
-        amountAfn: string | number | null | undefined,
-        currency: MoneyCurrency,
-    ) => originalMoney(amountCurrency, amountAfn, currency);
-    const [activeTab, setActiveTab] = useState<
-        'overview' | 'investments' | 'purchases' | 'withdrawals' | 'profit' | 'batches' | 'transactions'
-    >('overview');
+    const [tab, setTab] = useState<TabId>('investments');
     const [capitalOpen, setCapitalOpen] = useState(false);
-    const [capitalType, setCapitalType] = useState<'cash' | 'goods'>('cash');
     const [capitalForm, setCapitalForm] = useState({
         capital_amount: '',
         currency_id: defaultCurrencyId(currencies),
@@ -285,8 +209,7 @@ export default function InvestorsShow({
     const [capitalErrors, setCapitalErrors] = useState<Record<string, string>>({});
     const [capitalLoading, setCapitalLoading] = useState(false);
 
-    const openCapital = (type: 'cash' | 'goods') => {
-        setCapitalType(type);
+    const openCapital = () => {
         setCapitalErrors({});
         setCapitalForm({
             capital_amount: '',
@@ -304,7 +227,7 @@ export default function InvestorsShow({
         router.post(
             `/investors/${investor.id}/capital`,
             {
-                source_type: capitalType,
+                source_type: 'cash',
                 currency_id: capitalForm.currency_id,
                 capital_amount: capitalForm.capital_amount,
                 investment_date: capitalForm.investment_date,
@@ -324,744 +247,163 @@ export default function InvestorsShow({
         );
     };
 
-    const formatBucket = (bucket: CurrencyBucket) =>
-        formatMoney(bucket.original_total, {
-            code: bucket.currency_code,
-            symbol: bucket.currency_symbol,
-            decimal_places: bucket.decimal_places ?? 2,
-        });
+    const tabs: { id: TabId; label: string; count: number }[] = [
+        { id: 'investments', label: 'Investments', count: investments.length },
+        { id: 'transactions', label: 'Transactions', count: transactions.length },
+        { id: 'withdrawals', label: 'Withdrawals', count: withdrawals.length },
+    ];
 
-    const getInitials = (name: string) => {
-        return name
-            .split(' ')
-            .map((n) => n[0])
-            .slice(0, 2)
-            .join('')
-            .toUpperCase();
-    };
-
-    const walletCurrency = investor.wallet?.currency;
-    const capitalOriginal = investor.wallet?.capital_balance_currency;
-    const profitOriginal = investor.wallet?.profit_balance_currency;
-    const sameWalletCurrency = Boolean(walletCurrency?.code && capitalOriginal != null && profitOriginal != null);
-    const totalOriginal = sameWalletCurrency ? Number(capitalOriginal) + Number(profitOriginal) : null;
-    const totalLedgerAfn =
-        parseFloat(investor.wallet?.capital_balance_afn || '0') + parseFloat(investor.wallet?.profit_balance_afn || '0');
-    const totalBalance = totalLedgerAfn;
+    const hasInventory = inventory.batch_count > 0 || inventory.quantity > 0;
+    const hasWallet = walletByCurrency.length > 0;
 
     return (
         <AppLayout breadcrumbs={breadcrumbs(investor)}>
-            <Head title={`View ${investor.full_name}`} />
+            <Head title={investor.name} />
 
-            <div className="flex flex-col gap-6 p-6">
-                {/* Header */}
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex items-center gap-4">
-                        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-black text-xl font-bold text-white">
-                            {getInitials(investor.full_name)}
-                        </div>
+            <div className="mx-auto flex max-w-6xl flex-col gap-6 p-6">
+                {/* ─── 1. Profile ─── */}
+                <section className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="flex items-start gap-4">
+                        <Link
+                            href="/investors"
+                            className="mt-1 rounded-lg border border-zinc-200 p-2 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
+                        >
+                            <ArrowLeft className="h-4 w-4" />
+                        </Link>
                         <div>
-                            <div className="flex flex-wrap items-center gap-3">
-                                <h1 className="text-2xl font-bold tracking-tight">{investor.full_name}</h1>
-                                {getStatusBadge(investor.status)}
+                            <div className="flex flex-wrap items-center gap-2">
+                                <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">{investor.name}</h1>
+                                <StatusBadge status={investor.status} />
                             </div>
-                            <p className="text-muted-foreground mt-1 text-sm">
-                                Investor user account — identity from Users module
+                            <p className="mt-1 text-sm text-zinc-500">
+                                {[investor.phone, investor.email].filter(Boolean).join(' · ') || 'No contact info'}
                             </p>
+                            {investor.created_at ? (
+                                <p className="mt-0.5 text-xs text-zinc-400">Since {formatDate(investor.created_at)}</p>
+                            ) : null}
                         </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                        <Link href={`/users/${investor.id}/edit`}>
-                            <Button variant="outline" className="gap-2">
-                                <Edit className="h-4 w-4" /> Edit Identity
-                            </Button>
-                        </Link>
-                        <Button className="gap-2" onClick={() => openCapital('cash')}>
-                            <Wallet className="h-4 w-4" /> Add Cash Capital
+                        <Button variant="outline" asChild>
+                            <Link href={`/users/${investor.id}/edit`}>Edit</Link>
                         </Button>
-                        <Button variant="outline" className="gap-2" onClick={() => openCapital('goods')}>
-                            <Package className="h-4 w-4" /> Add Goods Contribution
-                        </Button>
-                        <Link href={`/products/receive?investor_id=${investor.id}`}>
-                            <Button variant="outline" className="gap-2">
-                                <Package className="h-4 w-4" /> Receive Investor Goods
-                            </Button>
-                        </Link>
-                        <Link href={`/investor-transactions/by-investor/${investor.id}?type=profit_earned`}>
-                            <Button variant="outline">Profit</Button>
-                        </Link>
-                        <Link href={`/investor-transactions/by-investor/${investor.id}`}>
-                            <Button variant="outline">Ledger</Button>
-                        </Link>
-                        <Link href={`/investor-withdrawals/create?investor_id=${investor.id}`}>
-                            <Button variant="outline" className="gap-2">
-                                <Banknote className="h-4 w-4" /> New Withdrawal
-                            </Button>
-                        </Link>
-                        {totalBalance > 0 && (
-                            <Button
-                                className="gap-2"
-                                onClick={() => {
-                                    if (!window.confirm('Pay this investor their full balance, print the receipt, and set the account to zero?')) return;
-                                    router.post(`/investors/${investor.id}/settle`);
-                                }}
-                            >
-                                <Banknote className="h-4 w-4" /> Pay out and receipt
-                            </Button>
-                        )}
-                        <Link href="/investors">
-                            <Button variant="outline" className="gap-2">
-                                <ArrowLeft className="h-4 w-4" /> Back
-                            </Button>
-                        </Link>
+                        {currencies.length > 0 ? (
+                            <Button onClick={openCapital}>Add capital</Button>
+                        ) : null}
                     </div>
-                </div>
+                </section>
 
-                {/* Wallet Cards */}
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-                    <div className="rounded-lg border bg-white p-6 shadow-sm">
-                        <div className="flex items-center justify-between">
-                            <p className="text-muted-foreground text-xs">Capital Balance</p>
-                            <Wallet className="h-4 w-4 text-blue-500" />
-                        </div>
-                        <p className="mt-1 text-2xl font-bold text-blue-600">
-                            {money(investor.wallet?.capital_balance_currency, investor.wallet?.capital_balance_afn || 0, walletCurrency)}
-                        </p>
-                        <p className="text-muted-foreground mt-1 text-xs">
-                            Ledger AFN: {formatMoney(investor.wallet?.total_invested_afn || 0, ledgerAfN)} invested
-                        </p>
-                    </div>
-                    <div className="rounded-lg border bg-white p-6 shadow-sm">
-                        <div className="flex items-center justify-between">
-                            <p className="text-muted-foreground text-xs">Profit Balance</p>
-                            <TrendingUp className="h-4 w-4 text-green-500" />
-                        </div>
-                        <p className="mt-1 text-2xl font-bold text-green-600">
-                            {money(investor.wallet?.profit_balance_currency, investor.wallet?.profit_balance_afn || 0, walletCurrency)}
-                        </p>
-                        <p className="text-muted-foreground mt-1 text-xs">
-                            Ledger AFN earned: {formatMoney(investor.wallet?.total_profit_earned_afn || 0, ledgerAfN)}
-                        </p>
-                    </div>
-                    <div className="rounded-lg border bg-white p-6 shadow-sm">
-                        <div className="flex items-center justify-between">
-                            <p className="text-muted-foreground text-xs">Withdrawn</p>
-                            <Banknote className="h-4 w-4 text-orange-500" />
-                        </div>
-                        <p className="mt-1 text-2xl font-bold text-orange-600">
-                            {formatMoney(investor.wallet?.total_withdrawn_afn || 0, ledgerAfN)}
-                        </p>
-                        <p className="text-muted-foreground mt-1 text-xs">Shown in original ledger currency (AFN)</p>
-                    </div>
-                    <div className="rounded-lg border bg-white p-6 shadow-sm">
-                        <div className="flex items-center justify-between">
-                            <p className="text-muted-foreground text-xs">Total Balance</p>
-                            <DollarSignIcon />
-                        </div>
-                        <p className="mt-1 text-2xl font-bold text-purple-600">
-                            {totalOriginal !== null && walletCurrency
-                                ? formatMoney(totalOriginal, {
-                                      code: walletCurrency.code,
-                                      symbol: walletCurrency.symbol,
-                                      decimal_places: walletCurrency.decimal_places ?? 2,
-                                  })
-                                : formatMoney(totalLedgerAfn, ledgerAfN)}
-                        </p>
-                        <p className="text-muted-foreground mt-1 text-xs">
-                            {totalOriginal !== null
-                                ? `Capital + profit in ${walletCurrency?.code}. Ledger AFN: ${formatMoney(totalLedgerAfn, ledgerAfN)}`
-                                : 'Capital + profit in AFN ledger (same currency). Mixed currencies are not combined.'}
-                        </p>
-                    </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
-                    {[
-                        { label: 'Cash Capital', value: stats.cash_capital_afn },
-                        { label: 'Goods Contribution', value: stats.goods_contribution_afn },
-                        { label: 'Goods Held', value: stats.goods_held_afn },
-                        { label: 'Goods Sold', value: stats.goods_sold_afn },
-                        { label: 'Investor Profit', value: stats.realized_profit_afn },
-                        { label: 'Paid Profit', value: stats.paid_profit_afn },
-                        { label: 'Pending Profit', value: stats.pending_profit_afn },
-                        { label: 'Available Cash', value: stats.available_cash_afn },
-                    ].map((card) => (
-                        <div key={card.label} className="rounded-lg border bg-white p-3 shadow-sm">
-                            <p className="text-muted-foreground text-[11px]">{card.label} (AFN ledger)</p>
-                            <p className="mt-1 font-mono text-sm font-semibold">{formatMoney(card.value ?? 0, ledgerAfN)}</p>
-                        </div>
-                    ))}
-                </div>
-
-                <CurrencySectionCards
-                    currencySections={currencySections}
-                    exchangeValuation={exchangeValuation}
-                    limitations={multiCurrencyLimitations}
-                    legacy={multiCurrencyLegacy}
-                />
-
-                {funding && (
-                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                        <Card>
-                            <CardHeader>
-                                <CardTitle className="text-base">Capital contributed (by currency)</CardTitle>
-                                <CardDescription>{funding.reporting_note}</CardDescription>
-                            </CardHeader>
-                            <CardContent className="space-y-2">
-                                {funding.contributed_by_currency.length === 0 ? (
-                                    <p className="text-muted-foreground text-sm">No capital contributions recorded.</p>
-                                ) : (
-                                    funding.contributed_by_currency.map((bucket) => (
-                                        <div key={bucket.currency_code} className="flex items-center justify-between border-b pb-2 last:border-0">
-                                            <span className="text-sm font-medium">{bucket.currency_code}</span>
+                {/* Wallet by currency + inventory strip (only when data exists) */}
+                {(hasWallet || hasInventory) && (
+                    <section className="grid gap-3 sm:grid-cols-2">
+                        {hasWallet ? (
+                            <div className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+                                <p className="text-xs font-medium tracking-wide text-zinc-500 uppercase">Wallet by currency</p>
+                                <div className="mt-3 space-y-3">
+                                    {walletByCurrency.map((w) => (
+                                        <div
+                                            key={w.currency_code}
+                                            className="flex items-start justify-between gap-3 border-b border-zinc-100 pb-3 last:border-0 last:pb-0 dark:border-zinc-800"
+                                        >
+                                            <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
+                                                {w.currency_code}
+                                            </span>
                                             <div className="text-right">
-                                                <p className="font-mono font-semibold">{formatBucket(bucket)}</p>
-                                                <p className="text-muted-foreground text-xs">
-                                                    Ledger {funding.reporting_currency}: {formatMoney(bucket.ledger_afn, ledgerAfN)}
-                                                </p>
+                                                <p className="text-xs text-zinc-500">Capital</p>
+                                                <AmountStack afnAmount={w.capital_afn} size="sm" />
+                                                <p className="mt-1 text-xs text-zinc-500">Profit</p>
+                                                <AmountStack afnAmount={w.profit_afn} size="sm" />
                                             </div>
                                         </div>
-                                    ))
-                                )}
-                            </CardContent>
-                        </Card>
-                        <Card>
-                            <CardHeader>
-                                <CardTitle className="text-base">Unallocated funds (by currency)</CardTitle>
-                                <CardDescription>
-                                    Available investment capital not yet allocated to purchases. Current balance (AFN ledger):{' '}
-                                    {formatMoney(funding.current_balance_afn, ledgerAfN)}
-                                </CardDescription>
-                            </CardHeader>
-                            <CardContent className="space-y-2">
-                                {funding.unallocated_by_currency.length === 0 ? (
-                                    <p className="text-muted-foreground text-sm">No unallocated cash on active investments.</p>
-                                ) : (
-                                    funding.unallocated_by_currency.map((bucket) => (
-                                        <div key={bucket.currency_code} className="flex items-center justify-between border-b pb-2 last:border-0">
-                                            <span className="text-sm font-medium">{bucket.currency_code}</span>
-                                            <div className="text-right">
-                                                <p className="font-mono font-semibold text-sky-700">{formatBucket(bucket)}</p>
-                                                <p className="text-muted-foreground text-xs">
-                                                    Ledger {funding.reporting_currency}: {formatMoney(bucket.ledger_afn, ledgerAfN)}
-                                                </p>
-                                            </div>
-                                        </div>
-                                    ))
-                                )}
-                                {typeof stats.available_cash_afn === 'number' && (
-                                    <p className="text-muted-foreground pt-2 text-xs">
-                                        Available cash (active pots, AFN): {formatMoney(stats.available_cash_afn, ledgerAfN)}
-                                    </p>
-                                )}
-                            </CardContent>
-                        </Card>
-                    </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ) : null}
+
+                        {hasInventory ? (
+                            <div className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+                                <div className="flex items-center gap-2">
+                                    <Package className="h-4 w-4 text-zinc-500" />
+                                    <p className="text-xs font-medium tracking-wide text-zinc-500 uppercase">Active inventory</p>
+                                </div>
+                                <p className="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
+                                    {inventory.quantity} units · {inventory.batch_count} batches
+                                </p>
+                                <div className="mt-3 grid grid-cols-2 gap-3">
+                                    <div>
+                                        <p className="text-xs text-zinc-500">Cost</p>
+                                        <AmountStack afnAmount={inventory.cost_afn} size="sm" />
+                                    </div>
+                                    <div>
+                                        <p className="text-xs text-zinc-500">Sale value</p>
+                                        <AmountStack afnAmount={inventory.sale_value_afn} size="sm" />
+                                    </div>
+                                    <div className="col-span-2">
+                                        <p className="text-xs text-zinc-500">Potential profit</p>
+                                        <AmountStack afnAmount={inventory.potential_profit_afn} size="sm" />
+                                    </div>
+                                </div>
+                            </div>
+                        ) : null}
+                    </section>
                 )}
 
-                {/* Tabs */}
-                <div className="flex flex-wrap gap-1 border-b">
-                    {[
-                        { key: 'overview', label: 'Overview', icon: UserIcon },
-                        { key: 'investments', label: `Investments (${stats.total_investments})`, icon: Wallet },
-                        { key: 'purchases', label: `Purchases (${funded_purchases.length})`, icon: Package },
-                        { key: 'withdrawals', label: `Withdrawals (${stats.total_withdrawals})`, icon: Banknote },
-                        { key: 'profit', label: `Profit (${profitEntries.length})`, icon: TrendingUp },
-                        { key: 'batches', label: `Batches (${stats.total_batches})`, icon: Package },
-                        { key: 'transactions', label: `Ledger (${stats.total_transactions})`, icon: TrendingUp },
-                    ].map((tab) => {
-                        const Icon = tab.icon;
-                        return (
+                {/* ─── 2. KPI summary (4 cards) ─── */}
+                <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                    <KpiCard label="Capital" afnAmount={totals.capital_afn} icon={Wallet} />
+                    <KpiCard label="Profit" afnAmount={totals.profit_afn} icon={TrendingUp} />
+                    <KpiCard label="Invested" afnAmount={totals.invested_afn} icon={PiggyBank} />
+                    <KpiCard label="Withdrawn" afnAmount={totals.withdrawn_afn} icon={Wallet} />
+                </section>
+
+                {/* ─── 3. Tabs ─── */}
+                <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+                    <div className="flex gap-1 overflow-x-auto border-b border-zinc-100 px-3 pt-3 dark:border-zinc-800">
+                        {tabs.map((t) => (
                             <button
-                                key={tab.key}
-                                onClick={() => setActiveTab(tab.key as any)}
-                                className={`flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
-                                    activeTab === tab.key
-                                        ? 'border-black text-black'
-                                        : 'text-muted-foreground hover:text-foreground border-transparent'
+                                key={t.id}
+                                type="button"
+                                onClick={() => setTab(t.id)}
+                                className={`rounded-t-lg px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors ${
+                                    tab === t.id
+                                        ? 'border-b-2 border-blue-600 text-blue-600'
+                                        : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
                                 }`}
                             >
-                                <Icon className="h-4 w-4" />
-                                {tab.label}
+                                {t.label}
+                                <span className="ml-1.5 text-xs text-zinc-400">({t.count})</span>
                             </button>
-                        );
-                    })}
-                </div>
-
-                {/* Tab: Overview */}
-                {activeTab === 'overview' && (
-                    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-                        {/* Info Card */}
-                        <Card className="lg:col-span-2">
-                            <CardHeader>
-                                <CardTitle>Investor Information</CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-4">
-                                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                                    <div className="flex items-start gap-3">
-                                        <UserIcon className="text-muted-foreground mt-0.5 h-4 w-4" />
-                                        <div>
-                                            <p className="text-muted-foreground text-xs">Full Name</p>
-                                            <p className="font-medium">{investor.full_name}</p>
-                                        </div>
-                                    </div>
-                                    <div className="flex items-start gap-3">
-                                        <Phone className="text-muted-foreground mt-0.5 h-4 w-4" />
-                                        <div>
-                                            <p className="text-muted-foreground text-xs">Phone</p>
-                                            <p className="font-medium" dir="ltr">
-                                                {investor.phone || '—'}
-                                            </p>
-                                        </div>
-                                    </div>
-                                    <div className="flex items-start gap-3">
-                                        <Mail className="text-muted-foreground mt-0.5 h-4 w-4" />
-                                        <div>
-                                            <p className="text-muted-foreground text-xs">Email</p>
-                                            <p className="font-medium">{investor.email || '—'}</p>
-                                        </div>
-                                    </div>
-                                    <div className="flex items-start gap-3">
-                                        <UserIcon className="text-muted-foreground mt-0.5 h-4 w-4" />
-                                        <div>
-                                            <p className="text-muted-foreground text-xs">Created By</p>
-                                            <p className="font-medium">{investor.creator?.name || 'System'}</p>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {investor.address && (
-                                    <>
-                                        <div className="border-t" />
-                                        <div className="flex items-start gap-3">
-                                            <MapPin className="text-muted-foreground mt-0.5 h-4 w-4" />
-                                            <div>
-                                                <p className="text-muted-foreground text-xs">Address</p>
-                                                <p className="mt-0.5 text-sm">{investor.address}</p>
-                                            </div>
-                                        </div>
-                                    </>
-                                )}
-
-                                {investor.notes && (
-                                    <>
-                                        <div className="border-t" />
-                                        <div>
-                                            <p className="text-muted-foreground text-xs">Notes</p>
-                                            <p className="mt-1 text-sm">{investor.notes}</p>
-                                        </div>
-                                    </>
-                                )}
-
-                                <div className="border-t" />
-
-                                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                                    <div className="flex items-start gap-3">
-                                        <Calendar className="text-muted-foreground mt-0.5 h-4 w-4" />
-                                        <div>
-                                            <p className="text-muted-foreground text-xs">Member Since</p>
-                                            <p className="text-sm">{formatDate(investor.created_at)}</p>
-                                        </div>
-                                    </div>
-                                    <div className="flex items-start gap-3">
-                                        <Calendar className="text-muted-foreground mt-0.5 h-4 w-4" />
-                                        <div>
-                                            <p className="text-muted-foreground text-xs">Last Transaction</p>
-                                            <p className="text-sm">{formatDate(investor.wallet?.last_transaction_at || null)}</p>
-                                        </div>
-                                    </div>
-                                </div>
-                            </CardContent>
-                        </Card>
-
-                        {/* Stats Card */}
-                        <Card>
-                            <CardHeader>
-                                <CardTitle>Quick Stats</CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-4">
-                                <div className="flex items-center justify-between border-b pb-3">
-                                    <span className="text-muted-foreground text-sm">Total Investments</span>
-                                    <span className="text-2xl font-bold">{stats.total_investments}</span>
-                                </div>
-                                <div className="flex items-center justify-between border-b pb-3">
-                                    <span className="text-muted-foreground text-sm">Active Investments</span>
-                                    <span className="text-2xl font-bold text-green-600">{stats.active_investments}</span>
-                                </div>
-                                <div className="flex items-center justify-between border-b pb-3">
-                                    <span className="text-muted-foreground text-sm">Total Withdrawals</span>
-                                    <span className="text-2xl font-bold text-orange-600">{stats.total_withdrawals}</span>
-                                </div>
-                                <div className="flex items-center justify-between border-b pb-3">
-                                    <span className="text-muted-foreground text-sm">Active Batches</span>
-                                    <span className="text-2xl font-bold text-blue-600">{stats.active_batches}</span>
-                                </div>
-                                <div className="flex items-center justify-between border-b pb-3">
-                                    <span className="text-muted-foreground text-sm">Transactions</span>
-                                    <span className="text-2xl font-bold">{stats.total_transactions}</span>
-                                </div>
-                                <div className="flex items-center justify-between border-b pb-3">
-                                    <span className="text-muted-foreground text-sm">Funded purchases</span>
-                                    <span className="text-2xl font-bold">{stats.funded_purchases ?? funded_purchases.length}</span>
-                                </div>
-                                <div className="flex items-center justify-between">
-                                    <span className="text-muted-foreground text-sm">Realized profit (AFN)</span>
-                                    <span className="text-2xl font-bold text-green-600">
-                                        {formatMoney(stats.realized_profit_afn ?? 0, ledgerAfN)}
-                                    </span>
-                                </div>
-                                <p className="text-muted-foreground text-xs">
-                                    Realized profit comes only from linked profit entries (sale items), not from capital or purchase spend.
-                                </p>
-                            </CardContent>
-                        </Card>
+                        ))}
                     </div>
-                )}
 
-                {activeTab === 'investments' && (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Investments</CardTitle>
-                            <CardDescription>
-                                Each amount is shown in its original currency. Values in different currencies are not combined.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="p-0">
-                            {investor.investments.length === 0 ? (
-                                <div className="text-muted-foreground p-12 text-center text-sm">No investments yet.</div>
-                            ) : (
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Number</TableHead>
-                                            <TableHead>Date</TableHead>
-                                            <TableHead>Source</TableHead>
-                                            <TableHead className="text-right">Capital</TableHead>
-                                            <TableHead className="text-right">Unallocated</TableHead>
-                                            <TableHead className="text-right">Allocated</TableHead>
-                                            <TableHead className="text-right">Profit</TableHead>
-                                            <TableHead>Status</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {investor.investments.map((inv) => (
-                                            <TableRow key={inv.id}>
-                                                <TableCell className="font-mono text-xs">{inv.investment_number}</TableCell>
-                                                <TableCell className="text-xs">{formatDate(inv.investment_date)}</TableCell>
-                                                <TableCell className="text-xs">{inv.source_type || '—'}</TableCell>
-                                                <TableCell className="text-right font-mono text-sm">
-                                                    {money(inv.capital_amount_currency, inv.capital_amount_afn, inv.currency)}
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono text-sm text-sky-700">
-                                                    {formatMoney(inv.available_amount_afn ?? 0, ledgerAfN)}
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono text-sm">
-                                                    {formatMoney(inv.allocated_amount_afn ?? 0, ledgerAfN)}
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono text-sm">
-                                                    {money(inv.profit_amount_currency, inv.profit_amount_afn, inv.currency)}
-                                                </TableCell>
-                                                <TableCell>{getStatusBadge(inv.status)}</TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            )}
-                        </CardContent>
-                    </Card>
-                )}
-
-                {activeTab === 'purchases' && (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Funded purchases</CardTitle>
-                            <CardDescription>
-                                Only purchases linked by <code>investor_id</code> or an investment purchase allocation are listed. Unlinked stock is
-                                not inferred from dates or amounts.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="p-0">
-                            {funded_purchases.length === 0 ? (
-                                <div className="text-muted-foreground p-12 text-center text-sm">No reliably linked purchases for this investor.</div>
-                            ) : (
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Date</TableHead>
-                                            <TableHead>Product</TableHead>
-                                            <TableHead className="text-center">Qty</TableHead>
-                                            <TableHead className="text-right">Original cost</TableHead>
-                                            <TableHead className="text-right">Ledger AFN</TableHead>
-                                            <TableHead>Supplier / ref</TableHead>
-                                            <TableHead>Link</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {funded_purchases.map((p) => (
-                                            <TableRow key={`${p.link_type}-${p.id}`}>
-                                                <TableCell className="text-xs">{formatDate(p.purchase_date)}</TableCell>
-                                                <TableCell className="text-sm">
-                                                    <div className="font-medium">{p.product_name}</div>
-                                                    {p.variant_name && <div className="text-muted-foreground text-xs">{p.variant_name}</div>}
-                                                </TableCell>
-                                                <TableCell className="text-center font-mono text-xs">
-                                                    {p.remaining_quantity} / {p.quantity}
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono text-xs">
-                                                    {p.original_line_amount != null && p.original_currency
-                                                        ? formatMoney(p.original_line_amount, {
-                                                              code: p.original_currency,
-                                                              symbol: p.original_currency_symbol,
-                                                              decimal_places: 2,
-                                                          })
-                                                        : '—'}
-                                                    {p.exchange_rate != null && (
-                                                        <div className="text-muted-foreground">Rate: {p.exchange_rate}</div>
-                                                    )}
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono text-xs">
-                                                    {formatMoney(p.line_total_afn, ledgerAfN)}
-                                                    {p.allocated_amount_afn != null && (
-                                                        <div className="text-muted-foreground">
-                                                            Allocated: {formatMoney(p.allocated_amount_afn, ledgerAfN)}
-                                                        </div>
-                                                    )}
-                                                </TableCell>
-                                                <TableCell className="text-xs">
-                                                    <div>{p.supplier_name || '—'}</div>
-                                                    <div className="text-muted-foreground font-mono">{p.invoice_number || '—'}</div>
-                                                </TableCell>
-                                                <TableCell>
-                                                    <Badge variant={p.allocation_status === 'allocated' ? 'success' : 'outline'}>
-                                                        {p.link_type === 'allocation'
-                                                            ? `Allocation${p.investment_number ? ` (${p.investment_number})` : ''}`
-                                                            : 'investor_id'}
-                                                    </Badge>
-                                                </TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            )}
-                        </CardContent>
-                    </Card>
-                )}
-
-                {activeTab === 'profit' && (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Realized profit (from sales)</CardTitle>
-                            <CardDescription>
-                                Only profit entries linked to sales/sale items. Capital contributions and purchase spend are not treated as profit.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="p-0">
-                            {profitEntries.length === 0 ? (
-                                <div className="text-muted-foreground p-12 text-center text-sm">No profit entries yet.</div>
-                            ) : (
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Earned</TableHead>
-                                            <TableHead>Type</TableHead>
-                                            <TableHead>Sale</TableHead>
-                                            <TableHead className="text-right">Amount</TableHead>
-                                            <TableHead>Status</TableHead>
-                                            <TableHead>Paid</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {profitEntries.map((entry) => (
-                                            <TableRow key={entry.id}>
-                                                <TableCell className="text-xs">{formatDate(entry.earned_at)}</TableCell>
-                                                <TableCell className="text-xs">{entry.entry_type || 'profit'}</TableCell>
-                                                <TableCell className="text-xs font-mono">
-                                                    {entry.sale?.invoice_number || (entry.sale_id ? `#${entry.sale_id}` : '—')}
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono text-sm">
-                                                    {money(entry.profit_amount_currency, entry.profit_amount_afn, entry.currency)}
-                                                </TableCell>
-                                                <TableCell>{getStatusBadge(entry.status)}</TableCell>
-                                                <TableCell className="text-xs">{formatDate(entry.paid_at)}</TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            )}
-                        </CardContent>
-                    </Card>
-                )}
-
-                {/* Tab: Withdrawals */}
-                {activeTab === 'withdrawals' && (
-                    <Card>
-                        <CardHeader className="flex flex-row items-center justify-between">
-                            <div>
-                                <CardTitle>Withdrawals</CardTitle>
-                                <CardDescription>Recent withdrawal requests for this investor.</CardDescription>
-                            </div>
-                            <Link href={`/investor-withdrawals/create?investor_id=${investor.id}`}>
-                                <Button size="sm" className="gap-2">
-                                    <Banknote className="h-4 w-4" /> New Withdrawal
-                                </Button>
-                            </Link>
-                        </CardHeader>
-                        <CardContent className="p-0">
-                            {investor.withdrawals.length === 0 ? (
-                                <div className="text-muted-foreground p-12 text-center text-sm">No withdrawals yet.</div>
-                            ) : (
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Number</TableHead>
-                                            <TableHead>Date</TableHead>
-                                            <TableHead>Type</TableHead>
-                                            <TableHead className="text-right">Amount</TableHead>
-                                            <TableHead>Status</TableHead>
-                                            <TableHead className="text-right">Actions</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {investor.withdrawals.map((w) => (
-                                            <TableRow key={w.id}>
-                                                <TableCell className="font-mono text-xs">{w.withdrawal_number}</TableCell>
-                                                <TableCell className="text-xs">{formatDate(w.withdrawal_date)}</TableCell>
-                                                <TableCell>
-                                                    <Badge variant={w.type === 'profit' ? 'success' : 'secondary'}>
-                                                        {w.type === 'profit' ? 'Profit' : 'Capital'}
-                                                    </Badge>
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono font-semibold">
-                                                    {money(w.amount_currency, w.amount_afn, w.currency)}
-                                                </TableCell>
-                                                <TableCell>{getStatusBadge(w.status)}</TableCell>
-                                                <TableCell className="text-right">
-                                                    <Link href={`/investor-withdrawals/${w.id}`}>
-                                                        <Button variant="ghost" size="sm">
-                                                            View
-                                                        </Button>
-                                                    </Link>
-                                                </TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            )}
-                        </CardContent>
-                    </Card>
-                )}
-
-                {/* Tab: Batches */}
-                {activeTab === 'batches' && (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Batches</CardTitle>
-                            <CardDescription>Inventory batches owned by this investor. Unit costs are stored in AFN ledger.</CardDescription>
-                        </CardHeader>
-                        <CardContent className="p-0">
-                            {investor.batches.length === 0 ? (
-                                <div className="text-muted-foreground p-12 text-center text-sm">No active batches.</div>
-                            ) : (
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Batch Code</TableHead>
-                                            <TableHead>Product</TableHead>
-                                            <TableHead className="text-center">Qty / Remaining</TableHead>
-                                            <TableHead className="text-right">Unit Cost</TableHead>
-                                            <TableHead className="text-right">Profit/Unit</TableHead>
-                                            <TableHead>Received</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {investor.batches.map((b) => (
-                                            <TableRow key={b.id}>
-                                                <TableCell className="font-mono text-xs">{b.batch_code}</TableCell>
-                                                <TableCell className="text-sm">{b.variant?.product?.name || '—'}</TableCell>
-                                                <TableCell className="text-center font-mono text-xs">
-                                                    {b.remaining_quantity} / {b.quantity}
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono text-xs">
-                                                    {formatMoney(b.unit_cost_afn, ledgerAfN)}
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono text-xs text-blue-600">
-                                                    {formatMoney(b.profit_per_unit_afn, ledgerAfN)}
-                                                </TableCell>
-                                                <TableCell className="text-xs">{formatDate(b.received_date)}</TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            )}
-                        </CardContent>
-                    </Card>
-                )}
-
-                {/* Tab: Transactions */}
-                {activeTab === 'transactions' && (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Recent Transactions</CardTitle>
-                            <CardDescription>Latest wallet transactions for this investor.</CardDescription>
-                        </CardHeader>
-                        <CardContent className="p-0">
-                            {investor.transactions.length === 0 ? (
-                                <div className="text-muted-foreground p-12 text-center text-sm">No transactions yet.</div>
-                            ) : (
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Number</TableHead>
-                                            <TableHead>Date</TableHead>
-                                            <TableHead>Type</TableHead>
-                                            <TableHead>Balance</TableHead>
-                                            <TableHead className="text-right">Amount</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {investor.transactions.map((t) => (
-                                            <TableRow key={t.id}>
-                                                <TableCell className="font-mono text-xs">{t.transaction_number}</TableCell>
-                                                <TableCell className="text-xs">{formatDate(t.transaction_date)}</TableCell>
-                                                <TableCell>
-                                                    <Badge variant="outline">{t.type.replace(/_/g, ' ')}</Badge>
-                                                </TableCell>
-                                                <TableCell>
-                                                    <Badge variant={t.balance_type === 'profit' ? 'success' : 'secondary'}>{t.balance_type}</Badge>
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono text-sm font-semibold">
-                                                    {money(t.amount_currency, t.amount_afn, t.currency)}
-                                                </TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            )}
-                        </CardContent>
-                    </Card>
-                )}
+                    <div className="p-4">
+                        {tab === 'investments' && (
+                            <InvestmentsTable rows={investments} />
+                        )}
+                        {tab === 'transactions' && (
+                            <TransactionsTable rows={transactions} />
+                        )}
+                        {tab === 'withdrawals' && (
+                            <WithdrawalsTable rows={withdrawals} />
+                        )}
+                    </div>
+                </section>
             </div>
 
             <Dialog open={capitalOpen} onOpenChange={setCapitalOpen}>
                 <DialogContent>
                     <DialogHeader>
-                        <DialogTitle>
-                            {capitalType === 'cash' ? 'Add Cash Capital' : 'Add Goods Contribution'}
-                        </DialogTitle>
-                        <DialogDescription>
-                            Records an internal capital pot for {investor.full_name}. Historical FX snapshots are preserved on
-                            the investment row.
-                        </DialogDescription>
+                        <DialogTitle>Add capital</DialogTitle>
+                        <DialogDescription>Record a cash capital deposit for {investor.name}.</DialogDescription>
                     </DialogHeader>
                     <form onSubmit={submitCapital} className="space-y-4">
                         <MoneyField
-                            label={capitalType === 'cash' ? 'Cash amount' : 'Goods value'}
-                            required
-                            amount={capitalForm.capital_amount}
-                            currencyId={capitalForm.currency_id}
+                            label="Amount"
                             currencies={currencies}
-                            onAmountChange={(v) => setCapitalForm((prev) => ({ ...prev, capital_amount: v }))}
-                            onCurrencyChange={(v) => setCapitalForm((prev) => ({ ...prev, currency_id: v }))}
+                            currencyId={String(capitalForm.currency_id)}
+                            amount={capitalForm.capital_amount}
+                            onCurrencyChange={(id) => setCapitalForm((f) => ({ ...f, currency_id: id }))}
+                            onAmountChange={(v) => setCapitalForm((f) => ({ ...f, capital_amount: v }))}
                             error={capitalErrors.capital_amount || capitalErrors.currency_id}
                         />
                         <div className="space-y-2">
@@ -1070,18 +412,15 @@ export default function InvestorsShow({
                                 id="investment_date"
                                 type="date"
                                 value={capitalForm.investment_date}
-                                onChange={(e) => setCapitalForm((prev) => ({ ...prev, investment_date: e.target.value }))}
+                                onChange={(e) => setCapitalForm((f) => ({ ...f, investment_date: e.target.value }))}
                             />
-                            {capitalErrors.investment_date && (
-                                <p className="text-destructive text-xs">{capitalErrors.investment_date}</p>
-                            )}
                         </div>
                         <div className="space-y-2">
-                            <Label htmlFor="capital_notes">Notes</Label>
+                            <Label htmlFor="notes">Notes</Label>
                             <Input
-                                id="capital_notes"
+                                id="notes"
                                 value={capitalForm.notes}
-                                onChange={(e) => setCapitalForm((prev) => ({ ...prev, notes: e.target.value }))}
+                                onChange={(e) => setCapitalForm((f) => ({ ...f, notes: e.target.value }))}
                             />
                         </div>
                         <DialogFooter>
@@ -1099,7 +438,122 @@ export default function InvestorsShow({
     );
 }
 
-// small helper component
-function DollarSignIcon() {
-    return <Wallet className="h-4 w-4 text-purple-500" />;
+function TableShell({ children, empty }: { children: ReactNode; empty: boolean }) {
+    if (empty) return <EmptyState />;
+    return <div className="overflow-x-auto">{children}</div>;
+}
+
+function InvestmentsTable({ rows }: { rows: InvestmentRow[] }) {
+    return (
+        <TableShell empty={rows.length === 0}>
+            <table className="w-full min-w-[640px] text-left text-sm">
+                <thead className="text-xs tracking-wide text-zinc-500 uppercase">
+                    <tr className="border-b border-zinc-100 dark:border-zinc-800">
+                        <th className="py-2 pr-3 font-medium">Date</th>
+                        <th className="py-2 pr-3 font-medium">Amount</th>
+                        <th className="py-2 pr-3 font-medium">Currency</th>
+                        <th className="py-2 pr-3 font-medium">Batches</th>
+                        <th className="py-2 font-medium">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows.map((r) => (
+                        <tr key={r.id} className="border-b border-zinc-50 last:border-0 dark:border-zinc-900">
+                            <td className="py-2.5 pr-3 text-zinc-600">{formatDate(r.investment_date)}</td>
+                            <td className="py-2.5 pr-3">
+                                <AmountStack afnAmount={r.amount_afn} size="sm" />
+                                {r.currency_code && r.currency_code !== 'AFN' ? (
+                                    <p className="mt-0.5 text-[11px] text-zinc-400">
+                                        {nf(r.amount_currency)} {r.currency_code}
+                                        {r.exchange_rate > 0 ? ` @ ${nf(r.exchange_rate, 4)}` : ''}
+                                    </p>
+                                ) : null}
+                            </td>
+                            <td className="py-2.5 pr-3">{r.currency_code ?? '—'}</td>
+                            <td className="py-2.5 pr-3 tabular-nums">{r.batches_count}</td>
+                            <td className="py-2.5">
+                                <StatusBadge status={r.status} />
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </TableShell>
+    );
+}
+
+function TransactionsTable({ rows }: { rows: TransactionRow[] }) {
+    return (
+        <TableShell empty={rows.length === 0}>
+            <table className="w-full min-w-[700px] text-left text-sm">
+                <thead className="text-xs tracking-wide text-zinc-500 uppercase">
+                    <tr className="border-b border-zinc-100 dark:border-zinc-800">
+                        <th className="py-2 pr-3 font-medium">Date</th>
+                        <th className="py-2 pr-3 font-medium">Type</th>
+                        <th className="py-2 pr-3 font-medium">Amount</th>
+                        <th className="py-2 pr-3 font-medium">Balance after</th>
+                        <th className="py-2 font-medium">Note</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows.map((r) => (
+                        <tr key={r.id} className="border-b border-zinc-50 last:border-0 dark:border-zinc-900">
+                            <td className="py-2.5 pr-3 text-zinc-600">{formatDate(r.date)}</td>
+                            <td className="py-2.5 pr-3">
+                                <span className="font-medium text-zinc-800 dark:text-zinc-200">{typeLabel(r.type)}</span>
+                                {r.currency_code ? (
+                                    <span className="ml-1.5 text-xs text-zinc-400">{r.currency_code}</span>
+                                ) : null}
+                            </td>
+                            <td className="py-2.5 pr-3">
+                                <AmountStack afnAmount={r.amount_afn} size="sm" />
+                            </td>
+                            <td className="py-2.5 pr-3">
+                                <AmountStack afnAmount={r.balance_after_afn} size="sm" />
+                            </td>
+                            <td className="max-w-[200px] truncate py-2.5 text-zinc-500">{r.description || '—'}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </TableShell>
+    );
+}
+
+function WithdrawalsTable({ rows }: { rows: WithdrawalRow[] }) {
+    return (
+        <TableShell empty={rows.length === 0}>
+            <table className="w-full min-w-[640px] text-left text-sm">
+                <thead className="text-xs tracking-wide text-zinc-500 uppercase">
+                    <tr className="border-b border-zinc-100 dark:border-zinc-800">
+                        <th className="py-2 pr-3 font-medium">Date</th>
+                        <th className="py-2 pr-3 font-medium">Number</th>
+                        <th className="py-2 pr-3 font-medium">Type</th>
+                        <th className="py-2 pr-3 font-medium">Amount</th>
+                        <th className="py-2 font-medium">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows.map((r) => (
+                        <tr key={r.id} className="border-b border-zinc-50 last:border-0 dark:border-zinc-900">
+                            <td className="py-2.5 pr-3 text-zinc-600">{formatDate(r.withdrawal_date)}</td>
+                            <td className="py-2.5 pr-3 font-medium">{r.withdrawal_number || `#${r.id}`}</td>
+                            <td className="py-2.5 pr-3 capitalize">
+                                {r.type}
+                                {r.currency_code ? (
+                                    <span className="ml-1.5 text-xs text-zinc-400">{r.currency_code}</span>
+                                ) : null}
+                            </td>
+                            <td className="py-2.5 pr-3">
+                                <AmountStack afnAmount={r.amount_afn} size="sm" />
+                            </td>
+                            <td className="py-2.5">
+                                <StatusBadge status={r.status} />
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </TableShell>
+    );
 }

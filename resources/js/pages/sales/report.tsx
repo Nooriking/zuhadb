@@ -68,10 +68,11 @@ interface Summary {
     total_sales: number;
     total_paid: number;
     total_due: number;
-    total_cost: number;
-    total_profit: number;
-    store_profit: number;
-    investor_profit: number;
+    total_discount?: number;
+    total_cost: number | null;
+    total_profit: number | null;
+    store_profit: number | null;
+    investor_profit: number | null;
     count: number;
     customer_count: number;
     total_items: number;
@@ -88,16 +89,18 @@ interface DailySummary {
     total_returns: number;
     gross_sales: number;
     total_sales: number;
+    total_profit: number | null;
     count: number;
 }
 
 interface Props {
     sales: PaginatedSales;
     summary: Summary;
-    byBranch: { branch_id: number; branch_name: string; total_sales: number; total_profit: number; total_due: number; count: number }[];
+    byBranch: { branch_id: number; branch_name: string; total_sales: number; total_profit: number | null; total_due: number; count: number }[];
     byDay: DailySummary[];
     byCustomer: { customer_id: number | null; customer_name: string; total_sales: number; total_due: number; count: number }[];
-    byProduct: { variant_id: number; product_name: string; variant_name: string; total_quantity: number; total_sales: number; total_profit: number }[];
+    byProduct: { variant_id: number; product_name: string; variant_name: string; total_quantity: number; total_sales: number; total_profit: number | null }[];
+    canViewProfit?: boolean;
     filters: {
         search: string | null;
         branch_id: string | null;
@@ -139,6 +142,7 @@ export default function SalesReport({
     byDay,
     byCustomer,
     byProduct,
+    canViewProfit = false,
     filters,
     branches,
     customers,
@@ -216,6 +220,7 @@ export default function SalesReport({
                 net: d.net_sales,
                 returns: d.total_returns,
                 gross: d.gross_sales,
+                profit: d.total_profit ?? 0,
             })),
         [byDay],
     );
@@ -428,15 +433,17 @@ export default function SalesReport({
                             <p className="mt-1 text-2xl font-bold text-red-700">{fmt(summary.total_due)} AFN</p>
                         </CardContent>
                     </Card>
-                    <Card>
-                        <CardContent className="pt-6">
-                            <div className="flex items-center justify-between">
-                                <p className="text-muted-foreground text-xs">Store Profit</p>
-                                <ShoppingBag className="text-muted-foreground h-4 w-4" />
-                            </div>
-                            <p className="mt-1 text-2xl font-bold text-emerald-700">{fmt(summary.store_profit)} AFN</p>
-                        </CardContent>
-                    </Card>
+                    {canViewProfit && summary.store_profit != null && (
+                        <Card>
+                            <CardContent className="pt-6">
+                                <div className="flex items-center justify-between">
+                                    <p className="text-muted-foreground text-xs">Store Profit</p>
+                                    <ShoppingBag className="text-muted-foreground h-4 w-4" />
+                                </div>
+                                <p className="mt-1 text-2xl font-bold text-emerald-700">{fmt(summary.store_profit)} AFN</p>
+                            </CardContent>
+                        </Card>
+                    )}
                     <Card>
                         <CardContent className="pt-6">
                             <div className="flex items-center justify-between">
@@ -452,8 +459,8 @@ export default function SalesReport({
                 {chartData.length > 0 && (
                     <Card>
                         <CardHeader>
-                            <CardTitle className="text-base">Daily Net Sales</CardTitle>
-                            <CardDescription>Net sales over the selected date range</CardDescription>
+                            <CardTitle className="text-base">Daily Sales & Profit</CardTitle>
+                            <CardDescription>Net sales, returns, and profit over the selected date range</CardDescription>
                         </CardHeader>
                         <CardContent className="h-72">
                             <ResponsiveContainer width="100%" height="100%">
@@ -465,6 +472,9 @@ export default function SalesReport({
                                     <Legend />
                                     <Line type="monotone" dataKey="net" name="Net Sales" stroke="#059669" strokeWidth={2} dot={false} />
                                     <Line type="monotone" dataKey="returns" name="Returns" stroke="#d97706" strokeWidth={2} dot={false} />
+                                    {canViewProfit && (
+                                        <Line type="monotone" dataKey="profit" name="Profit" stroke="#2563eb" strokeWidth={2} dot={false} />
+                                    )}
                                 </LineChart>
                             </ResponsiveContainer>
                         </CardContent>
@@ -634,7 +644,7 @@ export default function SalesReport({
                                             <TableHead>Product</TableHead>
                                             <TableHead className="text-center">Qty</TableHead>
                                             <TableHead className="text-right">Sales</TableHead>
-                                            <TableHead className="text-right">Profit</TableHead>
+                                            {canViewProfit && <TableHead className="text-right">Profit</TableHead>}
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -646,7 +656,9 @@ export default function SalesReport({
                                                 </TableCell>
                                                 <TableCell className="text-center font-mono">{row.total_quantity}</TableCell>
                                                 <TableCell className="text-right font-mono">{fmt(row.total_sales)}</TableCell>
-                                                <TableCell className="text-right font-mono">{fmt(row.total_profit)}</TableCell>
+                                                {canViewProfit && (
+                                                    <TableCell className="text-right font-mono">{fmt(row.total_profit ?? 0)}</TableCell>
+                                                )}
                                             </TableRow>
                                         ))}
                                     </TableBody>

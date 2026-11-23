@@ -35,7 +35,7 @@ return new class extends Migration
 
             $table->text('description')->nullable();
 
-            // ❌ image حذف شد
+            // ❌ image removed
 
             // ============================================================
             //  PURCHASE INFORMATION
@@ -56,9 +56,9 @@ return new class extends Migration
                   ->index()
                   ->comment('FK added later via add_supplier_fk_to_products');
 
-            // ❌ currency_id حذف شد
-            // ❌ purchase_number حذف شد
-            // ❌ unit_cost حذف شد
+            // ❌ currency_id removed
+            // ❌ purchase_number removed
+            // ❌ unit_cost removed
 
             $table->string('invoice_number', 100)->nullable()->index();
             $table->date('purchase_date')->nullable()->index();
@@ -78,7 +78,7 @@ return new class extends Migration
             $table->decimal('exchange_rate', 12, 6)->nullable()
                   ->comment('USD to AFN exchange rate');
 
-            // Wholesale pricing (snapshot از variant)
+            // Wholesale pricing (snapshot from variant)
             $table->decimal('wholesale_price_afn', 14, 2)->default(0);
             $table->integer('wholesale_min_qty')->default(0);
 

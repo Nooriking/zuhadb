@@ -165,8 +165,8 @@ function variantLabel(v: Variant): string {
 const formatPrice = (value: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(value);
 
 /**
- * ⭐ round2 — گرد کردن به ۲ رقم اعشار
- * برای جلوگیری از خطای شناور مثل 2999.94
+ * ⭐ round2 — round to 2 decimal places
+ * Avoids floating-point errors like 2999.94
  */
 const round2 = (value: number): number => {
     return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -417,7 +417,7 @@ export default function SalesCreate({
     }, [selectedCustomer]);
 
     /* ═══════════════════════════════════════════════════════
-     |  ⭐ Computed Totals — با round2 دقیق
+     |  ⭐ Computed Totals — with precise round2
      ═══════════════════════════════════════════════════════ */
 
     const saleCurrency = useMemo(
@@ -517,7 +517,7 @@ export default function SalesCreate({
         // eslint-disable-next-line react-hooks/exhaustive-deps -- only reprice when board rates change
     }, [usdRate, aedRate]);
 
-    /* ⭐ Auto-fill Paid Amount — با مبلغ فروش فعلی */
+    /* ⭐ Auto-fill Paid Amount — with current sale total */
     useEffect(() => {
         if (!paidAmountEdited && totals.totalAfn > 0) {
             setPaidAmount(totals.totalAfn.toFixed(2));
@@ -727,7 +727,7 @@ export default function SalesCreate({
     };
 
     /* ═══════════════════════════════════════════════════════
-     |  SweetAlert برای خطای موجودی
+     |  SweetAlert for stock errors
      ═══════════════════════════════════════════════════════ */
 
     const showStockErrorAlert = (stockErrors: StockError[]) => {
@@ -803,7 +803,7 @@ export default function SalesCreate({
     };
 
     /* ═══════════════════════════════════════════════════════
-     |  ⭐ Submit — با اعتبارسنجی customer_id
+     |  ⭐ Submit — with customer_id validation
      ═══════════════════════════════════════════════════════ */
 
     const buildPayload = (customerId?: number | string | null) => {
@@ -819,7 +819,7 @@ export default function SalesCreate({
                   ]
                 : [];
 
-        /* ⭐ customer_id — باید عدد معتبر باشد */
+        /* ⭐ customer_id — must be a valid number */
         let finalCustomerId: string | null = null;
 
         if (customerId !== undefined && customerId !== null && String(customerId).trim() !== '') {
@@ -974,7 +974,7 @@ export default function SalesCreate({
         }
 
         /* ═══════════════════════════════════════════════════════
-         |  ⭐ مشتری جدید — ابتدا بساز، سپس ID را بگیر
+         |  ⭐ New customer — create first, then use the ID
          ═══════════════════════════════════════════════════════ */
 
         if (isNewCustomer) {
@@ -1044,10 +1044,10 @@ export default function SalesCreate({
                     });
                 });
         } else if (isNoCustomer) {
-            /* Walk-in — بدون مشتری */
+            /* Walk-in — no customer */
             submitSale(null);
         } else {
-            /* مشتری موجود انتخاب شده */
+            /* Existing customer selected */
             submitSale(form.customer_id);
         }
     };

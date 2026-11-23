@@ -36,14 +36,14 @@ return new class extends Migration
 
             $table->timestamps();
 
-            // ✅ ایندکس‌ها با نام کوتاه (اجباری!)
+            // ✅ Indexes with short names (required!)
             $table->index('investment_id', 'idx_ipa_inv');
            
             $table->index('batch_id', 'idx_ipa_batch');
             $table->index('variant_id', 'idx_ipa_variant');
             $table->index('status', 'idx_ipa_status');
 
-            // یونیک با نام کوتاه
+            // Unique with short name
             $table->unique(['investment_id', 'batch_id'], 'inv_batch_unique');
         });
         

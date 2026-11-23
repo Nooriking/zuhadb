@@ -26,12 +26,15 @@ use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ProductPriceHistoryController;
 use App\Http\Controllers\ProductSearchController;
 use App\Http\Controllers\ReceiptController;
+use App\Http\Controllers\ReportController;
 use App\Http\Controllers\SaleController;
 use App\Http\Controllers\SaleReturnController;
 use App\Http\Controllers\SplashController;
 use App\Http\Controllers\StockTransferController;
 use App\Http\Controllers\SupplierController;
 use App\Http\Controllers\UserController;
+use App\Http\Controllers\Ai\AiChatController;
+use App\Http\Controllers\Ai\AiConversationController;
 use Illuminate\Support\Facades\Route;
 /*
 |--------------------------------------------------------------------------
@@ -89,6 +92,27 @@ Route::middleware(['auth', 'verified', 'lock.records'])->group(function () {
     Route::get('/notifications', [NotificationController::class, 'index'])->name('notifications.index');
     Route::get('/notifications/{notification}/open', [NotificationController::class, 'open'])->name('notifications.open');
     Route::post('/notifications/read-all', [NotificationController::class, 'readAll'])->name('notifications.readAll');
+
+    /* ═══════════════════════════════════════════════════════
+     |  AI ASSISTANT (Phase 1B — conversational only)
+     |  Ownership enforced in services; no ERP data tools.
+     ═══════════════════════════════════════════════════════ */
+    Route::prefix('ai')->name('ai.')->group(function () {
+        Route::get('/', [AiChatController::class, 'index'])->name('index');
+
+        Route::get('/conversations', [AiConversationController::class, 'index'])->name('conversations.index');
+        Route::post('/conversations', [AiConversationController::class, 'store'])->name('conversations.store');
+        Route::get('/conversations/{conversation}', [AiConversationController::class, 'show'])
+            ->whereNumber('conversation')
+            ->name('conversations.show');
+        Route::delete('/conversations/{conversation}', [AiConversationController::class, 'destroy'])
+            ->whereNumber('conversation')
+            ->name('conversations.destroy');
+
+        Route::post('/chat', [AiChatController::class, 'store'])
+            ->middleware('throttle:ai-chat')
+            ->name('chat');
+    });
 
     /* ═══════════════════════════════════════════════════════
      |  GLOBAL SEARCH
@@ -494,7 +518,9 @@ Route::middleware(['auth', 'verified', 'lock.records'])->group(function () {
 
         Route::get('/lookup-barcode', [SaleController::class, 'lookupBarcode'])
             ->middleware('permission:sales.create')->name('lookupBarcode');
-Route::get('/report', [SaleController::class, 'report'])->name('sales.report');
+            Route::get('/report', [SaleController::class, 'report'])
+                ->middleware('permission:sales.view')
+                ->name('report');
         Route::post('/preview-cost', [SaleController::class, 'previewCost'])
             ->middleware('permission:sales.create')->name('previewCost');
 
@@ -511,9 +537,11 @@ Route::get('/report', [SaleController::class, 'report'])->name('sales.report');
             ->middleware('permission:sales.create')->name('addPayment');
 
         Route::post('/{sale}/print-receipt', [SaleController::class, 'printReceipt'])
+            ->middleware('permission:sales.view')
             ->name('printReceipt');
 
         Route::get('/{sale}/receipt', [SaleController::class, 'receipt'])
+            ->middleware('permission:sales.view')
             ->name('receipt');
 
         Route::get('/{sale}', [SaleController::class, 'show'])
@@ -656,13 +684,16 @@ Route::get('/report', [SaleController::class, 'report'])->name('sales.report');
         Route::get('/by-variant/{variant}', [ProductPriceHistoryController::class, 'byVariant'])->name('byVariant');
         Route::get('/{history}', [ProductPriceHistoryController::class, 'show'])->name('show');
     });
+
+    /* ═══════════════════════════════════════════════════════
+     |  REPORTS HUB
+     |  Implemented report pages keep their original routes.
+     |  This hub is the Reports Overview entry point only.
+     ═══════════════════════════════════════════════════════ */
+    Route::get('/reports', [ReportController::class, 'index'])
+        ->middleware(['module:reports', 'permission:reports.view'])
+        ->name('reports.index');
 });
-
-
-// ... بقیه routes
-
-// ... داخل گروه middleware(['auth'])
-
 
 
 // Profit report module removed — investor/store profit lives on InvestorDashboard + sales ledgers.

@@ -96,7 +96,7 @@ export function MoneyField({
             {currencyLocked ? (
                 <p className="text-muted-foreground text-xs">Currency follows the purchase currency.</p>
             ) : null}
-            {error ? <p className="text-destructive text-xs">{error}</p> : null}
+            {error ? <p className="text-destructive whitespace-pre-wrap text-xs">{error}</p> : null}
             {!showHint ? null : showThreeCurrency ? (
                 <ThreeCurrencyHint
                     amount={amount}

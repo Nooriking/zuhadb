@@ -1,5 +1,5 @@
 // resources/js/pages/sale-returns/edit.tsx
-// فقط خلاصه — مشابه create.tsx ولی با data از saleReturn
+// Summary only — similar to create.tsx but with data from saleReturn
 
 import { ExpenseBearerToggle, type ExpenseBearer } from '@/components/expense-bearer-toggle';
 import { Button } from '@/components/ui/button';

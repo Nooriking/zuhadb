@@ -4,16 +4,15 @@ import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
 import { AlertTriangle, Boxes, DollarSign, Package, ShoppingBag, ShoppingCart, Store, TrendingUp, UserCircle, Users, Wallet } from 'lucide-react';
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense } from 'react';
 
-import ChartCurrencySelector from '@/components/dashboard/chart-currency-selector';
+import { CurrencyTabs, useCurrencyView, type CurrencyView } from '@/components/currency-tabs';
 import CurrencyNote, { type DashboardReporting } from '@/components/dashboard/currency-note';
 import KpiCard from '@/components/dashboard/kpi-card';
 import LowStock from '@/components/dashboard/low-stock';
 import RecentSales from '@/components/dashboard/recent-sales';
-import ThreeCurrencyAmountView from '@/components/dashboard/three-currency-amount';
+import KpiTripleCard, { CurrencyAwareAmount } from '@/components/kpi-triple-card';
 import { LazyInView } from '@/components/lazy-in-view';
-import { formatMoney } from '@/lib/money';
 import {
     chartSeriesFromTri,
     pickChartAmount,
@@ -32,16 +31,26 @@ const BranchBar = lazy(() => import('@/components/dashboard/branch-bar'));
  ═══════════════════════════════════════════════════════ */
 
 interface Kpis {
-    today_sales: number;
-    today_collected: number;
-    today_profit: number;
+    today_sales_afn?: number;
+    period_sales_afn?: number;
+    collected_today_afn?: number;
+    today_profit_afn?: number;
+    period_profit_afn?: number;
+    customer_due_afn?: number;
+    period_expenses_afn?: number;
+    period_net_afn?: number;
+    stock_value_afn?: number;
     today_orders: number;
-    month_sales: number;
-    month_profit: number;
-    month_expenses: number;
-    month_net: number;
     sales_growth: number | null;
-    outstanding_due: number;
+    // Legacy aliases (reporting currency) — fallback only
+    today_sales?: number;
+    today_collected?: number;
+    today_profit?: number;
+    month_sales?: number;
+    month_profit?: number;
+    month_expenses?: number;
+    month_net?: number;
+    outstanding_due?: number;
 }
 
 interface Counters {
@@ -181,9 +190,12 @@ interface StoreAssets {
 }
 
 interface Props {
+    period?: string;
+    from?: string;
+    to?: string;
     days: number;
     kpis: Kpis;
-    kpis3c?: Partial<Record<keyof Omit<Kpis, 'today_orders' | 'sales_growth'>, ThreeCurrencyAmount | null>> | null;
+    kpis3c?: Partial<Record<string, ThreeCurrencyAmount | null>> | null;
     salesTrend: SalesTrendPoint[];
     brandSales: BrandSale[];
     topProducts: TopProduct[];
@@ -208,6 +220,17 @@ interface Props {
     fxBoard?: DashboardFxBoard | null;
 }
 
+const PERIODS: { id: string; label: string }[] = [
+    { id: 'today', label: 'Today' },
+    { id: '7', label: '7 Days' },
+    { id: '30', label: '30 Days' },
+    { id: '90', label: '90 Days' },
+];
+
+function chartCurrencyFromView(view: CurrencyView): ChartCurrency {
+    return view === 'ALL' ? 'AFN' : view;
+}
+
 /* ═══════════════════════════════════════════════════════
  |  Helpers
  ═══════════════════════════════════════════════════════ */
@@ -226,51 +249,75 @@ const FALLBACK_REPORTING: DashboardReporting = {
  ═══════════════════════════════════════════════════════ */
 
 export default function Dashboard({
+    period: periodProp,
     days,
     kpis,
-    kpis3c = null,
-    salesTrend,
-    brandSales,
-    topProducts,
-    branchStats,
-    paymentMethods,
+    salesTrend = [],
+    brandSales = [],
+    topProducts = [],
+    branchStats = [],
+    paymentMethods = [],
     paymentCurrencyTotals = [],
     counters,
-    recentSales,
+    recentSales = [],
     recentActivity = [],
-    lowStockItems,
+    lowStockItems = [],
     dueCustomers = [],
     storeAssets,
     reporting = FALLBACK_REPORTING,
     fxBoard = null,
 }: Props) {
-    const [range, setRange] = useState(days);
-    const [chartCurrency, setChartCurrency] = useState<ChartCurrency>('AFN');
+    const [currencyView, setCurrencyView] = useCurrencyView();
+    const activePeriod =
+        periodProp ??
+        (days <= 1 ? 'today' : days <= 7 ? '7' : days <= 30 ? '30' : '90');
+
     const currency = reporting.currency;
-    const currencyCode = currency.code;
-    const money = (value: number) => formatMoney(value, currency);
-    const showPaymentBuckets = paymentCurrencyTotals.length > 1 || (!reporting.conversion_available && paymentCurrencyTotals.length > 0);
-    const chartFxAvailable = Boolean(fxBoard?.available);
+    const showPaymentBuckets =
+        paymentCurrencyTotals.length > 1 ||
+        (!reporting.conversion_available && paymentCurrencyTotals.length > 0);
+
+    // Money KPIs — prefer AFN ledger fields from controller
+    const todaySalesAfn = kpis.today_sales_afn ?? kpis.today_sales ?? 0;
+    const collectedTodayAfn = kpis.collected_today_afn ?? kpis.today_collected ?? 0;
+    const todayProfitAfn = kpis.today_profit_afn ?? kpis.today_profit ?? 0;
+    const customerDueAfn = kpis.customer_due_afn ?? kpis.outstanding_due ?? 0;
+    const periodSalesAfn = kpis.period_sales_afn ?? kpis.month_sales ?? 0;
+    const periodProfitAfn = kpis.period_profit_afn ?? kpis.month_profit ?? 0;
+    const periodExpensesAfn = kpis.period_expenses_afn ?? kpis.month_expenses ?? 0;
+    const periodNetAfn = kpis.period_net_afn ?? kpis.month_net ?? 0;
+    const stockValueAfn = kpis.stock_value_afn;
+
+    const chartCurrency = chartCurrencyFromView(currencyView);
     const chartLabel =
-        chartCurrency === 'AFN' ? chartCurrency : `${chartCurrency} · reporting-date FX board`;
+        currencyView === 'ALL'
+            ? 'AFN (All view)'
+            : `${chartCurrency} · live exchange board`;
     const salesTrendChart = chartSeriesFromTri(salesTrend, chartCurrency);
     const brandChartData = brandSales.map((row) => ({
         name: row.name,
-        value: pickChartAmount(row.value_3c, chartCurrency) ?? (chartCurrency === 'AFN' ? Number(row.value) : 0),
+        value:
+            pickChartAmount(row.value_3c, chartCurrency) ??
+            (chartCurrency === 'AFN' ? Number(row.value) : 0),
     }));
     const paymentChartData = paymentMethods.map((row) => ({
         name: row.name,
-        value: pickChartAmount(row.value_3c, chartCurrency) ?? (chartCurrency === 'AFN' ? Number(row.value) : 0),
+        value:
+            pickChartAmount(row.value_3c, chartCurrency) ??
+            (chartCurrency === 'AFN' ? Number(row.value) : 0),
     }));
     const branchChartData = branchStats.map((row) => ({
         ...row,
-        sales: pickChartAmount(row.sales_3c, chartCurrency) ?? (chartCurrency === 'AFN' ? Number(row.sales) : 0),
-        profit: pickChartAmount(row.profit_3c, chartCurrency) ?? (chartCurrency === 'AFN' ? Number(row.profit) : 0),
+        sales:
+            pickChartAmount(row.sales_3c, chartCurrency) ??
+            (chartCurrency === 'AFN' ? Number(row.sales) : 0),
+        profit:
+            pickChartAmount(row.profit_3c, chartCurrency) ??
+            (chartCurrency === 'AFN' ? Number(row.profit) : 0),
     }));
 
-    const changeRange = (newDays: number) => {
-        setRange(newDays);
-        router.get('/dashboard', { days: newDays }, { preserveScroll: true, preserveState: false });
+    const changePeriod = (next: string) => {
+        router.get('/dashboard', { period: next }, { preserveScroll: true, preserveState: false });
     };
 
     return (
@@ -284,76 +331,82 @@ export default function Dashboard({
                         <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
                         <p className="text-muted-foreground text-sm">Overview of your perfume business</p>
                         <div className="mt-2">
-                            <CurrencyNote reporting={reporting} originalCurrencyTotals={paymentCurrencyTotals} fxBoard={fxBoard} />
+                            <CurrencyNote
+                                reporting={reporting}
+                                originalCurrencyTotals={paymentCurrencyTotals}
+                                fxBoard={fxBoard}
+                            />
                         </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2">
-                        <ChartCurrencySelector
-                            value={chartCurrency}
-                            onChange={setChartCurrency}
-                            available={chartFxAvailable}
-                        />
-                        <div className="bg-card flex gap-1 rounded-md border p-1">
-                            {[7, 30, 90].map((d) => (
-                                <button
-                                    key={d}
-                                    onClick={() => changeRange(d)}
-                                    className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                                        range === d
-                                            ? 'bg-primary text-primary-foreground'
-                                            : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-                                    }`}
-                                >
-                                    {d} Days
-                                </button>
-                            ))}
-                        </div>
+                    <div className="bg-card flex gap-1 rounded-md border p-1">
+                        {PERIODS.map((p) => (
+                            <button
+                                key={p.id}
+                                type="button"
+                                onClick={() => changePeriod(p.id)}
+                                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                                    activePeriod === p.id
+                                        ? 'bg-primary text-primary-foreground'
+                                        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                                }`}
+                            >
+                                {p.label}
+                            </button>
+                        ))}
                     </div>
                 </div>
 
+                {/* ═══════════ Currency tabs + live rates ═══════════ */}
+                <CurrencyTabs
+                    includeAll
+                    showRates
+                    view={currencyView}
+                    onViewChange={setCurrencyView}
+                />
+
                 {/* ═══════════ KPI Cards Row 1 ═══════════ */}
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <KpiCard
+                    <KpiTripleCard
                         title="Today Sales"
-                        value={money(kpis.today_sales)}
-                        threeCurrency={kpis3c?.today_sales}
+                        afn={todaySalesAfn}
+                        view={currencyView}
                         subtitle={`${kpis.today_orders} completed orders`}
                         icon={ShoppingBag}
                         color="blue"
                     />
-                    <KpiCard
+                    <KpiTripleCard
                         title="Collected Today"
-                        value={money(kpis.today_collected)}
-                        threeCurrency={kpis3c?.today_collected}
+                        afn={collectedTodayAfn}
+                        view={currencyView}
                         subtitle="Payments received today"
                         icon={Wallet}
                         color="green"
                     />
-                    <KpiCard
+                    <KpiTripleCard
                         title="Today Profit"
-                        value={money(kpis.today_profit)}
-                        threeCurrency={kpis3c?.today_profit}
+                        afn={todayProfitAfn}
+                        view={currencyView}
                         subtitle="Store profit after investor share"
                         icon={TrendingUp}
                         color="green"
                     />
-                    <KpiCard
+                    <KpiTripleCard
                         title="Customer Due"
-                        value={money(kpis.outstanding_due)}
-                        threeCurrency={kpis3c?.outstanding_due}
+                        afn={customerDueAfn}
+                        view={currencyView}
                         subtitle="Money customers still owe"
                         icon={AlertTriangle}
-                        color={kpis.outstanding_due > 0 ? 'red' : 'green'}
+                        color={customerDueAfn > 0 ? 'red' : 'green'}
                     />
                 </div>
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <KpiCard
-                        title="Month Sales"
-                        value={money(kpis.month_sales)}
-                        threeCurrency={kpis3c?.month_sales}
-                        subtitle="Completed sales this month"
+                    <KpiTripleCard
+                        title="Period Sales"
+                        afn={periodSalesAfn}
+                        view={currencyView}
+                        subtitle="Completed sales in selected period"
                         icon={DollarSign}
                         color="purple"
                         trend={
@@ -365,31 +418,44 @@ export default function Dashboard({
                                   }
                         }
                     />
-                    <KpiCard
-                        title="Month Profit"
-                        value={money(kpis.month_profit)}
-                        threeCurrency={kpis3c?.month_profit}
-                        subtitle="Store profit this month"
+                    <KpiTripleCard
+                        title="Period Profit"
+                        afn={periodProfitAfn}
+                        view={currencyView}
+                        subtitle="Store profit in selected period"
                         icon={TrendingUp}
                         color="green"
                     />
-                    <KpiCard
-                        title="Month Expenses"
-                        value={money(kpis.month_expenses)}
-                        threeCurrency={kpis3c?.month_expenses}
+                    <KpiTripleCard
+                        title="Period Expenses"
+                        afn={periodExpensesAfn}
+                        view={currencyView}
                         subtitle="Recorded expenses"
                         icon={ShoppingCart}
                         color="orange"
                     />
-                    <KpiCard
-                        title="Month Net"
-                        value={money(kpis.month_net)}
-                        threeCurrency={kpis3c?.month_net}
+                    <KpiTripleCard
+                        title="Period Net"
+                        afn={periodNetAfn}
+                        view={currencyView}
                         subtitle="Store profit − expenses"
                         icon={Wallet}
-                        color={kpis.month_net >= 0 ? 'green' : 'red'}
+                        color={periodNetAfn >= 0 ? 'green' : 'red'}
                     />
                 </div>
+
+                {stockValueAfn != null && (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                        <KpiTripleCard
+                            title="Stock Value"
+                            afn={stockValueAfn}
+                            view={currencyView}
+                            subtitle="Remaining stock at batch cost"
+                            icon={Boxes}
+                            color="blue"
+                        />
+                    </div>
+                )}
 
                 {showPaymentBuckets && (
                     <div className="bg-card rounded-lg border p-4 shadow-sm">
@@ -498,13 +564,13 @@ export default function Dashboard({
                                     <div className="flex items-center gap-2 text-xs font-medium text-slate-700 uppercase dark:text-slate-400">
                                         <DollarSign className="h-3.5 w-3.5" /> Stock Value
                                     </div>
-                                    {storeAssets.summary.remaining_cost_3c ? (
-                                        <ThreeCurrencyAmountView amounts={storeAssets.summary.remaining_cost_3c} />
-                                    ) : (
-                                        <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-300">
-                                            {money(storeAssets.summary.remaining_cost_afn)}
-                                        </p>
-                                    )}
+                                    <div className="mt-2 text-slate-900 dark:text-slate-300">
+                                        <CurrencyAwareAmount
+                                            afn={storeAssets.summary.remaining_cost_afn}
+                                            view={currencyView}
+                                            className="text-lg font-bold"
+                                        />
+                                    </div>
                                     <p className="text-xs text-slate-600 dark:text-slate-500">At cost</p>
                                 </div>
 
@@ -512,13 +578,13 @@ export default function Dashboard({
                                     <div className="flex items-center gap-2 text-xs font-medium text-emerald-800 uppercase dark:text-emerald-400">
                                         <TrendingUp className="h-3.5 w-3.5" /> Expected
                                     </div>
-                                    {storeAssets.summary.expected_profit_3c ? (
-                                        <ThreeCurrencyAmountView amounts={storeAssets.summary.expected_profit_3c} />
-                                    ) : (
-                                        <p className="mt-2 text-2xl font-bold text-emerald-900 dark:text-emerald-300">
-                                            {money(storeAssets.summary.expected_profit_afn)}
-                                        </p>
-                                    )}
+                                    <div className="mt-2 text-emerald-900 dark:text-emerald-300">
+                                        <CurrencyAwareAmount
+                                            afn={storeAssets.summary.expected_profit_afn}
+                                            view={currencyView}
+                                            className="text-lg font-bold"
+                                        />
+                                    </div>
                                     <p className="text-xs text-emerald-700 dark:text-emerald-500">If all stock sells</p>
                                 </div>
 
@@ -526,13 +592,13 @@ export default function Dashboard({
                                     <div className="flex items-center gap-2 text-xs font-medium text-amber-800 uppercase dark:text-amber-400">
                                         <ShoppingCart className="h-3.5 w-3.5" /> Realized
                                     </div>
-                                    {storeAssets.summary.realized_profit_3c ? (
-                                        <ThreeCurrencyAmountView amounts={storeAssets.summary.realized_profit_3c} />
-                                    ) : (
-                                        <p className="mt-2 text-2xl font-bold text-amber-900 dark:text-amber-300">
-                                            {money(storeAssets.summary.realized_profit_afn)}
-                                        </p>
-                                    )}
+                                    <div className="mt-2 text-amber-900 dark:text-amber-300">
+                                        <CurrencyAwareAmount
+                                            afn={storeAssets.summary.realized_profit_afn}
+                                            view={currencyView}
+                                            className="text-lg font-bold"
+                                        />
+                                    </div>
                                     <p className="text-xs text-amber-700 dark:text-amber-500">{storeAssets.summary.realized_qty} pcs sold</p>
                                 </div>
 
@@ -540,14 +606,18 @@ export default function Dashboard({
                                     <div className="flex items-center gap-2 text-xs font-medium text-violet-800 uppercase dark:text-violet-400">
                                         <Wallet className="h-3.5 w-3.5" /> Total Profit
                                     </div>
-                                    <p className="mt-2 text-2xl font-bold text-violet-900 dark:text-violet-300">
-                                        {money(storeAssets.summary.total_profit_afn)}
-                                    </p>
+                                    <div className="mt-2 text-violet-900 dark:text-violet-300">
+                                        <CurrencyAwareAmount
+                                            afn={storeAssets.summary.total_profit_afn}
+                                            view={currencyView}
+                                            className="text-lg font-bold"
+                                        />
+                                    </div>
                                     <p className="text-xs text-violet-700 dark:text-violet-500">Realized + expected</p>
                                 </div>
                             </div>
 
-                            {storeAssets.items.length === 0 ? (
+                            {(storeAssets.items ?? []).length === 0 ? (
                                 <div className="text-muted-foreground mt-6 py-8 text-center text-sm">
                                     <Package className="mx-auto mb-2 h-8 w-8 opacity-40" />
                                     No store-owned stock in inventory yet.
@@ -576,26 +646,28 @@ export default function Dashboard({
                                             </tr>
                                         </thead>
                                         <tbody className="divide-border divide-y">
-                                            {storeAssets.items.slice(0, 10).map((item, i) => (
+                                            {(storeAssets.items ?? []).slice(0, 10).map((item, i) => (
                                                 <tr key={item.batch_id} className="hover:bg-muted/40">
                                                     <td className="text-muted-foreground px-4 py-3">{i + 1}</td>
                                                     <td className="px-4 py-3">
                                                         <div className="font-medium">{item.name}</div>
                                                         <div className="text-muted-foreground font-mono text-xs">{item.batch_code}</div>
                                                     </td>
-                                                    <td className="px-4 py-3 text-right font-mono text-xs">{money(item.unit_cost_afn)}</td>
-                                                    <td className="px-4 py-3 text-right font-mono text-xs text-green-700">
-                                                        {money(item.sale_price_afn)}
+                                                    <td className="px-4 py-3 text-right text-xs">
+                                                        <CurrencyAwareAmount afn={item.unit_cost_afn} view={currencyView} />
+                                                    </td>
+                                                    <td className="px-4 py-3 text-right text-xs text-green-700">
+                                                        <CurrencyAwareAmount afn={item.sale_price_afn} view={currencyView} />
                                                     </td>
                                                     <td className="px-4 py-3 text-right font-mono">
                                                         <span className="font-semibold">{item.remaining}</span>
                                                         <span className="text-muted-foreground text-xs"> / {item.quantity}</span>
                                                     </td>
-                                                    <td className="px-4 py-3 text-right font-mono font-semibold">
-                                                        {money(item.remaining_cost_afn)}
+                                                    <td className="px-4 py-3 text-right font-semibold">
+                                                        <CurrencyAwareAmount afn={item.remaining_cost_afn} view={currencyView} />
                                                     </td>
-                                                    <td className="px-4 py-3 text-right font-mono font-semibold text-emerald-700">
-                                                        {money(item.expected_profit_afn)}
+                                                    <td className="px-4 py-3 text-right font-semibold text-emerald-700">
+                                                        <CurrencyAwareAmount afn={item.expected_profit_afn} view={currencyView} />
                                                     </td>
                                                     <td className="text-muted-foreground px-4 py-3 text-xs">{item.received_date || '—'}</td>
                                                 </tr>
@@ -603,10 +675,10 @@ export default function Dashboard({
                                         </tbody>
                                     </table>
 
-                                    {storeAssets.items.length > 10 && (
+                                    {(storeAssets.items ?? []).length > 10 && (
                                         <div className="border-t px-4 py-3 text-center">
                                             <Link href="/products?owner=store" className="text-xs font-semibold text-blue-600 hover:underline">
-                                                + {storeAssets.items.length - 10} more items →
+                                                + {(storeAssets.items ?? []).length - 10} more items →
                                             </Link>
                                         </div>
                                     )}
@@ -641,21 +713,11 @@ export default function Dashboard({
                                                 </Link>
                                                 {customer.phone && <div className="text-muted-foreground text-xs">{customer.phone}</div>}
                                             </td>
-                                            <td className="py-2 text-right font-mono">
-                                                {customer.current_due_3c ? (
-                                                    <ThreeCurrencyAmountView amounts={customer.current_due_3c} layout="compact" />
-                                                ) : (
-                                                    <>
-                                                        <div>{money(customer.current_due_afn)}</div>
-                                                        {customer.current_due_ledger !== undefined &&
-                                                            reporting.converts_from_ledger &&
-                                                            reporting.conversion_available && (
-                                                                <div className="text-muted-foreground text-xs">
-                                                                    {formatMoney(customer.current_due_ledger, reporting.ledger)}
-                                                                </div>
-                                                            )}
-                                                    </>
-                                                )}
+                                            <td className="py-2 text-right">
+                                                <CurrencyAwareAmount
+                                                    afn={customer.current_due_ledger ?? customer.current_due_afn}
+                                                    view={currencyView}
+                                                />
                                             </td>
                                             <td className="py-2">{customer.due_date || '—'}</td>
                                         </tr>
@@ -724,7 +786,9 @@ export default function Dashboard({
                 <div className="bg-card overflow-hidden rounded-lg border shadow-sm">
                     <div className="border-b px-6 py-4">
                         <h3 className="text-lg font-semibold">Top Selling Products</h3>
-                        <p className="text-muted-foreground text-sm">Top 10 in last {days} days ({currencyCode})</p>
+                        <p className="text-muted-foreground text-sm">
+                            Top 10 in last {days} days ({currencyView === 'ALL' ? 'AFN · USD · AED' : currencyView})
+                        </p>
                     </div>
                     <div className="overflow-x-auto">
                         <table className="w-full text-sm">
@@ -753,8 +817,18 @@ export default function Dashboard({
                                                 {p.brand && <div className="text-muted-foreground text-xs">{p.brand}</div>}
                                             </td>
                                             <td className="px-6 py-3 text-right font-mono">{p.total_qty}</td>
-                                            <td className="px-6 py-3 text-right font-mono font-semibold">{money(p.total_sales)}</td>
-                                            <td className="px-6 py-3 text-right font-mono">{money(p.total_profit)}</td>
+                                            <td className="px-6 py-3 text-right font-semibold">
+                                                <CurrencyAwareAmount
+                                                    afn={p.total_sales_ledger ?? p.total_sales}
+                                                    view={currencyView}
+                                                />
+                                            </td>
+                                            <td className="px-6 py-3 text-right">
+                                                <CurrencyAwareAmount
+                                                    afn={p.total_profit_ledger ?? p.total_profit}
+                                                    view={currencyView}
+                                                />
+                                            </td>
                                         </tr>
                                     ))
                                 )}

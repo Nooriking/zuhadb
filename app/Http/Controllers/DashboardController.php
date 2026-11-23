@@ -8,6 +8,7 @@ use App\Models\Expense;
 use App\Models\Inventory;
 use App\Models\Investor;
 use App\Models\Product;
+use App\Models\ProductBatch;
 use App\Models\ProductVariant;
 use App\Models\Sale;
 use App\Models\SalePayment;
@@ -42,19 +43,50 @@ class DashboardController extends Controller
 
     public function render(Request $request, ?int $branchId = null): Response
     {
-        $days = (int) $request->query('days', 30);
-        if ($days < 1 || $days > 365) {
-            $days = 30;
+        $branchId = $branchId ?? ($request->filled('branch_id') ? (int) $request->input('branch_id') : null);
+
+        /* =========================================================
+         |  PERIOD — Today | 7 Days | 30 Days | 90 Days
+         |  Accepts: today/7/30/90, daily/weekly/monthly/quarterly, or ?days=
+         ========================================================= */
+        $rawPeriod = $request->input('period');
+        if ($rawPeriod === null && $request->has('days')) {
+            $d = (int) $request->query('days', 30);
+            $rawPeriod = match (true) {
+                $d <= 1 => 'today',
+                $d <= 7 => '7',
+                $d <= 30 => '30',
+                default => '90',
+            };
         }
+
+        $period = match ((string) ($rawPeriod ?? '30')) {
+            'daily', 'today', '1' => 'today',
+            'weekly', '7' => '7',
+            'quarterly', '90' => '90',
+            'monthly', '30' => '30',
+            default => in_array((string) $rawPeriod, ['today', '7', '30', '90'], true)
+                ? (string) $rawPeriod
+                : '30',
+        };
+
+        $now = now();
+        [$from, $to] = match ($period) {
+            'today' => [$now->copy()->startOfDay(), $now->copy()->endOfDay()],
+            '7' => [$now->copy()->subDays(6)->startOfDay(), $now->copy()->endOfDay()],
+            '90' => [$now->copy()->subDays(89)->startOfDay(), $now->copy()->endOfDay()],
+            default => [$now->copy()->subDays(29)->startOfDay(), $now->copy()->endOfDay()],
+        };
+
+        $days = max(1, (int) $from->diffInDays($to) + 1);
 
         $reporting = $this->currencies->reportingContext();
         $fxBoard = $this->currencies->dashboardFxBoard();
         $money = fn (float|string|null $amount): float => $this->currencies->reportAmount((float) ($amount ?? 0));
 
         /* =========================================================
-         |  TOP-LEVEL KPIs
-         |  Sum ledger (*_afn) amounts that were fixed at write time,
-         |  then convert once for reporting display + three-currency board.
+         |  TOP-LEVEL KPIs (ledger AFN)
+         |  Frontend converts via shared Inertia `exchange` (useExchange).
          ========================================================= */
 
         $completedSales = Sale::notTrashed()
@@ -65,10 +97,11 @@ class DashboardController extends Controller
             ->whereBetween('sale_date', [today()->startOfDay(), today()->endOfDay()])
             ->selectRaw('COALESCE(SUM(total_afn), 0) as sales, COALESCE(SUM(store_profit_afn), 0) as profit, COUNT(*) as orders')
             ->first();
-        $todaySalesLedger = (float) $todayRow->sales;
-        $todayProfitLedger = (float) $todayRow->profit;
+        $todaySalesAfn = (float) $todayRow->sales;
+        $todayProfitAfn = (float) $todayRow->profit;
         $todayOrders = (int) $todayRow->orders;
-        $todayCollectedLedger = (float) SalePayment::query()
+
+        $collectedTodayAfn = (float) SalePayment::query()
             ->whereBetween('paid_at', [today()->startOfDay(), today()->endOfDay()])
             ->whereHas('sale', function ($q) use ($branchId) {
                 $q->notTrashed()->where('status', 'completed')
@@ -76,62 +109,82 @@ class DashboardController extends Controller
             })
             ->sum('amount_afn');
 
-        $monthSalesLedger = (float) (clone $completedSales)
-            ->whereBetween('sale_date', [now()->startOfMonth(), now()->endOfMonth()])
+        $periodSalesAfn = (float) (clone $completedSales)
+            ->whereBetween('sale_date', [$from, $to])
             ->sum('total_afn');
 
-        $monthProfitLedger = (float) (clone $completedSales)
-            ->whereBetween('sale_date', [now()->startOfMonth(), now()->endOfMonth()])
+        $periodProfitAfn = (float) (clone $completedSales)
+            ->whereBetween('sale_date', [$from, $to])
             ->sum('store_profit_afn');
 
-        $monthExpensesLedger = $branchId
+        $periodExpensesAfn = $branchId
             ? 0.0
             : (float) Expense::notTrashed()
-                ->whereBetween('expense_date', [now()->startOfMonth()->toDateString(), now()->endOfMonth()->toDateString()])
+                ->whereBetween('expense_date', [$from->toDateString(), $to->toDateString()])
                 ->sum('amount_afn');
 
-        $previousMonth = now()->subMonth();
-        $prevMonthSalesLedger = (float) (clone $completedSales)
-            ->whereBetween('sale_date', [$previousMonth->copy()->startOfMonth(), $previousMonth->copy()->endOfMonth()])
+        $prevFrom = $from->copy()->subDays($days);
+        $prevTo = $from->copy()->subSecond();
+        $prevPeriodSalesAfn = (float) (clone $completedSales)
+            ->whereBetween('sale_date', [$prevFrom, $prevTo])
             ->sum('total_afn');
 
-        $salesGrowth = $prevMonthSalesLedger > 0
-            ? round((($monthSalesLedger - $prevMonthSalesLedger) / $prevMonthSalesLedger) * 100, 1)
+        $salesGrowth = $prevPeriodSalesAfn > 0
+            ? round((($periodSalesAfn - $prevPeriodSalesAfn) / $prevPeriodSalesAfn) * 100, 1)
             : null;
 
-        $outstandingDueLedger = (float) Customer::notTrashed()->sum('current_due_afn');
+        $customerDueAfn = (float) Customer::notTrashed()->sum('current_due_afn');
+        $periodNetAfn = $periodProfitAfn - $periodExpensesAfn;
 
-        $monthNetLedger = $monthProfitLedger - $monthExpensesLedger;
+        // Authoritative valuation: remaining batch qty × historical unit_cost_afn (FIFO snapshots).
+        $stockValueAfn = ProductBatch::valuationSummary($branchId)['total_afn'];
 
+        // AFN ledger amounts — frontend shows AFN | USD | AED via useExchange()
         $kpis = [
-            'today_sales' => $money($todaySalesLedger),
-            'today_collected' => $money($todayCollectedLedger),
-            'today_profit' => $money($todayProfitLedger),
+            'today_sales_afn' => round($todaySalesAfn, 2),
+            'period_sales_afn' => round($periodSalesAfn, 2),
             'today_orders' => $todayOrders,
-            'month_sales' => $money($monthSalesLedger),
-            'month_profit' => $money($monthProfitLedger),
-            'month_expenses' => $money($monthExpensesLedger),
-            'month_net' => $money($monthNetLedger),
+            'collected_today_afn' => round($collectedTodayAfn, 2),
+            'today_profit_afn' => round($todayProfitAfn, 2),
+            'period_profit_afn' => round($periodProfitAfn, 2),
+            'customer_due_afn' => round($customerDueAfn, 2),
+            'period_expenses_afn' => round($periodExpensesAfn, 2),
+            'period_net_afn' => round($periodNetAfn, 2),
+            'stock_value_afn' => round($stockValueAfn, 2),
             'sales_growth' => $salesGrowth,
-            'outstanding_due' => $money($outstandingDueLedger),
+
+            // Backward-compatible aliases (reporting currency) until frontend Stage 2
+            'today_sales' => $money($todaySalesAfn),
+            'today_collected' => $money($collectedTodayAfn),
+            'today_profit' => $money($todayProfitAfn),
+            'month_sales' => $money($periodSalesAfn),
+            'month_profit' => $money($periodProfitAfn),
+            'month_expenses' => $money($periodExpensesAfn),
+            'month_net' => $money($periodNetAfn),
+            'outstanding_due' => $money($customerDueAfn),
         ];
 
         $kpis3c = $this->currencies->mapThreeCurrency([
-            'today_sales' => $todaySalesLedger,
-            'today_collected' => $todayCollectedLedger,
-            'today_profit' => $todayProfitLedger,
-            'month_sales' => $monthSalesLedger,
-            'month_profit' => $monthProfitLedger,
-            'month_expenses' => $monthExpensesLedger,
-            'month_net' => $monthNetLedger,
-            'outstanding_due' => $outstandingDueLedger,
+            'today_sales' => $todaySalesAfn,
+            'today_collected' => $collectedTodayAfn,
+            'today_profit' => $todayProfitAfn,
+            'month_sales' => $periodSalesAfn,
+            'month_profit' => $periodProfitAfn,
+            'month_expenses' => $periodExpensesAfn,
+            'month_net' => $periodNetAfn,
+            'outstanding_due' => $customerDueAfn,
+            'period_sales' => $periodSalesAfn,
+            'period_profit' => $periodProfitAfn,
+            'period_expenses' => $periodExpensesAfn,
+            'period_net' => $periodNetAfn,
+            'stock_value' => $stockValueAfn,
         ]);
 
         /* =========================================================
          |  CHARTS DATA
          ========================================================= */
 
-        $startDate = now()->subDays($days - 1)->startOfDay();
+        $startDate = $from->copy()->startOfDay();
 
         $trendRows = (clone $completedSales)
             ->select(
@@ -363,9 +416,14 @@ class DashboardController extends Controller
             'suppliers' => Supplier::notTrashed()->count(),
             'investors' => Investor::notTrashed()->count(),
             'users' => User::notTrashed()->count(),
-            'total_stock' => (int) Inventory::notTrashed()->when($branchId, fn ($q) => $q->where('branch_id', $branchId))->sum('quantity'),
+            'total_stock' => (int) Inventory::notTrashed()
+                ->when($branchId, fn ($q) => $q->where('branch_id', $branchId))
+                ->sum('available_quantity'),
             'low_stock' => $this->lowStockQuery($branchId)->count(),
-            'out_of_stock' => Inventory::notTrashed()->when($branchId, fn ($q) => $q->where('branch_id', $branchId))->where('quantity', '<=', 0)->count(),
+            'out_of_stock' => Inventory::notTrashed()
+                ->when($branchId, fn ($q) => $q->where('branch_id', $branchId))
+                ->where('available_quantity', '<=', 0)
+                ->count(),
         ];
 
         /* =========================================================
@@ -517,6 +575,9 @@ class DashboardController extends Controller
 
         return Inertia::render('dashboard', [
             'dueCustomers' => $dueCustomers,
+            'period' => $period,
+            'from' => $from->toDateString(),
+            'to' => $to->toDateString(),
             'days' => $days,
             'kpis' => $kpis,
             'kpis3c' => $kpis3c,
@@ -533,6 +594,10 @@ class DashboardController extends Controller
             'storeAssets' => $storeAssets,
             'reporting' => $reporting,
             'fxBoard' => $fxBoard,
+            // Rates: use shared Inertia `exchange` (ExchangeRateService::flatBoard) via useExchange()
+            'filters' => [
+                'branch_id' => $branchId,
+            ],
         ]);
     }
 

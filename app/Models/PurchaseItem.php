@@ -63,7 +63,7 @@ class PurchaseItem extends Model
      ========================================================= */
 
     /**
-     * آیا این آیتم از پول سرمایه‌گذار خریداری شده؟
+     * Was this item purchased with investor funds?
      */
     public function isInvestorFunded(): bool
     {
@@ -71,7 +71,7 @@ class PurchaseItem extends Model
     }
 
     /**
-     * سود کل سرمایه‌گذار برای این آیتم
+     * Total investor profit for this item
      */
     public function getTotalInvestorProfitAfnAttribute(): float
     {

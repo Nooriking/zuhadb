@@ -25,17 +25,17 @@ return new class extends Migration
                 ->nullOnDelete();
 
             $table->enum('type', [
-                'purchase',        // ورود از خرید
-                'sale',            // خروج از فروش
-                'return',          // برگشت از مشتری
-                'damage',          // خرابی/ضایعات
-                'transfer_in',     // ورود از انتقال
-                'transfer_out',    // خروج از انتقال
-                'adjustment',      // تنظیم دستی
-                'opening',         // موجودی اولیه
+                'purchase',        // In from purchase
+                'sale',            // Out from sale
+                'return',          // Return from customer
+                'damage',          // Damage / waste
+                'transfer_in',     // In from transfer
+                'transfer_out',    // Out from transfer
+                'adjustment',      // Manual adjustment
+                'opening',         // Opening stock
             ]);
 
-            $table->integer('quantity');        // می‌تواند منفی باشد
+            $table->integer('quantity');        // Can be negative
             $table->integer('before_quantity');
             $table->integer('after_quantity');
 

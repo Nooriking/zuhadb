@@ -32,6 +32,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
@@ -50,7 +51,7 @@ class ProductController extends Controller
     ) {}
 
     /**
-     * Branch ID از کاربر — با چک وجود شعبه و fallback امن
+     * Branch ID from user — with branch existence check and safe fallback
      */
     private function getBranchId(): int
     {
@@ -173,22 +174,20 @@ class ProductController extends Controller
             $product->setAttribute('exchange_rate_kind', $combined !== null ? 'weighted_average' : null);
         });
 
-        $monthlyRates = ExchangeRateHistory::query()
-            ->selectRaw('YEAR(rate_date) as year, MONTH(rate_date) as month, ROUND(AVG(usd_to_afn), 2) as average_rate, COUNT(*) as days')
-            ->groupByRaw('YEAR(rate_date), MONTH(rate_date)')
-            ->orderByDesc('year')
-            ->orderByDesc('month')
-            ->limit(6)
-            ->get();
+        $monthlyRates = Cache::remember('products.index.monthly_rates', 300, function () {
+            return ExchangeRateHistory::query()
+                ->selectRaw('YEAR(rate_date) as year, MONTH(rate_date) as month, ROUND(AVG(usd_to_afn), 2) as average_rate, COUNT(*) as days')
+                ->groupByRaw('YEAR(rate_date), MONTH(rate_date)')
+                ->orderByDesc('year')
+                ->orderByDesc('month')
+                ->limit(6)
+                ->get();
+        });
 
         return Inertia::render('products/index', [
             'products' => $products,
             'monthlyRates' => $monthlyRates,
-            'brands'   => Brand::notTrashed()
-                ->active()
-                ->select('id', 'name')
-                ->orderBy('name')
-                ->get(),
+            'brands'   => $this->cachedActiveBrands(),
             'filters'  => [
                 'search'   => $search,
                 'status'   => $status,
@@ -205,11 +204,7 @@ class ProductController extends Controller
     public function create(): Response
     {
         return Inertia::render('products/create', [
-            'brands' => Brand::notTrashed()
-                ->active()
-                ->select('id', 'name')
-                ->orderBy('name')
-                ->get(),
+            'brands' => $this->cachedActiveBrands(),
 
             'investors' => \App\Models\Investor::query()
                 ->select('id', 'name')
@@ -310,18 +305,8 @@ class ProductController extends Controller
             $data['profit_per_unit'] = 0;
         }
 
-        // Always seed board rates from exchange_rates; request overrides (if authorized) win.
-        $board = $this->boardRateOverridesFromExchangeService();
-        if (empty($data['usd_to_afn_rate']) || (float) $data['usd_to_afn_rate'] <= 0) {
-            $data['usd_to_afn_rate'] = $board['usd_to_afn'];
-        }
-        if (empty($data['aed_to_afn_rate']) || (float) $data['aed_to_afn_rate'] <= 0) {
-            $data['aed_to_afn_rate'] = $board['aed_to_afn'];
-        }
-        if (empty($data['rate_source'])) {
-            $data['rate_source'] = $board['source'];
-        }
-
+        // Board FX lives in exchange_rates / PurchaseService — never seed
+        // usd_to_afn_rate / aed_to_afn_rate / rate_source onto product_batches.
         $this->getBranchId();
 
         $this->purchases->receiveStock($data, $request->user(), $this->getBranchId());
@@ -330,7 +315,7 @@ class ProductController extends Controller
     }
 
     /* =========================================================
-     |  STORE — ✅ با محاسبه سود دوکان
+     |  STORE — ✅ with store profit calculation
      ========================================================= */
 
     public function store(StoreProductRequest $request): RedirectResponse
@@ -576,6 +561,7 @@ class ProductController extends Controller
                 'variant:id,product_id,volume_ml,concentration',
                 'investment:id,investor_id',
                 'investment.investor:id,name',
+                'purchaseCurrency:id,code,symbol',
             ])
             ->orderByDesc('purchase_date')
             ->orderByDesc('id')
@@ -587,11 +573,12 @@ class ProductController extends Controller
             ->values();
         $invoices = \App\Models\SupplierInvoice::query()
             ->whereIn('invoice_no', $invoiceNumbers)
-            ->get();
+            ->get()
+            ->keyBy('invoice_no');
 
         $purchases = $batches->map(function (ProductBatch $batch) use ($invoices) {
             $number = mb_substr($batch->invoice_number ?: ('B-'.$batch->id), 0, 50);
-            $invoice = $invoices->first(fn ($item) => $item->invoice_no === $number);
+            $invoice = $invoices->get($number);
 
             return [
                 'id' => $batch->id,
@@ -610,6 +597,10 @@ class ProductController extends Controller
                 'profit_per_unit_afn' => $batch->profit_per_unit_afn,
                 'sale_price_afn' => $batch->sale_price_afn,
                 'exchange_rate' => $batch->exchange_rate,
+                'purchase_currency_id' => $batch->purchase_currency_id,
+                'purchase_currency_code' => $batch->purchaseCurrency?->code,
+                'purchase_unit_amount' => $batch->unit_cost_currency,
+                'purchase_amount_currency' => $batch->purchase_amount_currency,
                 'invoice_id' => $invoice?->id,
                 'supplier_id' => $invoice?->supplier_id,
                 'invoice_paid_afn' => $invoice ? (float) $invoice->paid_afn : 0,
@@ -710,13 +701,11 @@ class ProductController extends Controller
                     continue;
                 }
 
-                $rate = (float) ($batch->exchange_rate ?? 0);
-                $code = match (true) {
-                    $rate == 1.0 => 'AFN',
-                    abs($rate - (float) ($batch->usd_to_afn_rate ?? 0)) < 0.0001 && (float) ($batch->usd_to_afn_rate ?? 0) > 0 => 'USD',
-                    abs($rate - (float) ($batch->aed_to_afn_rate ?? 0)) < 0.0001 && (float) ($batch->aed_to_afn_rate ?? 0) > 0 => 'AED',
-                    default => 'AFN',
-                };
+                $batch->loadMissing('purchaseCurrency:id,code');
+                $code = strtoupper((string) ($batch->purchaseCurrency?->code ?? 'AFN'));
+                if (! in_array($code, OriginalCurrencyMoney::CODES, true)) {
+                    $code = 'AFN';
+                }
 
                 if (! in_array($code, OriginalCurrencyMoney::CODES, true)) {
                     continue;
@@ -822,6 +811,8 @@ class ProductController extends Controller
                 'exchange_rate' => $batch->exchange_rate,
                 'purchase_unit_amount' => $batch->unit_cost_currency,
                 'purchase_currency_id' => $batch->purchase_currency_id,
+                'purchase_currency_code' => $batch->purchaseCurrency?->code,
+                'purchase_amount_currency' => $batch->purchase_amount_currency,
                 'variant' => $batch->variant,
                 'investor' => $batch->investment?->investor,
             ];
@@ -830,11 +821,7 @@ class ProductController extends Controller
         return Inertia::render('products/edit', [
             'product'   => $product,
             'purchases' => $purchases,
-            'brands'    => Brand::notTrashed()
-                ->active()
-                ->select('id', 'name')
-                ->orderBy('name')
-                ->get(),
+            'brands'    => $this->cachedActiveBrands(),
             'investors' => \App\Models\Investor::query()
                 ->select('id', 'name')
                 ->orderBy('name')
@@ -1212,22 +1199,6 @@ class ProductController extends Controller
         ]);
     }
 
-    /**
-     * @param  array{
-     *     original: float,
-     *     currency_id: int|null,
-     *     code: string,
-     *     usd: float,
-     *     aed: float
-     * }  $profitSnap
-     * @param  array{
-     *     usd_to_afn_rate?: mixed,
-     *     aed_to_afn_rate?: mixed,
-     *     usd_to_aed_rate?: mixed,
-     *     rate_effective_at?: mixed,
-     *     rate_source?: mixed
-     * }  $fxSnapshot
-     */
     private function updateProductBatch(
         ProductBatch $batch,
         int $newQty,
@@ -1280,7 +1251,7 @@ class ProductController extends Controller
     }
 
     /**
-     * ⭐ ثبت ضرر ناشی از افت قیمت خرید
+     * ⭐ Record loss from purchase price drop
      */
     private function recordPriceDropLoss(ProductVariant $variant, float $oldPurchase, float $newPurchase): void
     {
@@ -1305,19 +1276,15 @@ class ProductController extends Controller
         $variant->loadMissing('product:id,name');
         $name = $variant->product?->name ?? 'Product';
 
-        Expense::create([
-            'branch_id'      => $this->getBranchId(),
-            'expense_number' => Expense::generateExpenseNumber(),
-            'title'          => 'Price drop loss',
-            'category'       => 'other',
-            'amount_afn'     => $loss,
-            'expense_date'   => now()->toDateString(),
+        app(\App\Services\ExpenseService::class)->createLedgerOnly([
+            'branch_id' => $this->getBranchId(),
+            'title' => 'Price drop loss',
+            'category' => 'other',
+            'amount_afn' => $loss,
+            'expense_date' => now()->toDateString(),
             'payment_method' => 'other',
-            'description'    => "{$name}: purchase price fell from {$oldPurchase} to {$newPurchase} AFN on {$qty} pieces still in stock.",
-            'created_by'     => Auth::id(),
-            'user_id'        => Auth::id(),
-            'trash'          => false,
-        ]);
+            'description' => "{$name}: purchase price fell from {$oldPurchase} to {$newPurchase} AFN on {$qty} pieces still in stock.",
+        ], Auth::id());
     }
 
     private function recordPriceChange(
@@ -1485,6 +1452,10 @@ class ProductController extends Controller
     }
 
     /**
+     * Columns safe to persist / expose for a product_batches purchase line.
+     * Board pair snapshots (usd_to_afn_rate, …) are intentionally omitted —
+     * batches store only exchange_rate (purchase currency → AFN).
+     *
      * @param  array<string, mixed>  $money
      * @return array<string, mixed>
      */
@@ -1499,11 +1470,6 @@ class ProductController extends Controller
             'purchase_line_amount' => $money['purchase_line_amount'],
             'rate_to_ledger' => $money['rate_to_ledger'],
             'rate_kind' => $money['rate_kind'],
-            'usd_to_afn_rate' => $money['usd_to_afn_rate'] ?? null,
-            'aed_to_afn_rate' => $money['aed_to_afn_rate'] ?? null,
-            'usd_to_aed_rate' => $money['usd_to_aed_rate'] ?? null,
-            'rate_effective_at' => $money['rate_effective_at'] ?? null,
-            'rate_source' => $money['rate_source'] ?? null,
             'unit_amount_usd' => $money['unit_amount_usd'] ?? null,
             'unit_amount_aed' => $money['unit_amount_aed'] ?? null,
             'line_amount_usd' => $money['line_amount_usd'] ?? null,
@@ -1784,6 +1750,22 @@ class ProductController extends Controller
             'Paid on purchase',
             Auth::id(),
         );
+    }
+
+    /**
+     * Active brands for product forms / filters (shared across index/create/edit).
+     *
+     * @return \Illuminate\Support\Collection<int, \App\Models\Brand>
+     */
+    private function cachedActiveBrands()
+    {
+        return Cache::remember('products.active_brands', 300, function () {
+            return Brand::notTrashed()
+                ->active()
+                ->select('id', 'name')
+                ->orderBy('name')
+                ->get();
+        });
     }
 
     /**
@@ -2349,16 +2331,12 @@ class ProductController extends Controller
         $row->setAttribute('store_profit_per_unit', $batch?->store_profit_per_unit_afn);
         $row->setAttribute('sale_price_afn', $batch?->sale_price_afn);
         $row->setAttribute('exchange_rate', $batch?->exchange_rate);
-        $row->setAttribute('usd_to_afn_rate', $batch?->usd_to_afn_rate);
-        $row->setAttribute('aed_to_afn_rate', $batch?->aed_to_afn_rate);
-        $row->setAttribute('usd_to_aed_rate', $batch?->usd_to_aed_rate);
-        $row->setAttribute('rate_effective_at', $batch?->rate_effective_at);
-        $row->setAttribute('rate_source', $batch?->rate_source);
+        $row->setAttribute('purchase_currency_id', $batch?->purchase_currency_id);
+        $row->setAttribute('purchase_amount_currency', $batch?->purchase_amount_currency);
         $row->setAttribute('purchase_unit_amount', $batch?->unit_cost_currency);
-        $row->setAttribute('profit_currency_id', $batch?->profit_currency_id);
-        $row->setAttribute('profit_currency_code', $batch?->profit_currency_code);
+        $row->setAttribute('profit_currency_id', $batch?->purchase_currency_id);
         $row->setRelation('variant', $batch?->variant);
-        $row->setRelation('investor', $batch?->investor);
+        $row->setRelation('investor', $batch?->investment?->investor);
     }
 
     /**

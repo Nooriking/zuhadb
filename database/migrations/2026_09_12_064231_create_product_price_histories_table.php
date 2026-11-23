@@ -20,13 +20,13 @@ return new class extends Migration
                 ->constrained('currencies')
                 ->nullOnDelete();
 
-            // قیمت خرید
+            // Purchase price
             $table->decimal('old_purchase_price_currency', 18, 2)->default(0);
             $table->decimal('new_purchase_price_currency', 18, 2)->default(0);
             $table->decimal('old_purchase_price_afn', 18, 2)->default(0);
             $table->decimal('new_purchase_price_afn', 18, 2)->default(0);
 
-            // قیمت فروش
+            // Sale price
             $table->decimal('old_sale_price_currency', 18, 2)->default(0);
             $table->decimal('new_sale_price_currency', 18, 2)->default(0);
             $table->decimal('old_sale_price_afn', 18, 2)->default(0);

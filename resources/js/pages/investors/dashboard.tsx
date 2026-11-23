@@ -1,6 +1,5 @@
 ﻿import AppLayout from '@/layouts/app-layout';
 import { useExchange } from '@/hooks/useExchange';
-import { formatMoney } from '@/lib/money';
 import { Head, Link, router } from '@inertiajs/react';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -12,7 +11,7 @@ import {
     Users,
     Wallet,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 
 type Tri = { afn: number; usd: number | null; aed: number | null };
 
@@ -105,38 +104,78 @@ type Props = {
     dashboardPath?: string;
 };
 
-const afn = (n: number) => formatMoney(n, { code: 'AFN', symbol: '؋', decimal_places: 2 } as never);
+const nf = (n: number, digits = 2) =>
+    n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
-function TriLine({ t }: { t?: Tri | null }) {
-    if (!t) return null;
+/** Resolve AFN → { afn, usd, aed } using server Tri or live board rates. */
+function useTriFromAfn(afnAmount: number, tri?: Tri | null): Tri {
+    const { usdToAfn, aedToAfn } = useExchange();
+    if (tri) {
+        return {
+            afn: tri.afn,
+            usd: tri.usd,
+            aed: tri.aed,
+        };
+    }
+    return {
+        afn: afnAmount,
+        usd: usdToAfn && usdToAfn > 0 ? afnAmount / usdToAfn : null,
+        aed: aedToAfn && aedToAfn > 0 ? afnAmount / aedToAfn : null,
+    };
+}
+
+/**
+ * Every amount: USD large on top, AFN + AED smaller below.
+ * Uses Latin currency codes only (no Arabic-script glyphs).
+ */
+function AmountStack({
+    afnAmount,
+    tri,
+    size = 'md',
+}: {
+    afnAmount: number;
+    tri?: Tri | null;
+    size?: 'sm' | 'md' | 'lg';
+}) {
+    const t = useTriFromAfn(afnAmount, tri);
+    const primary =
+        size === 'lg' ? 'text-2xl font-bold' : size === 'sm' ? 'text-sm font-semibold' : 'text-base font-bold';
+
     return (
-        <p className="mt-1 text-[11px] text-zinc-500">
-            {t.usd != null ? `$${t.usd.toLocaleString()}` : '—'} · {t.aed != null ? `د.إ ${t.aed.toLocaleString()}` : '—'}
-        </p>
+        <div className="min-w-0">
+            <p className={`truncate tabular-nums text-zinc-900 dark:text-white ${primary}`}>
+                {t.usd != null ? `$${nf(t.usd)}` : '—'}
+                <span className="ml-1 text-[10px] font-medium tracking-wide text-zinc-400 uppercase">USD</span>
+            </p>
+            <p className="mt-0.5 truncate text-[11px] tabular-nums text-zinc-500">
+                AFN {nf(t.afn)} · AED {t.aed != null ? nf(t.aed) : '—'}
+            </p>
+        </div>
     );
 }
 
 function KpiCard({
     label,
-    value,
+    afnAmount,
+    tri,
     sub,
     icon: Icon,
-    tri,
 }: {
     label: string;
-    value: string;
-    sub?: string;
-    icon: LucideIcon;
+    afnAmount: number;
     tri?: Tri | null;
+    sub?: ReactNode;
+    icon: LucideIcon;
 }) {
     return (
         <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
             <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                     <p className="text-xs font-medium tracking-wide text-zinc-500 uppercase">{label}</p>
-                    <p className="mt-2 truncate text-2xl font-bold text-zinc-900 dark:text-white">{value}</p>
-                    <TriLine t={tri} />
-                    {sub ? <p className="mt-1 text-xs text-zinc-500">{sub}</p> : null}
+                    <div className="mt-2">
+                        <AmountStack afnAmount={afnAmount} tri={tri} size="lg" />
+                    </div>
+                    {sub ? <div className="mt-2 text-xs text-zinc-500">{sub}</div> : null}
                 </div>
                 <div className="rounded-xl bg-zinc-100 p-2.5 text-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
                     <Icon className="h-5 w-5" />
@@ -146,7 +185,7 @@ function KpiCard({
     );
 }
 
-function Section({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
+function Section({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
     return (
         <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
             <div className="flex items-center justify-between border-b border-zinc-100 px-5 py-4 dark:border-zinc-800">
@@ -158,10 +197,11 @@ function Section({ title, children, action }: { title: string; children: React.R
     );
 }
 
-function AverageRatesPanel({ rows }: { rows: AverageRate[] }) {
+function AverageRatesPanel({ rows = [] }: { rows?: AverageRate[] | null }) {
     const { usdToAfn, aedToAfn } = useExchange();
+    const list = rows ?? [];
 
-    if (!rows.length) {
+    if (!list.length) {
         return <p className="text-sm text-zinc-500">No investment FX history yet.</p>;
     }
 
@@ -185,7 +225,7 @@ function AverageRatesPanel({ rows }: { rows: AverageRate[] }) {
                         </tr>
                     </thead>
                     <tbody>
-                        {rows.map((r) => {
+                        {list.map((r) => {
                             const up = (r.rate_delta ?? 0) > 0;
                             const down = (r.rate_delta ?? 0) < 0;
                             return (
@@ -197,12 +237,18 @@ function AverageRatesPanel({ rows }: { rows: AverageRate[] }) {
                                     <td className="py-2.5 pr-3">
                                         {r.total_currency.toLocaleString()} {r.currency_code}
                                     </td>
-                                    <td className="py-2.5 pr-3">{afn(r.total_afn)}</td>
-                                    <td className="py-2.5 pr-3 tabular-nums">
-                                        {r.weighted_avg_rate != null ? r.weighted_avg_rate.toLocaleString(undefined, { maximumFractionDigits: 4 }) : '—'}
+                                    <td className="py-2.5 pr-3">
+                                        <AmountStack afnAmount={r.total_afn} size="sm" />
                                     </td>
                                     <td className="py-2.5 pr-3 tabular-nums">
-                                        {r.board_rate != null ? r.board_rate.toLocaleString(undefined, { maximumFractionDigits: 4 }) : '—'}
+                                        {r.weighted_avg_rate != null
+                                            ? r.weighted_avg_rate.toLocaleString(undefined, { maximumFractionDigits: 4 })
+                                            : '—'}
+                                    </td>
+                                    <td className="py-2.5 pr-3 tabular-nums">
+                                        {r.board_rate != null
+                                            ? r.board_rate.toLocaleString(undefined, { maximumFractionDigits: 4 })
+                                            : '—'}
                                     </td>
                                     <td
                                         className={`py-2.5 tabular-nums ${up ? 'text-emerald-600' : down ? 'text-rose-600' : 'text-zinc-500'}`}
@@ -210,7 +256,9 @@ function AverageRatesPanel({ rows }: { rows: AverageRate[] }) {
                                         {r.rate_delta == null
                                             ? '—'
                                             : `${up ? '+' : ''}${r.rate_delta.toLocaleString(undefined, { maximumFractionDigits: 4 })}${
-                                                  r.rate_delta_pct != null ? ` (${up ? '+' : ''}${r.rate_delta_pct.toFixed(2)}%)` : ''
+                                                  r.rate_delta_pct != null
+                                                      ? ` (${up ? '+' : ''}${r.rate_delta_pct.toFixed(2)}%)`
+                                                      : ''
                                               }`}
                                     </td>
                                 </tr>
@@ -223,21 +271,26 @@ function AverageRatesPanel({ rows }: { rows: AverageRate[] }) {
     );
 }
 
-function InventoryTable({ items }: { items: InventoryItem[] }) {
+function InventoryTable({ items = [] }: { items?: InventoryItem[] | null }) {
+    const safeItems = items ?? [];
     const [q, setQ] = useState('');
     const filtered = useMemo(() => {
         const s = q.trim().toLowerCase();
-        if (!s) return items;
-        return items.filter(
+        if (!s) return safeItems;
+        return safeItems.filter(
             (i) =>
                 i.product_name.toLowerCase().includes(s) ||
                 (i.batch_code || '').toLowerCase().includes(s) ||
                 (i.variant_name || '').toLowerCase().includes(s),
         );
-    }, [items, q]);
+    }, [safeItems, q]);
 
-    if (!items.length) {
-        return <p className="text-sm text-zinc-500">No investor-funded batches yet. Select an investor to load the goods list.</p>;
+    if (!safeItems.length) {
+        return (
+            <p className="text-sm text-zinc-500">
+                No investor-funded batches yet. Select an investor to load the goods list.
+            </p>
+        );
     }
 
     return (
@@ -275,15 +328,18 @@ function InventoryTable({ items }: { items: InventoryItem[] }) {
                                     {i.remaining_quantity}/{i.quantity}
                                     <div className="text-xs text-zinc-500">sold {i.sold_quantity}</div>
                                 </td>
-                                <td className="py-2.5 pr-3 tabular-nums">
-                                    {afn(i.unit_cost_afn)}
-                                    <div className="text-xs text-zinc-500">sale {afn(i.sale_price_afn)}</div>
+                                <td className="py-2.5 pr-3">
+                                    <AmountStack afnAmount={i.unit_cost_afn} size="sm" />
+                                    <div className="mt-1">
+                                        <p className="text-[10px] text-zinc-400 uppercase">Sale</p>
+                                        <AmountStack afnAmount={i.sale_price_afn} size="sm" />
+                                    </div>
                                 </td>
-                                <td className="py-2.5 pr-3 tabular-nums text-amber-700 dark:text-amber-400">
-                                    {afn(i.potential_profit_afn)}
+                                <td className="py-2.5 pr-3 text-amber-700 dark:text-amber-400">
+                                    <AmountStack afnAmount={i.potential_profit_afn} size="sm" />
                                 </td>
-                                <td className="py-2.5 tabular-nums text-emerald-700 dark:text-emerald-400">
-                                    {afn(i.actual_profit_afn)}
+                                <td className="py-2.5 text-emerald-700 dark:text-emerald-400">
+                                    <AmountStack afnAmount={i.actual_profit_afn} size="sm" />
                                 </td>
                             </tr>
                         ))}
@@ -291,8 +347,17 @@ function InventoryTable({ items }: { items: InventoryItem[] }) {
                 </table>
             </div>
             <p className="text-xs text-zinc-500">
-                Showing {filtered.length} of {items.length} batches · profit earned is sale-time only
+                Showing {filtered.length} of {safeItems.length} batches · profit earned is sale-time only
             </p>
+        </div>
+    );
+}
+
+function InlineSubAmount({ label, afnAmount, tri }: { label: string; afnAmount: number; tri?: Tri | null }) {
+    return (
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <span>{label}</span>
+            <AmountStack afnAmount={afnAmount} tri={tri} size="sm" />
         </div>
     );
 }
@@ -330,7 +395,7 @@ export default function InvestorDashboard({
                         {own ? 'My investor dashboard' : 'Investor dashboard'}
                     </h1>
                     <p className="text-sm text-zinc-500">
-                        Capital, sale-time profit, inventory, and weighted FX averages
+                        Amounts show USD first, with AFN and AED equivalents below
                     </p>
                 </div>
                 {!own && investors.length > 0 ? (
@@ -352,30 +417,55 @@ export default function InvestorDashboard({
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 <KpiCard
                     label="Capital (wallet)"
-                    value={afn(kpis.total_capital_afn)}
+                    afnAmount={kpis.total_capital_afn}
                     tri={kpis3c?.total_capital}
-                    sub={`Invested total ${afn(kpis.total_invested_afn)}`}
+                    sub={
+                        <InlineSubAmount
+                            label="Invested total"
+                            afnAmount={kpis.total_invested_afn}
+                            tri={kpis3c?.total_invested}
+                        />
+                    }
                     icon={Wallet}
                 />
                 <KpiCard
                     label="Profit earned (sales)"
-                    value={afn(kpis.total_profit_earned_actual_afn)}
+                    afnAmount={kpis.total_profit_earned_actual_afn}
                     tri={kpis3c?.total_profit_earned_actual}
-                    sub={`Wallet profit ${afn(kpis.total_profit_afn)} · paid ${afn(kpis.total_profit_paid_afn)}`}
+                    sub={
+                        <div className="space-y-1">
+                            <InlineSubAmount
+                                label="Wallet profit"
+                                afnAmount={kpis.total_profit_afn}
+                                tri={kpis3c?.total_profit}
+                            />
+                            <InlineSubAmount
+                                label="Paid"
+                                afnAmount={kpis.total_profit_paid_afn}
+                                tri={kpis3c?.total_profit_paid}
+                            />
+                        </div>
+                    }
                     icon={TrendingUp}
                 />
                 <KpiCard
                     label="Inventory at cost"
-                    value={afn(kpis.inventory_cost_afn)}
+                    afnAmount={kpis.inventory_cost_afn}
                     tri={kpis3c?.inventory_cost}
                     sub={`${kpis.inventory_quantity} pcs · ${kpis.inventory_batch_count} batches`}
                     icon={Package}
                 />
                 <KpiCard
                     label="Potential profit"
-                    value={afn(kpis.potential_profit_afn)}
+                    afnAmount={kpis.potential_profit_afn}
                     tri={kpis3c?.potential_profit}
-                    sub={`Sale value ${afn(kpis.inventory_sale_value_afn)}`}
+                    sub={
+                        <InlineSubAmount
+                            label="Sale value"
+                            afnAmount={kpis.inventory_sale_value_afn}
+                            tri={kpis3c?.inventory_sale_value}
+                        />
+                    }
                     icon={PiggyBank}
                 />
             </div>
@@ -387,8 +477,17 @@ export default function InvestorDashboard({
             <Section
                 title="Investor goods"
                 action={
-                    <span className="text-xs text-zinc-500">
-                        {kpis.inventory_variant_count} variants · withdrawn {afn(kpis.total_withdrawn_afn)}
+                    <span className="flex items-center gap-2 text-xs text-zinc-500">
+                        <span>{kpis.inventory_variant_count} variants</span>
+                        <span>·</span>
+                        <span className="inline-flex items-center gap-1">
+                            withdrawn
+                            <AmountStack
+                                afnAmount={kpis.total_withdrawn_afn}
+                                tri={kpis3c?.total_withdrawn}
+                                size="sm"
+                            />
+                        </span>
                     </span>
                 }
             >
@@ -400,16 +499,17 @@ export default function InvestorDashboard({
                     {byCurrency.length === 0 ? (
                         <p className="text-sm text-zinc-500">No wallet rows.</p>
                     ) : (
-                        <ul className="space-y-2 text-sm">
+                        <ul className="space-y-3 text-sm">
                             {byCurrency.map((c) => (
-                                <li key={c.currency_code} className="flex items-center justify-between gap-3">
+                                <li key={c.currency_code} className="flex items-start justify-between gap-3">
                                     <span className="font-medium">{c.currency_code}</span>
-                                    <span className="tabular-nums text-zinc-600 dark:text-zinc-300">
-                                        cap {c.capital_currency.toLocaleString()} · profit {c.profit_currency.toLocaleString()}
-                                        <span className="ml-2 text-xs text-zinc-400">
-                                            ({afn(c.capital_afn + c.profit_afn)})
-                                        </span>
-                                    </span>
+                                    <div className="text-right">
+                                        <p className="text-xs text-zinc-500">
+                                            Original: cap {c.capital_currency.toLocaleString()} · profit{' '}
+                                            {c.profit_currency.toLocaleString()}
+                                        </p>
+                                        <AmountStack afnAmount={c.capital_afn + c.profit_afn} size="sm" />
+                                    </div>
                                 </li>
                             ))}
                         </ul>
@@ -420,13 +520,24 @@ export default function InvestorDashboard({
                     {monthly.length === 0 ? (
                         <p className="text-sm text-zinc-500">No monthly activity.</p>
                     ) : (
-                        <ul className="space-y-2 text-sm">
+                        <ul className="space-y-3 text-sm">
                             {monthly.map((m) => (
-                                <li key={m.month} className="flex items-center justify-between gap-3">
+                                <li key={m.month} className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                                     <span className="font-medium">{m.month}</span>
-                                    <span className="tabular-nums text-zinc-600 dark:text-zinc-300">
-                                        +{afn(m.deposits)} · profit {afn(m.profits)} · out {afn(m.withdrawals)}
-                                    </span>
+                                    <div className="flex flex-wrap gap-4 sm:justify-end">
+                                        <div>
+                                            <p className="text-[10px] text-zinc-400 uppercase">Deposits</p>
+                                            <AmountStack afnAmount={m.deposits} size="sm" />
+                                        </div>
+                                        <div>
+                                            <p className="text-[10px] text-zinc-400 uppercase">Profit</p>
+                                            <AmountStack afnAmount={m.profits} size="sm" />
+                                        </div>
+                                        <div>
+                                            <p className="text-[10px] text-zinc-400 uppercase">Out</p>
+                                            <AmountStack afnAmount={m.withdrawals} size="sm" />
+                                        </div>
+                                    </div>
                                 </li>
                             ))}
                         </ul>
@@ -439,18 +550,22 @@ export default function InvestorDashboard({
                     {topInvestors.length === 0 ? (
                         <p className="text-sm text-zinc-500">No investors.</p>
                     ) : (
-                        <ul className="space-y-2 text-sm">
+                        <ul className="space-y-3 text-sm">
                             {topInvestors.map((t) => (
-                                <li key={t.id} className="flex items-center justify-between gap-3">
+                                <li key={t.id} className="flex items-start justify-between gap-3">
                                     <Link
                                         href={`${dashboardPath}?investor_id=${t.id}`}
                                         className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                                     >
                                         {t.name}
                                     </Link>
-                                    <span className="tabular-nums">
-                                        {afn(t.total_invested_afn)} · profit {afn(t.profit_afn)}
-                                    </span>
+                                    <div className="text-right">
+                                        <AmountStack afnAmount={t.total_invested_afn} size="sm" />
+                                        <div className="mt-1">
+                                            <p className="text-[10px] text-zinc-400 uppercase">Profit</p>
+                                            <AmountStack afnAmount={t.profit_afn} size="sm" />
+                                        </div>
+                                    </div>
                                 </li>
                             ))}
                         </ul>
@@ -463,15 +578,15 @@ export default function InvestorDashboard({
                     {recentTransactions.length === 0 ? (
                         <p className="text-sm text-zinc-500">No transactions.</p>
                     ) : (
-                        <ul className="space-y-2 text-sm">
+                        <ul className="space-y-3 text-sm">
                             {recentTransactions.map((t) => (
-                                <li key={t.id} className="flex items-center justify-between gap-3">
+                                <li key={t.id} className="flex items-start justify-between gap-3">
                                     <span>
                                         <span className="font-medium">{t.type}</span>
                                         <span className="text-zinc-500"> · {t.investor || '—'}</span>
                                         <span className="block text-xs text-zinc-400">{t.date}</span>
                                     </span>
-                                    <span className="tabular-nums">{afn(t.amount_afn)}</span>
+                                    <AmountStack afnAmount={t.amount_afn} size="sm" />
                                 </li>
                             ))}
                         </ul>
@@ -482,9 +597,9 @@ export default function InvestorDashboard({
                     {pendingWithdrawals.length === 0 ? (
                         <p className="text-sm text-zinc-500">No pending withdrawals.</p>
                     ) : (
-                        <ul className="space-y-2 text-sm">
+                        <ul className="space-y-3 text-sm">
                             {pendingWithdrawals.map((w) => (
-                                <li key={w.id} className="flex items-center justify-between gap-3">
+                                <li key={w.id} className="flex items-start justify-between gap-3">
                                     <span>
                                         <span className="font-medium">{w.withdrawal_number}</span>
                                         <span className="text-zinc-500"> · {w.investor || '—'}</span>
@@ -492,7 +607,7 @@ export default function InvestorDashboard({
                                             {w.type} · {w.withdrawal_date}
                                         </span>
                                     </span>
-                                    <span className="tabular-nums">{afn(w.amount_afn)}</span>
+                                    <AmountStack afnAmount={w.amount_afn} size="sm" />
                                 </li>
                             ))}
                         </ul>

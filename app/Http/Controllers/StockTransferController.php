@@ -285,7 +285,7 @@ class StockTransferController extends Controller
     }
 
     /* =========================================================
-     |  MARK AS COMPLETED — انتقال واقعی موجودی
+     |  MARK AS COMPLETED — actual stock transfer
      ========================================================= */
 
     public function markAsCompleted(StockTransfer $stockTransfer): RedirectResponse
@@ -308,7 +308,7 @@ class StockTransferController extends Controller
                     throw new \Exception("Not enough stock in batch {$fromBatch->batch_code}.");
                 }
 
-                // ۱. ساخت Batch جدید در شعبه مقصد
+                // 1. Create new Batch in destination branch
                 $toBatch = ProductBatch::create([
                     'branch_id'          => $stockTransfer->to_branch_id,
                     'variant_id'         => $fromBatch->variant_id,
@@ -322,16 +322,16 @@ class StockTransferController extends Controller
                     'user_id'            => Auth::id(),
                 ]);
 
-                // ۲. کم کردن از Batch مبدأ
+                // 2. Deduct from source Batch
                 $fromBatch->update([
                     'remaining_quantity' => $fromBatch->remaining_quantity - $item->quantity,
                     'status'             => $fromBatch->remaining_quantity - $item->quantity <= 0 ? 'depleted' : 'active',
                 ]);
 
-                // ۳. ذخیره to_batch_id
+                // 3. Save to_batch_id
                 $item->update(['to_batch_id' => $toBatch->id]);
 
-                // ۴. کم کردن از Inventory مبدأ
+                // 4. Deduct from source Inventory
                 Inventory::decrease(
                     branchId: $stockTransfer->from_branch_id,
                     variantId: $item->variant_id,
@@ -343,7 +343,7 @@ class StockTransferController extends Controller
                     notes: "Transferred out via {$stockTransfer->transfer_number} to {$stockTransfer->toBranch->name}"
                 );
 
-                // ۵. افزودن به Inventory مقصد
+                // 5. Add to destination Inventory
                 Inventory::increase(
                     branchId: $stockTransfer->to_branch_id,
                     variantId: $item->variant_id,

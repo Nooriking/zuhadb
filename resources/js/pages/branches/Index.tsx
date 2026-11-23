@@ -102,7 +102,7 @@ export default function BranchesIndex({ branches, filters, permissions }: Props)
     };
 
     /* =========================================================
-     |  ⭐ Deactivate / Activate — فقط Super Admin
+     |  ⭐ Deactivate / Activate — Super Admin only
      ========================================================= */
 
     const confirmDeactivate = () => {
@@ -193,7 +193,7 @@ export default function BranchesIndex({ branches, filters, permissions }: Props)
                         <Badge variant="outline">{branches.total} total</Badge>
                     </div>
                     <div className="flex gap-2">
-                        {/* ⛔ دکمه Trash حذف شد */}
+                        {/* ⛔ Trash button removed */}
 
                         {permissions.branches_create && (
                             <Link href="/branches/create">
@@ -206,7 +206,7 @@ export default function BranchesIndex({ branches, filters, permissions }: Props)
                     </div>
                 </div>
 
-                {/* ═══════════ ⭐ Info Banner — فقط Super Admin ═══════════ */}
+                {/* ═══════════ ⭐ Info Banner — Super Admin only ═══════════ */}
                 {permissions.is_super_admin && (
                     <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300">
                         <Lock className="h-4 w-4" />
@@ -298,7 +298,7 @@ export default function BranchesIndex({ branches, filters, permissions }: Props)
                                                 {/* Status */}
                                                 <td className="px-4 py-3">{getStatusBadge(b.status)}</td>
 
-                                                {/* ⭐ Actions — بدون Delete */}
+                                                {/* ⭐ Actions — no Delete */}
                                                 <td className="px-4 py-3">
                                                     <div className="flex justify-end gap-1">
                                                         {/* View */}
@@ -343,7 +343,7 @@ export default function BranchesIndex({ branches, filters, permissions }: Props)
                                                             </Button>
                                                         )}
 
-                                                        {/* ⛔ Delete Button حذف شد */}
+                                                        {/* ⛔ Delete Button removed */}
                                                     </div>
                                                 </td>
                                             </tr>

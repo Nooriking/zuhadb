@@ -32,11 +32,11 @@ return new class extends Migration
             /* ═══ QUANTITY ═══ */
             $table->integer('quantity');
 
-            /* ═══ PRICES — فقط AFN ═══ */
+            /* ═══ PRICES — AFN only ═══ */
             $table->decimal('unit_price_afn', 18, 2)->default(0);
             $table->decimal('total_afn', 18, 2)->default(0);
 
-            /* ═══ CONDITION — وضعیت کالا ═══ */
+            /* ═══ CONDITION — item condition ═══ */
             $table->enum('condition', ['good', 'damaged', 'expired', 'other'])
                 ->default('good');
 

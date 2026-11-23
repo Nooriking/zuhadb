@@ -88,7 +88,7 @@ class SaleItem extends Model
         // to avoid double-encoding.
         $this->cost_breakdown = [
             'batch_id'      => $batch->id,
-            'purchase_fx'   => $batch->usd_to_afn_rate,
+            'purchase_fx'   => $batch->exchange_rate,
             'unit_cost_afn' => $batch->unit_cost_afn,
             'sale_fx'       => $this->sale?->usd_to_afn_rate,
             'revenue_afn'   => $revenueAfn,

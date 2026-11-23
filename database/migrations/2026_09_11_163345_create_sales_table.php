@@ -29,7 +29,7 @@ return new class extends Migration
             $table->string('invoice_number')->unique();
             $table->string('receipt_no')->nullable()->unique();
 
-            /* ═══ AMOUNTS — فقط AFN ═══ */
+            /* ═══ AMOUNTS — AFN only ═══ */
             $table->decimal('subtotal_afn', 18, 2)->default(0);
             $table->decimal('discount_afn', 18, 2)->default(0);
             $table->decimal('total_afn', 18, 2)->default(0);

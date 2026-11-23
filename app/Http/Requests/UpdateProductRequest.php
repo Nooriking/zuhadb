@@ -313,7 +313,7 @@ class UpdateProductRequest extends FormRequest
         /* ─────────────── Purchases ─────────────── */
         'purchases'                       => ['nullable', 'array'],
 
-        // ✅ اصلاح شد — خریدها در جدول products هستند
+        // ✅ Fixed — purchases live in the products table
         'purchases.*.id'                  => [
             'nullable',
             'integer',

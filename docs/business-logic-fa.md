@@ -103,7 +103,7 @@
 
 ## ۱۱. هزینه‌ها، قیمت و گزارش
 
-هزینهٔ دستی از `ExpenseController` ثبت می‌شود؛ هزینهٔ افت قیمت موجودی نیز در جریان دریافت خرید قابل ایجاد خودکار است. تاریخچهٔ قیمت خرید/فروش در `ProductPriceHistory` ذخیره می‌شود. `ProfitReportController` گزارش سود، جزئیات فروشگاه/سرمایه‌گذار و خروجی PDF/داده‌ای دارد. تفسیر سود باید میان gross profit، سود سرمایه‌گذار و store profit تفکیک کند؛ تعریف محاسباتی فروش در `SaleService` چنین است: `store_profit_afn = (total_afn - total_cost_afn) - total_investor_profit_afn`.
+هزینهٔ دستی از `ExpenseController` ثبت می‌شود؛ هزینهٔ افت قیمت موجودی نیز در جریان دریافت خرید قابل ایجاد خودکار است. تاریخچهٔ قیمت خرید/فروش در `ProductPriceHistory` ذخیره می‌شود. ماژول قدیمی Profit Report حذف شده؛ سود فروشگاه/سرمایه‌گذار از `SaleController::report`، داشبورد حسابدار و `InvestorDashboardController` خوانده می‌شود. تفسیر سود باید میان gross profit، سود سرمایه‌گذار و store profit تفکیک کند؛ تعریف محاسباتی فروش در `SaleService` چنین است: `store_profit_afn = (total_afn - total_cost_afn) - total_investor_profit_afn`.
 
 ## ۱۲. شعبه و جابه‌جایی موجودی
 
@@ -129,7 +129,7 @@
 | سرمایه‌گذاری | `InvestorController`, `InvestmentController`, `InvestorWithdrawalController` | `Investor`, `Investment`, `InvestorWallet`, allocation/transaction/profit/withdrawal models |
 | ارز | `CurrencyController`, `ExchangeRateController`, `ExchangeRateHistoryController` | `CurrencyService`, `PurchaseValuation`, `Money`, `Currency`, `ExchangeRate` |
 | مرجوعی | `SaleReturnController` | `SaleReturn`, `SaleReturnItem`, `CustomerLedgerService` |
-| گزارش | `ProfitReportController` | `Sale`, `InvestorProfitEntry`, `Expense` |
+| گزارش | `SaleController::report`, `AccountantDashboardController`, `InvestorDashboardController` | `Sale`, `SaleReturn`, `InvestorTransaction`, `ProductBatch`, `Expense` |
 | کاربر و دسترسی | کنترلرهای `Auth`, `Settings`, `UserController` | middlewareهای Role/Permission/Module، `User` |
 
 ## ۱۶. قواعدی که باید در بازبینی مالی جداگانه راستی‌آزمایی شوند

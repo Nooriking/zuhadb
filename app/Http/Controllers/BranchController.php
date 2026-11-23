@@ -114,7 +114,7 @@ class BranchController extends Controller
         }
 
         return redirect()
-            ->route('branches.index')   // ✅ اصلاح شد
+            ->route('branches.index')   // ✅ fixed
             ->with('success', "Branch \"{$branch->name}\" was created successfully.");
     }
 
@@ -180,18 +180,18 @@ class BranchController extends Controller
         abort(403, 'You are not allowed to edit this branch.');
     }
 
-    // ✅ اضافه شد: لود کردن مدیر فعلی
+    // ✅ Added: load current manager
     $branch->load('manager:id,name,email');
 
-    // ✅ اضافه شد: لیست Branch Manager های آزاد + مدیر فعلی
+    // ✅ Added: list of free Branch Managers + current manager
     $managers = User::query()
         ->where(function ($q) use ($branch) {
-            // ⭐ Branch Manager هایی که هنوز شعبه ندارند
+            // ⭐ Branch Managers who do not have a branch yet
             $q->where(function ($sub) {
                 $sub->where('role', 'branch_manager')
                     ->whereNull('branch_id');
             })
-            // ⭐ یا همین مدیر فعلی این شعبه
+            // ⭐ or the current manager of this branch
             ->orWhere('id', $branch->manager_user_id);
         })
         ->select('id', 'name', 'email')
@@ -200,7 +200,7 @@ class BranchController extends Controller
 
     return Inertia::render('branches/Edit', [
         'branch'      => $branch,
-        'managers'    => $managers,   // ✅ اضافه شد
+        'managers'    => $managers,   // ✅ added
         'permissions' => [
             'branches_update'     => $request->user()->canManageBranches(),
             'branches_deactivate' => $request->user()->isSuperAdmin(),
@@ -242,7 +242,7 @@ class BranchController extends Controller
         }
 
         return redirect()
-            ->route('branches.index')   // ✅ اصلاح شد
+            ->route('branches.index')   // ✅ fixed
             ->with('success', "Branch \"{$branch->name}\" was updated successfully.");
     }
 
@@ -293,7 +293,7 @@ class BranchController extends Controller
     }
 
     /* =========================================================
-     |  FORCE DELETE — (غیرفعال)
+     |  FORCE DELETE — (disabled)
      ========================================================= */
     public function forceDelete(Request $request, int $id): RedirectResponse
     {
@@ -317,7 +317,7 @@ class BranchController extends Controller
             ->orderByDesc('updated_at')
             ->paginate(15);
 
-        return Inertia::render('branches/Trash', [   // ✅ حرف بزرگ مثل بقیه
+        return Inertia::render('branches/Trash', [   // ✅ capital letter like the others
             'branches' => $branches,
         ]);
     }
@@ -356,7 +356,7 @@ class BranchController extends Controller
     }
 
     /* =========================================================
-     |  TOGGLE STATUS — فقط Super Admin
+     |  TOGGLE STATUS — Super Admin only
      ========================================================= */
     public function toggleStatus(Request $request, Branch $branch): RedirectResponse
     {
@@ -395,8 +395,8 @@ class BranchController extends Controller
         }
     }
     /* =========================================================
- |  DEACTIVATE — غیرفعال کردن شعبه
- |  ⛔ فقط Super Admin
+ |  DEACTIVATE — deactivate branch
+ |  ⛔ Super Admin only
  ========================================================= */
 public function deactivate(Request $request, Branch $branch): RedirectResponse
 {
@@ -421,8 +421,8 @@ public function deactivate(Request $request, Branch $branch): RedirectResponse
 }
 
 /* =========================================================
- |  ACTIVATE — فعال کردن شعبه
- |  ⛔ فقط Super Admin
+ |  ACTIVATE — activate branch
+ |  ⛔ Super Admin only
  ========================================================= */
 public function activate(Request $request, Branch $branch): RedirectResponse
 {

@@ -8,20 +8,20 @@ use Illuminate\Database\Seeder;
 class AdminSeeder extends Seeder
 {
     /**
-     * ساخت کاربر Admin پیش‌فرض سیستم.
+     * Create the system's default Admin user.
      *
-     * این کاربر دسترسی کامل به همه چیز دارد.
+     * This user has full access to everything.
      */
     public function run(): void
     {
         $email    = 'admin@zuha-perfume.com';
         $password = 'Admin@123';
 
-        // بررسی: آیا از قبل وجود دارد؟
+        // Check: does the user already exist?
         $existing = User::where('email', $email)->first();
 
         if ($existing) {
-            // اگر وجود دارد، مطمئن شو نقشش admin است
+            // If they exist, ensure their role is admin
             if ($existing->role !== User::ROLE_ADMIN) {
                 $existing->update([
                     'role'   => User::ROLE_ADMIN,
@@ -38,7 +38,7 @@ class AdminSeeder extends Seeder
             return;
         }
 
-        // ساخت Admin جدید
+        // Create a new Admin
         $admin = User::create([
             'branch_id'     => null,
             'name'          => 'Admin',
@@ -55,7 +55,7 @@ class AdminSeeder extends Seeder
         ]);
 
         // ─────────────────────────────────────────────
-        // نمایش اطلاعات ورود
+        // Display login credentials
         // ─────────────────────────────────────────────
         $this->command->info('');
         $this->command->info('✅ Admin created successfully!');

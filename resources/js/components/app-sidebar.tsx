@@ -19,6 +19,7 @@ import {
     RotateCcw,
     Settings,
     ShoppingBag,
+    Sparkles,
     Store,
     Tag,
     Truck,
@@ -39,6 +40,12 @@ const mainNavItems: NavItem[] = [
         url: '/dashboard',
         icon: LayoutGrid,
         module: 'dashboard',
+    },
+    {
+        // Visible to all authenticated roles (no module gate).
+        title: 'AI Assistant',
+        url: '/ai',
+        icon: Sparkles,
     },
     {
         title: 'Branches',
@@ -193,15 +200,42 @@ const financialNavItems: NavItem[] = [
 ];
 
 /* =========================================================
- |  ✅ REPORTS — Profit Report و گزارش‌های دیگر
+ |  REPORTS — expandable tree; only live routes appear as links
+ |  Planned reports without pages live on /reports (hub), not here.
  ========================================================= */
 
 const reportNavItems: NavItem[] = [
     {
-        title: 'Investor Dashboard',
-        url: '/investors/dashboard',
+        title: 'Reports',
         icon: BarChart3,
-        module: 'reports',
+        children: [
+            {
+                title: 'Reports Overview',
+                url: '/reports',
+                module: 'reports',
+            },
+            {
+                title: 'Sales Reports',
+                children: [
+                    {
+                        title: 'Sales Overview',
+                        url: '/sales/report',
+                        module: 'sales',
+                    },
+                ],
+            },
+            {
+                title: 'Investor Reports',
+                children: [
+                    {
+                        // Same route as Investment Management → intentional dual entry
+                        title: 'Investor Dashboard',
+                        url: '/investors/dashboard',
+                        module: 'investors',
+                    },
+                ],
+            },
+        ],
     },
 ];
 
@@ -228,11 +262,23 @@ const settingsNavItems: NavItem[] = [
  |  SIDEBAR COMPONENT
  ========================================================= */
 
-function allowedItems(items: NavItem[], modules: string[], showAll: boolean) {
-    if (showAll || modules.includes('*')) {
-        return items;
-    }
-    return items.filter((item) => !item.module || modules.includes(item.module));
+function allowedItems(items: NavItem[], modules: string[], showAll: boolean): NavItem[] {
+    const allowAll = showAll || modules.includes('*');
+
+    return items.flatMap((item) => {
+        const filteredChildren = item.children ? allowedItems(item.children, modules, showAll) : undefined;
+
+        if (filteredChildren && filteredChildren.length > 0) {
+            return [{ ...item, children: filteredChildren }];
+        }
+
+        const selfAllowed = allowAll || !item.module || modules.includes(item.module);
+        if (selfAllowed && item.url) {
+            return [{ ...item, children: undefined }];
+        }
+
+        return [];
+    });
 }
 
 export function AppSidebar() {
@@ -321,12 +367,8 @@ export function AppSidebar() {
                     </div>
                 )}
 
-                {/* ✅ NEW: Reports Section */}
                 {reports.length > 0 && (
                     <div className="mt-4">
-                        <div className="px-3 py-2">
-                            <h3 className="text-muted-foreground mb-1 text-[11px] font-semibold tracking-wider uppercase">Reports</h3>
-                        </div>
                         <NavMain items={reports} />
                     </div>
                 )}

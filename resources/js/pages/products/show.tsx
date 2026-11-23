@@ -100,24 +100,21 @@ interface Purchase {
     line_total: string;
     line_profit: string;
 
-    // ✅ جدید
+    // ✅ New
     store_profit_per_unit?: string | null;
     line_store_profit?: string | null;
 
     purchase_price_afn: string;
     purchase_price_usd: string;
+    purchase_currency_id?: number | null;
     purchase_currency_code?: string | null;
     purchase_unit_amount?: string | null;
+    purchase_amount_currency?: string | null;
     purchase_line_amount?: string | null;
     unit_amount_usd?: string | null;
     unit_amount_aed?: string | null;
     line_amount_usd?: string | null;
     line_amount_aed?: string | null;
-    usd_to_afn_rate?: string | null;
-    aed_to_afn_rate?: string | null;
-    usd_to_aed_rate?: string | null;
-    rate_effective_at?: string | null;
-    rate_source?: string | null;
     notes: string | null;
     bill_image: string | null;
     variant?: {
@@ -251,38 +248,38 @@ export default function ProductShow({
     const totalStock = product.variants.reduce((sum, v) => sum + (v.stock_quantity ?? 0), 0);
     const totalBarcodes = product.variants.reduce((sum, v) => sum + (v.barcodes?.length ?? 0), 0);
 
-    // ✅ مجموع هزینه خرید
+    // ✅ Total purchase cost
     const totalCostAfn = purchases.reduce((sum, p) => sum + toNum(p.line_total), 0);
 
-    // ✅ مجموع سود (investor + store)
+    // ✅ Total profit (investor + store)
     const totalProfitAfn = purchases.reduce((sum, p) => sum + toNum(p.line_profit), 0);
 
-    // ✅ ✅ جدید: مجموع سود سرمایه‌گذار
+    // ✅ ✅ New: total investor profit
     const totalInvestorProfitAfn = purchases.filter((p) => isInvestorPurchase(p.investor_id)).reduce((sum, p) => sum + toNum(p.line_profit), 0);
 
-    // ✅ ✅ جدید: مجموع سود دوکان
+    // ✅ ✅ New: total store profit
     const totalStoreProfitAfn = purchases.reduce((sum, p) => sum + toNum(p.line_store_profit), 0);
 
-    // ✅ مجموع تعداد خریداری‌شده
+    // ✅ Total purchased quantity
     const totalPurchasedQty = purchases.reduce((sum, p) => sum + (p.quantity ?? 0), 0);
 
-    // ✅ مجموع باقی‌مانده
+    // ✅ Total remaining quantity
     const totalRemainingQty = purchases.reduce((sum, p) => sum + (p.remaining_quantity ?? 0), 0);
 
-    // ✅ مجموع پرداختی و باقی‌مانده فاکتور
+    // ✅ Total invoice paid and due
     const totalPaid = purchases.reduce((sum, p) => sum + toNum(p.invoice_paid_afn), 0);
     const totalDue = purchases.reduce((sum, p) => sum + toNum(p.invoice_due_afn), 0);
 
-    // ✅ تعداد purchases با investor
+    // ✅ Purchases with an investor
     const investorPurchases = purchases.filter((p) => isInvestorPurchase(p.investor_id));
     const storePurchases = purchases.filter((p) => !isInvestorPurchase(p.investor_id));
 
-    // ✅ محاسبه میانگین نرخ ارز
+    // ✅ Average exchange rate
     const ratesWithValue = purchases.filter((p) => toNum(p.exchange_rate) > 0);
     const avgExchangeRate =
         ratesWithValue.length > 0 ? ratesWithValue.reduce((sum, p) => sum + toNum(p.exchange_rate), 0) / ratesWithValue.length : 0;
 
-    // ✅ آخرین نرخ ارز
+    // ✅ Latest exchange rate
     const latestPurchase = purchases.length > 0 ? purchases[0] : null;
     const latestExchangeRate = latestPurchase ? toNum(latestPurchase.exchange_rate) : 0;
 
@@ -839,18 +836,14 @@ export default function ProductShow({
                                                     </TableCell>
 
                                                     <TableCell className="bg-blue-50 text-center">
-                                                        {toNum(p.usd_to_afn_rate) > 0 || rate > 0 ? (
+                                                        {rate > 0 ? (
                                                             <div className="flex flex-col items-center gap-0.5">
                                                                 <span className="font-mono text-sm font-bold text-blue-800">
-                                                                    USD {formatRate(toNum(p.usd_to_afn_rate) || rate)}
+                                                                    {(p.purchase_currency_code || 'CUR')}→AFN{' '}
+                                                                    {formatRate(rate)}
                                                                 </span>
-                                                                {toNum(p.aed_to_afn_rate) > 0 ? (
-                                                                    <span className="font-mono text-[10px] text-blue-700">
-                                                                        AED {formatRate(p.aed_to_afn_rate)}
-                                                                    </span>
-                                                                ) : null}
                                                                 <span className="text-[10px] text-blue-600">
-                                                                    historical · {p.rate_source || 'snapshot'}
+                                                                    purchase rate
                                                                 </span>
                                                             </div>
                                                         ) : (

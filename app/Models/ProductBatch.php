@@ -251,6 +251,31 @@ class ProductBatch extends Model
         return (float) bcmul((string) $this->remaining_quantity, (string) $this->unit_cost_afn, 2);
     }
 
+    /**
+     * Authoritative remaining inventory valuation from batch FIFO cost snapshots.
+     * Ownership uses investment_id (null = store-owned; non-null = investor-funded).
+     *
+     * @return array{total_afn: float, store_afn: float, investor_afn: float}
+     */
+    public static function valuationSummary(?int $branchId = null): array
+    {
+        $row = static::query()
+            ->where('trash', false)
+            ->whereNull('deleted_at')
+            ->where('remaining_quantity', '>', 0)
+            ->when($branchId, fn ($q, $v) => $q->where('branch_id', $v))
+            ->selectRaw('COALESCE(SUM(remaining_quantity * unit_cost_afn), 0) as inventory_value_afn')
+            ->selectRaw('COALESCE(SUM(CASE WHEN investment_id IS NULL THEN remaining_quantity * unit_cost_afn ELSE 0 END), 0) as store_value_afn')
+            ->selectRaw('COALESCE(SUM(CASE WHEN investment_id IS NOT NULL THEN remaining_quantity * unit_cost_afn ELSE 0 END), 0) as investor_value_afn')
+            ->first();
+
+        return [
+            'total_afn' => round((float) ($row->inventory_value_afn ?? 0), 2),
+            'store_afn' => round((float) ($row->store_value_afn ?? 0), 2),
+            'investor_afn' => round((float) ($row->investor_value_afn ?? 0), 2),
+        ];
+    }
+
     public function getExpectedStoreProfitAfnAttribute(): float
     {
         return (float) bcmul((string) $this->remaining_quantity, (string) ($this->store_profit_per_unit_afn ?? 0), 2);

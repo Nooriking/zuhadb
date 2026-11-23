@@ -36,7 +36,7 @@ return new class extends Migration
 
             $table->timestamps();
 
-            // یکتا: هر (شعبه، واریانت) فقط یک رکورد
+            // Unique: one record per (branch, variant)
             $table->unique(['branch_id', 'variant_id']);
 
             $table->index('branch_id');

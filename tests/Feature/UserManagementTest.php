@@ -27,6 +27,32 @@ test('branch managers only see and manage users in their own branch', function (
 
     $this->actingAs($manager)->get('/users')->assertOk()->assertSee($sameBranchUser->name)->assertDontSee($otherBranchUser->name);
     $this->actingAs($manager)->get('/users/'.$otherBranchUser->id.'/edit')->assertForbidden();
+    $this->actingAs($manager)->get('/users/'.$sameBranchUser->id.'/edit')->assertOk();
+});
+
+test('branch managers can update users in their own branch', function () {
+    $this->withoutMiddleware(ValidateCsrfToken::class);
+    $branch = Branch::factory()->create();
+    $manager = User::factory()->create(['role' => User::ROLE_BRANCH_MANAGER, 'branch_id' => $branch->id]);
+    $sameBranchUser = User::factory()->create([
+        'role' => User::ROLE_CASHIER,
+        'branch_id' => $branch->id,
+        'name' => 'Cashier Original',
+        'username' => 'cashier.original',
+        'status' => 'active',
+    ]);
+
+    $this->actingAs($manager)->put('/users/'.$sameBranchUser->id, [
+        'name' => 'Cashier Updated',
+        'username' => 'cashier.original',
+        'email' => $sameBranchUser->email,
+        'phone' => $sameBranchUser->phone ?: '0701234567',
+        'role' => User::ROLE_CASHIER,
+        'status' => 'active',
+        'branch_id' => $branch->id,
+    ])->assertRedirect('/users');
+
+    expect($sameBranchUser->fresh()->name)->toBe('Cashier Updated');
 });
 
 test('branch manager creation is forced to own branch and rejects forbidden roles', function () {
@@ -74,4 +100,3 @@ test('user list rejects invalid filters instead of silently applying them', func
     $this->actingAs($admin)->get('/users?status=unknown')->assertSessionHasErrors('status');
     $this->actingAs($admin)->get('/users?role=unknown')->assertSessionHasErrors('role');
 });
-

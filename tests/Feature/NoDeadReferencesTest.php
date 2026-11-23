@@ -71,7 +71,7 @@ class NoDeadReferencesTest extends TestCase
 
         $this->assertEmpty(
             $violations,
-            "ارجاعات زنده به جداول حذف‌شده پیدا شد:\n".implode("\n", $violations)
+            "Live references to dropped tables found:\n".implode("\n", $violations)
         );
     }
 
@@ -89,12 +89,12 @@ class NoDeadReferencesTest extends TestCase
         $this->assertDoesNotMatchRegularExpression(
             "/Product::where(?:Not)?Null\('purchase_date'/",
             $content,
-            "ارجاع به purchase_date روی Product در {$file} پیدا شد"
+            "Found purchase_date reference on Product in {$file}"
         );
         $this->assertDoesNotMatchRegularExpression(
             "/Product::onlyTrash\(\)[\s\S]{0,80}whereNull\('purchase_date'/",
             $content,
-            "ارجاع به purchase_date روی Product در {$file} پیدا شد"
+            "Found purchase_date reference on Product in {$file}"
         );
     }
 
@@ -105,10 +105,27 @@ class NoDeadReferencesTest extends TestCase
             resource_path('js/pages/customer-transactions'),
             resource_path('js/pages/investment-product-allocations'),
             resource_path('js/pages/investment-purchase-allocations'),
+            resource_path('js/components/reports'),
         ];
 
         foreach ($orphanDirs as $dir) {
             $this->assertDirectoryDoesNotExist($dir, "Orphan page dir still present: {$dir}");
+        }
+
+        // reports/index.tsx is the live Reports hub — only the removed profit-report pages are forbidden.
+        $orphanFiles = [
+            resource_path('js/pages/reports/profit.tsx'),
+            resource_path('js/pages/reports/investor-detail.tsx'),
+            resource_path('js/pages/reports/store-detail.tsx'),
+            resource_path('views/reports/profit-pdf.blade.php'),
+            resource_path('views/reports/investor-pdf.blade.php'),
+            resource_path('views/reports/store-pdf.blade.php'),
+            app_path('Services/ReportService.php'),
+            app_path('Http/Controllers/ProfitReportController.php'),
+        ];
+
+        foreach ($orphanFiles as $file) {
+            $this->assertFileDoesNotExist($file, "Orphan file still present: {$file}");
         }
     }
 }

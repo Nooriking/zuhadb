@@ -22,15 +22,15 @@ return new class extends Migration
                 ->nullOnDelete()
                 ->comment('Default currency for this investor');
 
-            // سرمایه
+            // Capital
             $table->decimal('capital_balance_currency', 18, 2)->default(0);
             $table->decimal('capital_balance_afn', 18, 2)->default(0);
 
-            // سود
+            // Profit
             $table->decimal('profit_balance_currency', 18, 2)->default(0);
             $table->decimal('profit_balance_afn', 18, 2)->default(0);
 
-            // آمار کلی
+            // Overall stats
             $table->decimal('total_invested_afn', 18, 2)->default(0);
             $table->decimal('total_profit_earned_afn', 18, 2)->default(0);
             $table->decimal('total_withdrawn_afn', 18, 2)->default(0);

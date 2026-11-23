@@ -21,7 +21,7 @@ class InvestorTransactionController extends Controller
     }
 
     /* =========================================================
-     |  INDEX — همه تراکنش‌ها
+     |  INDEX — all transactions
      ========================================================= */
 
     public function index(Request $request): Response
@@ -63,7 +63,7 @@ class InvestorTransactionController extends Controller
     }
 
     /* =========================================================
-     |  SHOW — جزئیات یک تراکنش
+     |  SHOW — transaction details
      ========================================================= */
 
     public function show(InvestorTransaction $transaction): Response
@@ -85,7 +85,7 @@ class InvestorTransactionController extends Controller
     }
 
     /* =========================================================
-     |  BY INVESTOR — تراکنش‌های یک سرمایه‌گذار خاص
+     |  BY INVESTOR — transactions for a specific investor
      ========================================================= */
 
     public function byInvestor(Investor $investor): Response

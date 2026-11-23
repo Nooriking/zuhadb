@@ -56,6 +56,12 @@ export default function AppSettingsCreate({ errors: initialErrors }: Props) {
         email: '',
         website: '',
         address: '',
+        tax_number: '',
+        registration_no: '',
+        invoice_title: '',
+        invoice_footer_text: '',
+        thank_you_message: '',
+        invoice_show_logo: true,
         social_facebook: '',
         social_instagram: '',
         social_whatsapp: '',
@@ -68,7 +74,7 @@ export default function AppSettingsCreate({ errors: initialErrors }: Props) {
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
     const [loading, setLoading] = useState(false);
 
-    const handleChange = (field: string, value: string) => {
+    const handleChange = (field: string, value: string | boolean) => {
         setForm((prev) => ({ ...prev, [field]: value }));
         if (errors[field]) {
             setErrors((prev) => {
@@ -102,7 +108,11 @@ export default function AppSettingsCreate({ errors: initialErrors }: Props) {
 
         Object.entries(form).forEach(([key, value]) => {
             if (value !== null && value !== undefined) {
-                formData.append(key, String(value));
+                if (typeof value === 'boolean') {
+                    formData.append(key, value ? '1' : '0');
+                } else {
+                    formData.append(key, String(value));
+                }
             }
         });
 
@@ -293,6 +303,61 @@ export default function AppSettingsCreate({ errors: initialErrors }: Props) {
                                 placeholder="Street, City, Country..."
                             />
                         </div>
+                    </CardContent>
+                </Card>
+
+                {/* ═══════════ Invoice / Receipt ═══════════ */}
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Invoice & Receipt</CardTitle>
+                        <CardDescription>Shown on sale invoices and thermal receipts</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                            <div className="space-y-2">
+                                <Label>Invoice Title</Label>
+                                <Input
+                                    value={form.invoice_title}
+                                    onChange={(e) => handleChange('invoice_title', e.target.value)}
+                                    placeholder="Invoice"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Thank-you Message</Label>
+                                <Input
+                                    value={form.thank_you_message}
+                                    onChange={(e) => handleChange('thank_you_message', e.target.value)}
+                                    placeholder="Thank you"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Tax Number (TIN)</Label>
+                                <Input value={form.tax_number} onChange={(e) => handleChange('tax_number', e.target.value)} />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Registration Number</Label>
+                                <Input
+                                    value={form.registration_no}
+                                    onChange={(e) => handleChange('registration_no', e.target.value)}
+                                />
+                            </div>
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Receipt Footer</Label>
+                            <Textarea
+                                value={form.invoice_footer_text}
+                                onChange={(e) => handleChange('invoice_footer_text', e.target.value)}
+                                rows={2}
+                            />
+                        </div>
+                        <label className="flex items-center gap-2 text-sm">
+                            <input
+                                type="checkbox"
+                                checked={form.invoice_show_logo}
+                                onChange={(e) => handleChange('invoice_show_logo', e.target.checked)}
+                            />
+                            Show logo on invoice / receipt
+                        </label>
                     </CardContent>
                 </Card>
 

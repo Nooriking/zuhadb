@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import AppLayout from '@/layouts/app-layout';
 import { formatOriginalAmount } from '@/lib/original-currency';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link } from '@inertiajs/react';
+import { Head, Link, usePage } from '@inertiajs/react';
 import { ArrowLeft, FileText, Package, Printer, TrendingUp, User } from 'lucide-react';
 
 /* ═══════════════════════════════════════════════════════
@@ -70,7 +70,16 @@ interface SaleItem {
         concentration: string | null;
         product: { id: number; name: string; brand: { id: number; name: string } | null } | null;
     };
-    batch?: { id: number; batch_code: string; investor_id: number | null; investor?: { id: number; full_name: string } | null } | null;
+    batch?: {
+        id: number;
+        batch_code: string;
+        investment_id: number | null;
+        investment?: {
+            id: number;
+            investor_id: number | null;
+            investor?: { id: number; name?: string; full_name?: string } | null;
+        } | null;
+    } | null;
 }
 
 interface Sale {
@@ -169,7 +178,7 @@ const formatDateTime = (value: string) => {
 const getPaymentBadge = (status: string) => {
     const map: Record<string, { variant: 'destructive' | 'secondary' | 'success'; label: string }> = {
         unpaid: { variant: 'destructive', label: 'Unpaid' },
-        partial: { variant: 'secondary', label: 'Partial' },
+        partial: { variant: 'secondary', label: 'Partially Paid' },
         paid: { variant: 'success', label: 'Paid' },
     };
     const item = map[status] || map.unpaid;
@@ -191,6 +200,20 @@ const getStatusBadge = (status: string) => {
  ═══════════════════════════════════════════════════════ */
 
 export default function SalesShow({ sale }: Props) {
+    const shop = (
+        usePage().props as {
+            shop?: {
+                name?: string;
+                phone?: string;
+                email?: string;
+                website?: string;
+                address?: string;
+                logo?: string | null;
+                thank_you_message?: string;
+            };
+        }
+    ).shop;
+
     const breadcrumbs: BreadcrumbItem[] = [
         { title: 'Dashboard', href: '/dashboard' },
         { title: 'Sales', href: '/sales' },
@@ -247,7 +270,7 @@ export default function SalesShow({ sale }: Props) {
                             <Printer className="h-4 w-4" /> Print
                         </Button>
 
-                        {/* ✅ دکمه Add Payment حذف شد */}
+                        {/* ✅ Add Payment button removed */}
 
                         <Link href="/sales">
                             <Button variant="outline" className="gap-2">
@@ -556,19 +579,35 @@ export default function SalesShow({ sale }: Props) {
                                 <span className="text-muted-foreground">Subtotal:</span>
                                 <span className="text-right font-mono">{money(sale.display_subtotal)}</span>
 
-                                <span className="text-muted-foreground">Discount:</span>
-                                <span className="text-foreground text-right font-mono">-{money(sale.display_discount)}</span>
+                                {(sale.display_discount ?? parseFloat(sale.discount_afn || '0')) > 0 && (
+                                    <>
+                                        <span className="text-muted-foreground">Discount:</span>
+                                        <span className="text-foreground text-right font-mono">
+                                            -{money(sale.display_discount)}
+                                        </span>
+                                    </>
+                                )}
 
                                 <span className="col-span-2 my-1 border-t" />
 
-                                <span className="font-semibold">Total:</span>
-                                <span className="text-right font-mono font-semibold">{money(sale.display_total)}</span>
+                                <span className="font-semibold">Grand Total:</span>
+                                <span className="text-right font-mono font-semibold">
+                                    {money(sale.display_grand_total_due ?? sale.display_total)}
+                                </span>
+
+                                <span className="text-muted-foreground">Paid:</span>
+                                <span className="text-right font-mono">{money(sale.display_paid)}</span>
+
+                                <span className="font-semibold">Remaining:</span>
+                                <span className="text-right font-mono font-semibold">
+                                    {money(sale.display_remaining)}
+                                </span>
                             </div>
                         </div>
                     </CardContent>
                 </Card>
 
-                {/* ═══════════ Payments Table — نمایش فقط (بدون دکمه Add) ═══════════ */}
+                {/* ═══════════ Payments Table — view only (no Add button) ═══════════ */}
                 <Card>
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
@@ -687,7 +726,7 @@ export default function SalesShow({ sale }: Props) {
                                 <span className="text-right font-mono font-bold">{money(remaining)}</span>
                             </div>
 
-                            {/* ✅ راهنما برای پرداخت */}
+                            {/* ✅ Payment guidance */}
                             {remaining > 0.01 && sale.customer && (
                                 <div className="mt-4 rounded-lg border border-blue-300 bg-blue-50 p-3 text-sm text-blue-800">
                                     <p className="font-semibold">💡 To record a payment for this due:</p>
@@ -703,9 +742,37 @@ export default function SalesShow({ sale }: Props) {
                         </div>
                     </CardContent>
                 </Card>
+
+                {/* Store branding from App Settings (same source as printed receipt) */}
+                {shop && (
+                    <Card className="border-dashed">
+                        <CardContent className="flex flex-col items-center gap-2 p-4 text-center text-sm">
+                            {shop.logo && (
+                                <img
+                                    src={shop.logo}
+                                    alt={shop.name || 'Store'}
+                                    className="h-12 w-auto max-w-[160px] object-contain"
+                                    onError={(e) => {
+                                        (e.currentTarget as HTMLImageElement).style.display = 'none';
+                                    }}
+                                />
+                            )}
+                            {shop.name && <p className="font-semibold tracking-wide">{shop.name}</p>}
+                            {shop.thank_you_message && (
+                                <p className="text-muted-foreground">{shop.thank_you_message}</p>
+                            )}
+                            <div className="text-muted-foreground space-y-0.5 text-xs">
+                                {shop.phone && <p>Tel: {shop.phone}</p>}
+                                {shop.address && <p>{shop.address}</p>}
+                                {shop.email && <p>{shop.email}</p>}
+                                {shop.website && <p>{shop.website}</p>}
+                            </div>
+                        </CardContent>
+                    </Card>
+                )}
             </div>
 
-            {/* ✅ Modal پرداخت و دکمه Add Payment کاملاً حذف شدند */}
+            {/* ✅ Payment modal and Add Payment button fully removed */}
         </AppLayout>
     );
 }

@@ -13,8 +13,9 @@ interface Expense {
     expense_number: string;
     title: string;
     category: string;
-    amount_currency: string;
+    amount_currency: string | null;
     amount_afn: string;
+    currency_code?: string | null;
     expense_date: string;
     payment_method: string;
     branch: { id: number; name: string; code: string } | null;
@@ -108,7 +109,7 @@ export default function ExpensesIndex({ expenses, branches, categories, filters,
                         <p className="mt-1 text-xs text-gray-400">All expenses</p>
                     </div>
 
-                    {/* ✅ Today — کارت جدید */}
+                    {/* ✅ Today — new card */}
                     <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 shadow-sm">
                         <div className="flex items-center justify-between">
                             <p className="text-xs font-medium text-blue-700 uppercase">Today (AFN)</p>
@@ -211,7 +212,15 @@ export default function ExpensesIndex({ expenses, branches, categories, filters,
                                     </td>
                                     <td className="px-4 py-3 text-xs">{new Date(expense.expense_date).toLocaleDateString('en-US')}</td>
                                     <td className="px-4 py-3 text-right">
-                                        <div className="font-mono font-semibold">{formatPrice(expense.amount_afn)} AFN</div>
+                                        <div className="font-mono font-semibold">
+                                            {formatPrice(expense.amount_currency ?? expense.amount_afn)}{' '}
+                                            {expense.currency?.code || expense.currency?.symbol || 'AFN'}
+                                        </div>
+                                        {(expense.currency?.code || 'AFN') !== 'AFN' && (
+                                            <div className="text-muted-foreground text-xs">
+                                                ≈ {formatPrice(expense.amount_afn)} AFN
+                                            </div>
+                                        )}
                                     </td>
                                     <td className="px-4 py-3 text-xs capitalize">{expense.payment_method}</td>
                                     <td className="px-4 py-3">

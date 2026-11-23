@@ -57,18 +57,11 @@ class StockDashboardController extends Controller
             ]);
 
         // Batch-level remaining cost (historical AFN unit costs) — never catalog sale price.
-        $valuationRow = ProductBatch::query()
-            ->where('trash', false)
-            ->where('remaining_quantity', '>', 0)
-            ->when($branchId, fn ($q) => $q->where('branch_id', $branchId))
-            ->selectRaw('COALESCE(SUM(remaining_quantity * unit_cost_afn), 0) as inventory_value_afn')
-            ->selectRaw('COALESCE(SUM(CASE WHEN investor_id IS NULL THEN remaining_quantity * unit_cost_afn ELSE 0 END), 0) as store_value_afn')
-            ->selectRaw('COALESCE(SUM(CASE WHEN investor_id IS NOT NULL THEN remaining_quantity * unit_cost_afn ELSE 0 END), 0) as investor_value_afn')
-            ->first();
-
-        $inventoryValueLedger = (float) ($valuationRow->inventory_value_afn ?? 0);
-        $storeValueLedger = (float) ($valuationRow->store_value_afn ?? 0);
-        $investorValueLedger = (float) ($valuationRow->investor_value_afn ?? 0);
+        // Ownership split uses investment_id (investor_id column was removed from product_batches).
+        $valuation = ProductBatch::valuationSummary($branchId);
+        $inventoryValueLedger = $valuation['total_afn'];
+        $storeValueLedger = $valuation['store_afn'];
+        $investorValueLedger = $valuation['investor_afn'];
 
         $purchaseCostLedger = (float) ProductBatch::query()
             ->where('trash', false)
@@ -111,7 +104,7 @@ class StockDashboardController extends Controller
                 'value' => $money($valueAfn),
                 'value_ledger' => $valueAfn,
                 'value_3c' => $batch3c["b{$b->id}"] ?? null,
-                'investor_owned' => $b->investor_id !== null,
+                'investor_owned' => $b->investment_id !== null,
             ];
         });
 

@@ -142,7 +142,7 @@ class SaleReturnItem extends Model
     }
 
     /**
-     * مبلغ مصرف این قلم (حداکثر به اندازه مبلغ کل قلم)
+     * Expense amount for this line (capped at the line total)
      */
     public function effectiveExpenseAmount(): float
     {
@@ -156,8 +156,8 @@ class SaleReturnItem extends Model
     }
 
     /**
-     * مبلغی که به مشتری برگردانده/از باقی‌داری او کم می‌شود.
-     * مصرف دوکان → کل مبلغ قلم به مشتری؛ مصرف مشتری → از مبلغ مشتری کم می‌شود.
+     * Amount credited back to the customer / deducted from their due.
+     * Shop expense → full line to customer; customer expense → subtract customer portion.
      */
     public function customerCreditAmount(): float
     {
@@ -169,8 +169,8 @@ class SaleReturnItem extends Model
     }
 
     /**
-     * آیا باید به انبار برگردد؟
-     * فقط اگر سالم باشد
+     * Should this item return to stock?
+     * Only when condition is good.
      */
     public function shouldReturnToStock(): bool
     {

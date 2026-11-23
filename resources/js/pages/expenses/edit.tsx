@@ -1,6 +1,6 @@
-// resources/js/pages/expenses/edit.tsx
-
+import { MoneyField } from '@/components/money-field';
 import AppLayout from '@/layouts/app-layout';
+import { defaultCurrencyId, type CatalogCurrency } from '@/lib/currencies';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
 import { useState } from 'react';
@@ -11,6 +11,8 @@ interface Expense {
     branch_id: number;
     title: string;
     category: string;
+    currency_id: number | null;
+    amount_currency: string | null;
     amount_afn: string;
     expense_date: string;
     payment_method: string;
@@ -22,6 +24,7 @@ interface Props {
     branches: { id: number; name: string; code: string }[];
     categories: Record<string, string>;
     methods: Record<string, string>;
+    currencies: CatalogCurrency[];
     errors?: Record<string, string>;
 }
 
@@ -32,12 +35,20 @@ const breadcrumbs = (e: Expense): BreadcrumbItem[] => [
     { title: 'Edit', href: `/expenses/${e.id}/edit` },
 ];
 
-export default function ExpensesEdit({ expense, branches, categories, methods, errors: initialErrors }: Props) {
+export default function ExpensesEdit({
+    expense,
+    branches,
+    categories,
+    methods,
+    currencies = [],
+    errors: initialErrors,
+}: Props) {
     const [form, setForm] = useState({
         branch_id: String(expense.branch_id),
         title: expense.title,
         category: expense.category,
-        amount_afn: expense.amount_afn,
+        amount: String(expense.amount_currency ?? expense.amount_afn ?? ''),
+        currency_id: expense.currency_id ? String(expense.currency_id) : defaultCurrencyId(currencies),
         expense_date: expense.expense_date,
         payment_method: expense.payment_method,
         description: expense.description || '',
@@ -47,14 +58,24 @@ export default function ExpensesEdit({ expense, branches, categories, methods, e
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
+        if (loading) return;
         setLoading(true);
-        router.put(`/expenses/${expense.id}`, form, {
-            onSuccess: () => setLoading(false),
-            onError: (err) => {
-                setErrors(err);
-                setLoading(false);
+        router.put(
+            `/expenses/${expense.id}`,
+            {
+                ...form,
+                amount: parseFloat(form.amount) || 0,
+                currency_id: form.currency_id,
             },
-        });
+            {
+                onSuccess: () => setLoading(false),
+                onError: (err) => {
+                    setErrors(err);
+                    setLoading(false);
+                },
+                onFinish: () => setLoading(false),
+            },
+        );
     };
 
     return (
@@ -126,18 +147,16 @@ export default function ExpensesEdit({ expense, branches, categories, methods, e
                             />
                         </div>
 
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium">Amount (AFN) *</label>
-                            <input
-                                type="number"
-                                step="0.01"
-                                min="0.01"
-                                value={form.amount_afn}
-                                onChange={(e) => setForm({ ...form, amount_afn: e.target.value })}
-                                className="w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-sm"
-                                required
-                            />
-                        </div>
+                        <MoneyField
+                            label="Amount"
+                            required
+                            amount={form.amount}
+                            currencyId={form.currency_id}
+                            currencies={currencies}
+                            onAmountChange={(val) => setForm({ ...form, amount: val })}
+                            onCurrencyChange={(val) => setForm({ ...form, currency_id: val })}
+                            error={errors.amount || errors.currency_id}
+                        />
 
                         <div className="space-y-2">
                             <label className="text-sm font-medium">Payment Method</label>

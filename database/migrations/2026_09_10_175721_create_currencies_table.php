@@ -14,7 +14,7 @@ return new class extends Migration
             $table->string('code', 10)->unique();        // AFN, USD
             $table->string('name');                      // Afghan Afghani, US Dollar
             $table->string('symbol', 10)->nullable();    // ؋, $
-            $table->boolean('is_base')->default(false);  // فقط یکی می‌تواند base باشد
+            $table->boolean('is_base')->default(false);  // Only one can be base
 
             $table->enum('status', ['active', 'inactive'])->default('active');
             $table->boolean('trash')->default(false);

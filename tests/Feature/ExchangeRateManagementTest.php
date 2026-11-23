@@ -78,6 +78,30 @@ test('admins can create an exchange rate', function () {
         ->and($rate->trash)->toBeFalse();
 });
 
+test('posting AFN to USD is normalized to USD to AFN for the board', function () {
+    $user = User::factory()->create(['role' => User::ROLE_ADMIN]);
+    [$afn, $usd] = seedPairCurrencies();
+
+    $this->actingAs($user)->post('/exchange-rates', [
+        'from_currency_id' => $afn->id,
+        'to_currency_id' => $usd->id,
+        'rate' => '65',
+        'effective_at' => now()->toDateTimeString(),
+        'source' => 'manual',
+    ])->assertRedirect('/exchange-rates');
+
+    expect(ExchangeRate::query()
+        ->where('from_currency_id', $usd->id)
+        ->where('to_currency_id', $afn->id)
+        ->where('rate', 65)
+        ->exists())->toBeTrue()
+        ->and(ExchangeRate::query()
+            ->notTrashed()
+            ->where('from_currency_id', $afn->id)
+            ->where('to_currency_id', $usd->id)
+            ->exists())->toBeFalse();
+});
+
 test('exchange rate validation rejects same currencies and non-positive rates', function () {
     $user = User::factory()->create(['role' => User::ROLE_ADMIN]);
     [$afn] = seedPairCurrencies();

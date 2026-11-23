@@ -28,13 +28,13 @@ return new class extends Migration
             $table->decimal('exchange_rate', 18, 6)->default(1);
 
             $table->enum('type', [
-                'capital_deposit',    // واریز سرمایه
-                'capital_withdrawn',  // برداشت سرمایه
-                'profit_earned',      // کسب سود
-                'profit_withdrawn',   // برداشت سود
-                'reinvestment',       // سرمایه‌گذاری مجدد
-                'adjustment',         // تنظیم دستی
-                'loss',               // ضرر
+                'capital_deposit',    // Capital deposit
+                'capital_withdrawn',  // Capital withdrawal
+                'profit_earned',      // Profit earned
+                'profit_withdrawn',   // Profit withdrawal
+                'reinvestment',       // Reinvestment
+                'adjustment',         // Manual adjustment
+                'loss',               // Loss
             ]);
 
             $table->decimal('amount_currency', 18, 2);

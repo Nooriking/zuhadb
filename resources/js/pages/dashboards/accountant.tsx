@@ -27,6 +27,7 @@ interface Props {
         month_investor_profit?: number;
         month_net?: number;
         customer_due: number;
+        earned_investor_profit?: number;
         pending_investor_profit: number;
         paid_investor_profit?: number;
         inventory_value?: number;
@@ -40,6 +41,7 @@ interface Props {
         month_investor_profit?: ThreeCurrencyAmount | null;
         month_net?: ThreeCurrencyAmount | null;
         customer_due?: ThreeCurrencyAmount | null;
+        earned_investor_profit?: ThreeCurrencyAmount | null;
         pending_investor_profit?: ThreeCurrencyAmount | null;
         paid_investor_profit?: ThreeCurrencyAmount | null;
         inventory_value?: ThreeCurrencyAmount | null;
@@ -59,7 +61,7 @@ const FALLBACK_REPORTING: DashboardReporting = {
 export default function AccountantDashboard({
     kpis,
     kpis3c = null,
-    recentExpenses,
+    recentExpenses = [],
     reporting = FALLBACK_REPORTING,
     fxBoard = null,
 }: Props) {
@@ -138,8 +140,17 @@ export default function AccountantDashboard({
                         icon={Users}
                         color="orange"
                     />
+                    {kpis.earned_investor_profit !== undefined && (
+                        <KpiCard
+                            title="Investor profit earned"
+                            value={money(kpis.earned_investor_profit)}
+                            threeCurrency={kpis3c?.earned_investor_profit}
+                            icon={TrendingUp}
+                            color="orange"
+                        />
+                    )}
                     <KpiCard
-                        title="Pending investor profit"
+                        title="Outstanding investor profit"
                         value={money(kpis.pending_investor_profit)}
                         threeCurrency={kpis3c?.pending_investor_profit}
                         icon={Wallet}
@@ -147,7 +158,7 @@ export default function AccountantDashboard({
                     />
                     {kpis.paid_investor_profit !== undefined && (
                         <KpiCard
-                            title="Paid investor profit"
+                            title="Investor profit paid"
                             value={money(kpis.paid_investor_profit)}
                             threeCurrency={kpis3c?.paid_investor_profit}
                             icon={Banknote}

@@ -15,7 +15,7 @@ return new class extends Migration
                   ->on('users')
                   ->nullOnDelete();
 
-            // ⭐ user_id (سازنده) → users.id
+            // ⭐ user_id (creator) → users.id
             $table->foreign('user_id')
                   ->references('id')
                   ->on('users')

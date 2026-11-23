@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Brand extends Model
 {
-    use HasFactory;   // ← SoftDeletes حذف شد چون از ستون trash استفاده می‌کنی
+    use HasFactory;   // SoftDeletes removed — trash column is used instead
 
     protected $table = 'brands';
 
@@ -51,7 +51,7 @@ class Brand extends Model
         return $query->where('trash', false);
     }
 
-    public function scopeInTrash($query)   // ← نام جدید، بدون تداخل
+    public function scopeInTrash($query)   // renamed to avoid SoftDeletes clash
     {
         return $query->where('trash', true);
     }

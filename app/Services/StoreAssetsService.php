@@ -8,17 +8,17 @@ use Illuminate\Support\Facades\DB;
 class StoreAssetsService
 {
     /**
-     * ✅ محاسبه دارایی‌های دوکان (بدون investor)
+     * ✅ Calculate store assets (without investor)
      *
-     * منطق:
-     *  - جنس‌هایی که investment_id = NULL دارند → مال دوکان هستند
-     *    (ستون investor_id از product_batches حذف شده)
-     *  - سود این جنس‌ها کامل به دوکان می‌رسد (نه به هیچ سرمایه‌گذار)
+     * Logic:
+     *  - Items with investment_id = NULL → belong to the store
+     *    (investor_id column was removed from product_batches)
+     *  - Profit from these items goes entirely to the store (not to any investor)
      */
     public static function summarize(?int $branchId = null): array
     {
         /* ═══════════════════════════════════════════════════
-         |  1. موجودی فعلی دوکان در انبار
+         |  1. Current store stock in inventory
          ═══════════════════════════════════════════════════ */
 
         $batches = ProductBatch::query()
@@ -41,16 +41,16 @@ class StoreAssetsService
             $unitCostAfn  = (float) $b->unit_cost_afn;
             $totalCostAfn = (float) $b->total_cost_afn;
 
-            // ارزش باقی‌مانده بر اساس قیمت خرید
+            // Remaining value based on purchase cost
             $remainingCostAfn = $remaining * $unitCostAfn;
 
-            // قیمت فروش: اول از خود batch، وگرنه از variant
+            // Sale price: prefer batch, otherwise variant
             $salePriceAfn = (float) ($b->sale_price_afn ?: ($b->variant?->sale_price_afn ?? 0));
 
-            // سود مورد انتظار (اگر همه بفروشند)
+            // Expected profit (if all remaining units sell)
             $expectedProfitAfn = max(0, ($salePriceAfn - $unitCostAfn) * $remaining);
 
-            // نام کامل
+            // Full display name
             $displayName = trim(implode(' · ', array_filter([
                 $b->variant?->product?->brand?->name,
                 $b->variant?->product?->name,
@@ -83,10 +83,10 @@ class StoreAssetsService
         $totalRemainingQty      = (int) collect($items)->sum('remaining');
 
         /* ═══════════════════════════════════════════════════
-         |  2. فروش‌های تحقق‌یافته از جنس‌های دوکان
+         |  2. Realized sales from store-owned items
          ═══════════════════════════════════════════════════ */
 
-        // از product_batches که investment_id = NULL (مال دوکان)، sale_items را بگیر
+        // From product_batches with investment_id = NULL (store-owned), join sale_items
         $realizedRow = DB::table('sale_items')
             ->join('sales', 'sale_items.sale_id', '=', 'sales.id')
             ->join('product_batches', 'sale_items.batch_id', '=', 'product_batches.id')
@@ -110,27 +110,27 @@ class StoreAssetsService
         ];
 
         /* ═══════════════════════════════════════════════════
-         |  3. جمع کل
+         |  3. Totals
          ═══════════════════════════════════════════════════ */
 
         return [
             'summary' => [
-                // موجودی فعلی
+                // Current stock
                 'total_items'         => count($items),
                 'total_qty'           => $totalQty,
                 'total_remaining_qty' => $totalRemainingQty,
 
-                // ارزش‌ها (AFN)
+                // Values (AFN)
                 'total_cost_afn'      => $totalCostAfn,
                 'remaining_cost_afn'  => $totalRemainingCostAfn,
                 'expected_profit_afn' => $totalExpectedProfitAfn,
 
-                // فروش‌های تحقق‌یافته
+                // Realized sales
                 'realized_sales_afn'  => $realized['total_sales_afn'],
                 'realized_qty'        => $realized['total_qty'],
                 'realized_profit_afn' => $realized['total_profit_afn'],
 
-                // سود کل
+                // Total profit
                 'total_profit_afn'    => $realized['total_profit_afn'] + $totalExpectedProfitAfn,
             ],
             'items' => $items,

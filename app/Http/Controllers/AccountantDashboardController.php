@@ -5,10 +5,11 @@ namespace App\Http\Controllers;
 use App\Models\Customer;
 use App\Models\Expense;
 use App\Models\InvestorTransaction;
+use App\Models\InvestorWalletBalance;
+use App\Models\ProductBatch;
 use App\Models\Sale;
 use App\Models\SalePayment;
 use App\Services\CurrencyService;
-use App\Services\StoreAssetsService;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -41,15 +42,23 @@ class AccountantDashboardController extends Controller
             ->sum('amount_afn');
         $customerDueLedger = (float) Customer::notTrashed()->sum('current_due_afn');
 
-        // Profit is posted to investor_transactions at sale time (wallet credited immediately).
-        $paidProfitLedger = (float) InvestorTransaction::query()
-            ->where('type', 'profit_earned')
-            ->sum('amount_afn');
-        $pendingProfitLedger = 0.0;
+        // Investor profit KPIs — align with InvestorDashboard source of truth:
+        // earned = profit_earned ledger, paid = profit_withdrawn, outstanding = wallet profit balance.
+        $investorTx = InvestorTransaction::query()
+            ->whereIn('type', ['profit_earned', 'profit_withdrawn'])
+            ->selectRaw("
+                COALESCE(SUM(CASE WHEN type = 'profit_earned' THEN amount_afn ELSE 0 END), 0) as earned_afn,
+                COALESCE(SUM(CASE WHEN type = 'profit_withdrawn' THEN ABS(amount_afn) ELSE 0 END), 0) as paid_afn
+            ")
+            ->first();
+
+        $earnedProfitLedger = (float) ($investorTx->earned_afn ?? 0);
+        $paidProfitLedger = (float) ($investorTx->paid_afn ?? 0);
+        $pendingProfitLedger = (float) InvestorWalletBalance::query()->sum('profit_balance_afn');
         $monthNetLedger = $monthStoreProfitLedger - $monthExpensesLedger;
 
-        $inventory = StoreAssetsService::summarize(null);
-        $inventoryValueLedger = (float) ($inventory['summary']['remaining_cost_afn'] ?? 0);
+        // Total inventory at batch FIFO cost (store + investor owned). Same method as Stock dashboard.
+        $inventoryValueLedger = ProductBatch::valuationSummary(null)['total_afn'];
 
         $kpis3c = $this->currencies->mapThreeCurrency([
             'month_sales' => $monthSalesLedger,
@@ -60,6 +69,7 @@ class AccountantDashboardController extends Controller
             'month_investor_profit' => $monthInvestorProfitLedger,
             'month_net' => $monthNetLedger,
             'customer_due' => $customerDueLedger,
+            'earned_investor_profit' => $earnedProfitLedger,
             'pending_investor_profit' => $pendingProfitLedger,
             'paid_investor_profit' => $paidProfitLedger,
             'inventory_value' => $inventoryValueLedger,
@@ -98,6 +108,7 @@ class AccountantDashboardController extends Controller
                 'month_investor_profit' => $money($monthInvestorProfitLedger),
                 'month_net' => $money($monthNetLedger),
                 'customer_due' => $money($customerDueLedger),
+                'earned_investor_profit' => $money($earnedProfitLedger),
                 'pending_investor_profit' => $money($pendingProfitLedger),
                 'paid_investor_profit' => $money($paidProfitLedger),
                 'inventory_value' => $money($inventoryValueLedger),

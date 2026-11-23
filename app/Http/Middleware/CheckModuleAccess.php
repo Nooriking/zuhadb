@@ -9,9 +9,9 @@ use Symfony\Component\HttpFoundation\Response;
 class CheckModuleAccess
 {
     /**
-     * بررسی دسترسی به ماژول.
+     * Check module access.
      *
-     * استفاده در routes:
+     * Usage in routes:
      *   ->middleware('module:sales')
      *   ->middleware('module:products')
      *   ->middleware('module:users,branches')   // OR
@@ -22,22 +22,22 @@ class CheckModuleAccess
     {
         $user = $request->user();
 
-        // اگر لاگین نکرده
+        // Not logged in
         if (! $user) {
             abort(401, 'Unauthenticated.');
         }
 
-        // Super Admin = دسترسی کامل
+        // Super Admin = full access
         if ($user->isSuperAdmin()) {
             return $next($request);
         }
 
-        // اگر هیچ ماژولی مشخص نشده — فقط لاگین کافی است
+        // No modules specified — login alone is enough
         if (empty($modules)) {
             return $next($request);
         }
 
-        // OR — اگر یکی از ماژول‌ها را داشت کافی است
+        // OR — having any one of the modules is enough
         foreach ($modules as $module) {
             if ($user->canAccessModule($module)) {
                 return $next($request);

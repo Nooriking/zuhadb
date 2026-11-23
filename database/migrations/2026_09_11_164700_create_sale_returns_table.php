@@ -28,7 +28,7 @@ return new class extends Migration
             /* ═══ DOCUMENT ═══ */
             $table->string('return_number')->unique();
 
-            /* ═══ AMOUNTS — فقط AFN ═══ */
+            /* ═══ AMOUNTS — AFN only ═══ */
             $table->decimal('subtotal_afn', 18, 2)->default(0);
             $table->decimal('total_afn', 18, 2)->default(0);
 
@@ -37,7 +37,7 @@ return new class extends Migration
             $table->decimal('new_due_afn', 18, 2)->default(0);
 
             /* ═══ REFUND / SETTLEMENT ═══ */
-            // اگر برگشتی بیشتر از قرض فعلی باشد → باید به مشتری پول برگردانده شود
+            // If the return exceeds current debt → refund money to the customer
             $table->decimal('refund_amount_afn', 18, 2)->default(0);
             $table->enum('refund_method', [
                 'cash', 'card', 'bank', 'mobile', 'credit_note', 'other',

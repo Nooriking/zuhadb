@@ -178,7 +178,7 @@ export default function SalesEdit({ sale, branches, customers, variants, canEdit
     const isCompleted = sale.status === 'completed';
     const isCancelled = sale.status === 'cancelled';
 
-    // ✅ آیا کاربر فعلی اجازه‌ی ویرایش این فروش را دارد؟
+    // ✅ Does the current user have permission to edit this sale?
     const canEdit = !isCancelled && (!isCompleted || canEditCompleted);
 
     /* ─────────────── Effect: fill customer fields ─────────────── */
@@ -268,7 +268,7 @@ export default function SalesEdit({ sale, branches, customers, variants, canEdit
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
 
-        // ✅ گارد امنیتی: اگر کاربر مجاز نیست، ارسال نکن
+        // ✅ Security guard: do not submit if the user is not allowed
         if (!canEdit) {
             toast({
                 title: 'Not allowed',
@@ -362,7 +362,7 @@ export default function SalesEdit({ sale, branches, customers, variants, canEdit
                     </Link>
                 </div>
 
-                {/* ═══════════ Completed Warning — غیر Super Admin ═══════════ */}
+                {/* ═══════════ Completed Warning — non–Super Admin ═══════════ */}
                 {isCompleted && !canEditCompleted && (
                     <div className="flex items-start gap-3 rounded-lg border-2 border-yellow-400 bg-yellow-50 p-4">
                         <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-yellow-600" />

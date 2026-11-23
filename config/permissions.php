@@ -5,9 +5,9 @@
 return [
 
     /* =========================================================
-     |  ماژول‌ها بر اساس نقش
+     |  Modules by role
      |  ────────────────────────────────────────────────────────
-     |  هر نقش چه ماژول‌هایی را می‌بیند (Sidebar + Route guard)
+     |  Which modules each role can see (Sidebar + Route guard)
      ========================================================= */
 
     'modules' => [
@@ -105,10 +105,10 @@ return [
     ],
 
     /* =========================================================
-     |  دسترسی‌های دقیق درون ماژول
+     |  Fine-grained permissions within modules
      |  ────────────────────────────────────────────────────────
-     |  فرمت: module.action
-     |  '*' = همه دسترسی‌ها
+     |  Format: module.action
+     |  '*' = all permissions
      ========================================================= */
 
     'permissions' => [
@@ -137,13 +137,15 @@ return [
             'settings.view', 'settings.update',
             // Currencies
             'currencies.view', 'currencies.create', 'currencies.update',
+            // Reports
+            'reports.view',
         ],
 
         'branch_manager' => [
-            // Users — فقط شعبه خودش
+            // Users — own branch only
             'users.view', 'users.create', 'users.update',
             'users.block', 'users.unblock',
-            // Branches — فقط مشاهده شعبه خودش
+            // Branches — view own branch only
             'branches.view',
             // Products
             'products.view', 'products.create', 'products.update',
@@ -202,7 +204,7 @@ return [
     ],
 
     /* =========================================================
-     |  نقش‌های قابل ایجاد توسط هر نقش (سلسله مراتب)
+     |  Roles each role may create (hierarchy)
      ========================================================= */
 
     'creatable_roles' => [

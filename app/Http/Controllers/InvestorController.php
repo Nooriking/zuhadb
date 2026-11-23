@@ -10,6 +10,7 @@ use App\Models\InvestorTransaction;
 use App\Models\InvestorWalletBalance;
 use App\Models\InvestorWithdrawal;
 use App\Models\ProductBatch;
+use App\Services\ExchangeRateService;
 use App\Services\ExchangeService;
 use App\Services\InvestmentCapitalService;
 use App\Services\InvestorMultiCurrencyDashboardService;
@@ -228,7 +229,7 @@ class InvestorController extends Controller
             ->with('success', "Cash capital #{$investment->id} recorded.");
     }
 
-    public function show(Investor $investor): Response
+    public function show(Investor $investor, ExchangeRateService $rates): Response
     {
         $this->authorize('view', $investor);
 
@@ -236,66 +237,102 @@ class InvestorController extends Controller
             abort(404);
         }
 
-        $investor->getOrCreateWallet();
-
         $investor->load([
-            'investments' => fn ($q) => $q->with(['currency:id,code,name,symbol'])->latest(),
-            'transactions' => fn ($q) => $q->with('currency:id,code,name,symbol')->latest(),
-            'withdrawals' => fn ($q) => $q->with('currency:id,code,name,symbol')->latest(),
-            'batches' => fn ($q) => $q->with(['variant.product:id,name', 'variant:id,product_id,name,volume_ml'])
-                ->latest(),
-            'investorWalletBalances',
+            'investments' => fn ($q) => $q->latest('investment_date'),
+            'investments.currency:id,code,symbol',
+            'investments.batches' => fn ($q) => $q->where('status', 'active'),
+            'investments.batches.variant.product:id,name,brand_id',
+            'investments.batches.variant.product.brand:id,name',
+            'investorWalletBalances.currency:id,code,symbol',
+            'transactions' => fn ($q) => $q->latest('transaction_date')->limit(100),
+            'transactions.currency:id,code,symbol',
+            'withdrawals' => fn ($q) => $q->latest('withdrawal_date')->limit(50),
+            'withdrawals.currency:id,code,symbol',
         ]);
 
-        $goods = $this->goodsTotalsByInvestor([$investor->id])[$investor->id] ?? ['held' => '0.00', 'sold' => '0.00'];
-        $profitTotal = (float) $investor->transactions->where('type', 'profit_earned')->sum('amount_afn');
-        $cashCapital = (float) $investor->transactions->where('type', 'capital_deposit')->sum('amount_afn');
-        $goodsContribution = (float) $investor->transactions->where('type', 'goods_deposit')->sum('amount_afn');
-
-        $stats = [
-            'total_investments' => $investor->investments->count(),
-            'active_investments' => $investor->investments->where('status', 'active')->count(),
-            'total_transactions' => $investor->transactions->count(),
-            'total_withdrawals' => $investor->withdrawals->count(),
-            'total_batches' => $investor->batches->count(),
-            'active_batches' => $investor->batches->where('remaining_quantity', '>', 0)->count(),
-            'funded_purchases' => $investor->batches->count(),
-            'realized_profit_afn' => Money::round((string) $profitTotal, 2),
-            'paid_profit_afn' => Money::round((string) $profitTotal, 2),
-            'pending_profit_afn' => '0.00',
-            'cash_capital_afn' => Money::round((string) $cashCapital, 2),
-            'goods_contribution_afn' => Money::round((string) $goodsContribution, 2),
-            'goods_held_afn' => $goods['held'],
-            'goods_sold_afn' => $goods['sold'],
-            'has_cash_capital' => $investor->hasCashCapital(),
-            'is_goods_investor' => $investor->isGoodsInvestor(),
-            'active_goods_value_afn' => $investor->active_goods_value_afn,
-            'active_goods_count' => $investor->active_goods_count,
-            'available_cash_afn' => $investor->available_cash_afn,
+        // ─── KPIs (all AFN; frontend builds USD/AED) ───
+        $totals = [
+            'capital_afn' => (float) $investor->investorWalletBalances->sum('capital_balance_afn'),
+            'profit_afn' => (float) $investor->investorWalletBalances->sum('profit_balance_afn'),
+            'invested_afn' => (float) $investor->investments->where('status', 'active')->sum('amount_afn'),
+            'withdrawn_afn' => (float) $investor->transactions
+                ->whereIn('type', ['capital_withdrawn', 'profit_withdrawn'])
+                ->sum(fn ($t) => abs((float) $t->amount_afn)),
         ];
 
-        $multiCurrencySummary = $this->multiCurrency->summarize((int) $investor->id);
-        $fundedPurchases = $this->buildFundedPurchases($investor);
-        $funding = $this->buildFundingSummary($investor);
+        // ─── Active inventory (summary only) ───
+        $activeBatches = $investor->investments
+            ->flatMap(fn ($inv) => $inv->batches)
+            ->where('remaining_quantity', '>', 0);
 
-        // Attach empty profitEntries collection for older frontend that still reads it.
-        $investor->setRelation('profitEntries', collect());
-        $investor->setAttribute('wallet', $investor->getOrCreateWallet());
+        $inventory = [
+            'quantity' => (int) $activeBatches->sum('remaining_quantity'),
+            'cost_afn' => (float) $activeBatches->sum(fn ($b) =>
+                (float) $b->unit_cost_afn * (int) $b->remaining_quantity
+            ),
+            'sale_value_afn' => (float) $activeBatches->sum(fn ($b) =>
+                (float) $b->sale_price_afn * (int) $b->remaining_quantity
+            ),
+            'batch_count' => $activeBatches->count(),
+        ];
+        $inventory['potential_profit_afn'] = max(0, $inventory['sale_value_afn'] - $inventory['cost_afn']);
+
+        // ─── Wallet by currency (only if > 0) ───
+        $walletByCurrency = $investor->investorWalletBalances
+            ->filter(fn ($w) => (float) $w->capital_balance_afn > 0 || (float) $w->profit_balance_afn > 0)
+            ->map(fn ($w) => [
+                'currency_code' => $w->currency_code,
+                'currency_symbol' => $w->currency?->symbol,
+                'capital_currency' => (float) $w->capital_balance_currency,
+                'capital_afn' => (float) $w->capital_balance_afn,
+                'profit_currency' => (float) $w->profit_balance_currency,
+                'profit_afn' => (float) $w->profit_balance_afn,
+            ])
+            ->values();
 
         return Inertia::render('investors/show', [
-            'investor' => $investor,
-            'stats' => $stats,
-            'funding' => $funding,
-            'funded_purchases' => $fundedPurchases,
-            'currencies' => Currency::formOptions(),
-            'sourceTypes' => [
-                'cash' => 'Cash capital',
-                'goods' => 'Goods contribution',
+            'investor' => [
+                'id' => $investor->id,
+                'name' => $investor->name,
+                'email' => $investor->email,
+                'phone' => $investor->phone,
+                'status' => $investor->status ?? 'active',
+                'created_at' => $investor->created_at?->toIso8601String(),
             ],
-            'currencySections' => $multiCurrencySummary['currency_sections'],
-            'exchangeValuation' => $multiCurrencySummary['exchange_valuation'],
-            'multiCurrencyLegacy' => $multiCurrencySummary['legacy'],
-            'multiCurrencyLimitations' => $multiCurrencySummary['limitations'],
+            'totals' => $totals,
+            'inventory' => $inventory,
+            'walletByCurrency' => $walletByCurrency,
+            'investments' => $investor->investments->map(fn ($inv) => [
+                'id' => $inv->id,
+                'currency_code' => $inv->currency?->code,
+                'exchange_rate' => (float) $inv->exchange_rate,
+                'amount_currency' => (float) $inv->amount_currency,
+                'amount_afn' => (float) $inv->amount_afn,
+                'investment_date' => $inv->investment_date?->toDateString(),
+                'status' => $inv->status,
+                'batches_count' => $inv->batches->count(),
+            ])->values(),
+            'transactions' => $investor->transactions->map(fn ($t) => [
+                'id' => $t->id,
+                'date' => $t->transaction_date?->toDateString(),
+                'type' => $t->type,
+                'currency_code' => $t->currency?->code ?? $t->currency_code,
+                'amount_afn' => (float) $t->amount_afn,
+                'balance_after_afn' => (float) $t->balance_after_afn,
+                'description' => $t->description,
+            ])->values(),
+            'withdrawals' => $investor->withdrawals->map(fn ($w) => [
+                'id' => $w->id,
+                'withdrawal_number' => $w->withdrawal_number,
+                'type' => $w->type,
+                'currency_code' => $w->currency?->code ?? $w->currency_code,
+                'amount_afn' => (float) $w->amount_afn,
+                'withdrawal_date' => $w->withdrawal_date?->toDateString(),
+                'status' => $w->status,
+            ])->values(),
+            // flatBoard so page prop matches shared useExchange() shape (not nested board()).
+            'exchange' => $rates->flatBoard(),
+            'currencies' => Currency::formOptions(),
         ]);
     }
 
@@ -535,80 +572,4 @@ class InvestorController extends Controller
         return $out;
     }
 
-    private function buildFundingSummary(Investor $investor): array
-    {
-        $contributed = [];
-
-        foreach ($investor->investments as $investment) {
-            $code = $investment->currency?->code ?: 'AFN';
-            $symbol = $investment->currency?->symbol ?: '؋';
-
-            if (! isset($contributed[$code])) {
-                $contributed[$code] = [
-                    'currency_code' => $code,
-                    'currency_symbol' => $symbol,
-                    'decimal_places' => 2,
-                    'original_total' => 0.0,
-                    'ledger_afn' => 0.0,
-                ];
-            }
-
-            $contributed[$code]['original_total'] = (float) Money::add(
-                (string) $contributed[$code]['original_total'],
-                (string) ($investment->amount_currency ?? 0),
-                8
-            );
-            $contributed[$code]['ledger_afn'] = (float) Money::add(
-                (string) $contributed[$code]['ledger_afn'],
-                (string) ($investment->amount_afn ?? 0),
-                8
-            );
-        }
-
-        $wallet = $investor->getOrCreateWallet();
-
-        return [
-            'contributed_by_currency' => array_values($contributed),
-            'unallocated_by_currency' => [],
-            'current_balance_afn' => (float) Money::round(Money::add(
-                (string) $wallet->capital_balance_afn,
-                (string) $wallet->profit_balance_afn,
-                8
-            ), 2),
-            'reporting_currency' => 'AFN',
-            'reporting_note' => 'Ledger totals use recorded AFN amounts. Original currency totals are kept separate and are never mixed.',
-        ];
-    }
-
-    private function buildFundedPurchases(Investor $investor): array
-    {
-        return ProductBatch::query()
-            ->whereHas('investment', fn ($q) => $q->where('investor_id', $investor->id))
-            ->where('trash', false)
-            ->with(['variant:id,name,product_id,volume_ml', 'variant.product:id,name', 'investment:id,investor_id'])
-            ->orderByDesc('purchase_date')
-            ->orderByDesc('id')
-            ->get()
-            ->map(function (ProductBatch $batch) {
-                return [
-                    'id' => $batch->id,
-                    'purchase_date' => optional($batch->purchase_date)?->toDateString(),
-                    'invoice_number' => $batch->invoice_number,
-                    'product_name' => $batch->variant?->product?->name ?? $batch->variant?->name ?? '—',
-                    'variant_name' => $batch->variant?->name,
-                    'quantity' => (int) $batch->quantity,
-                    'remaining_quantity' => (int) $batch->remaining_quantity,
-                    'unit_cost_afn' => (float) $batch->unit_cost_afn,
-                    'line_total_afn' => (float) $batch->total_cost_afn,
-                    'original_currency' => $batch->purchaseCurrency?->code,
-                    'original_line_amount' => (float) $batch->purchase_amount_currency,
-                    'exchange_rate' => $batch->exchange_rate !== null ? (float) $batch->exchange_rate : null,
-                    'link_type' => 'investment',
-                    'investment_number' => $batch->investment_id ? ('INV-'.$batch->investment_id) : null,
-                    'allocated_amount_afn' => (float) $batch->total_cost_afn,
-                    'allocation_status' => 'allocated',
-                ];
-            })
-            ->all();
-    }
 }

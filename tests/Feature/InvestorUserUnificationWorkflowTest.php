@@ -4,7 +4,7 @@ use App\Models\Currency;
 use App\Models\Investment;
 use App\Models\Investor;
 use App\Models\InvestorProfitEntry;
-use App\Models\InvestorWallet;
+use App\Models\InvestorWalletBalance;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
@@ -44,7 +44,7 @@ test('create user with investor role appears in investors directory without seco
     $response->assertRedirect(route('investors.show', $user->id));
 
     expect($user->role)->toBe(User::ROLE_INVESTOR)
-        ->and(InvestorWallet::query()->where('investor_id', $user->id)->exists())->toBeTrue();
+        ->and(InvestorWalletBalance::query()->where('investor_id', $user->id)->exists())->toBeTrue();
 
     $this->actingAs($admin)
         ->get(route('investors.index', ['search' => 'Zahra']))

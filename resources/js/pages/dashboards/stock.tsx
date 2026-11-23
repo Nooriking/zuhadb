@@ -70,8 +70,8 @@ const FALLBACK_REPORTING: DashboardReporting = {
 export default function StockDashboard({
     kpis,
     kpis3c = null,
-    lowItems,
-    movements,
+    lowItems = [],
+    movements = [],
     valuedBatches = [],
     reporting = FALLBACK_REPORTING,
     fxBoard = null,

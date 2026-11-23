@@ -14,22 +14,22 @@ return new class extends Migration
         Schema::create('users', function (Blueprint $table) {
             $table->id();
 
-            // رابطه با شعبه (شعبه قبلاً ساخته شده)
+            // Branch relationship (branches table already exists)
             $table->foreignId('branch_id')
                 ->nullable()
                 ->constrained('branches')
                 ->nullOnDelete();
 
-            // اطلاعات شخصی
+            // Personal info
             $table->string('name');
             $table->string('username')->nullable()->unique();
             $table->string('email')->nullable()->unique();
             $table->string('phone', 50)->nullable();
 
-            // احراز هویت
+            // Authentication
             $table->string('password');
 
-            // نقش — ثابت (enum)
+            // Role — fixed (enum)
             $table->enum('role', [
                 'super_admin',
                 'admin',
@@ -40,17 +40,17 @@ return new class extends Migration
                 'salesperson',
             ])->default('salesperson');
 
-            // آخرین ورود
+            // Last login
             $table->timestamp('last_login_at')->nullable();
             $table->rememberToken();
 
-            // وضعیت
+            // Status
             $table->enum('status', ['active', 'inactive', 'blocked'])->default('active');
 
-            // soft delete (اپلیکیشن)
+            // Soft delete (application flag)
             $table->boolean('trash')->default(false);
 
-            // ردیابی — چه کسی ساخت/آخرین ویرایش کرد
+            // Audit — who created / last edited
             $table->foreignId('user_id')
                 ->nullable()
                 ->constrained('users')
@@ -59,7 +59,7 @@ return new class extends Migration
             $table->timestamps();
             $table->softDeletes();   // deleted_at
 
-            // ایندکس‌ها
+            // Indexes
             $table->index('branch_id');
             $table->index('role');
             $table->index('status');

@@ -192,7 +192,7 @@ test('stock dashboard exposes batch-level inventory valuation in three currencie
         'remaining_quantity' => 10,
         'unit_cost_afn' => 70,
         'total_cost_afn' => 700,
-        'investor_id' => null,
+        'investment_id' => null,
         'trash' => false,
         'received_date' => now()->toDateString(),
     ]);

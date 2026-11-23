@@ -540,8 +540,16 @@ export default function ProductsCreate({
                 if (toNum(p.profit_per_unit) <= 0) {
                     clientErrors[`purchases.${i}.profit_per_unit`] = 'Investor profit per unit is required';
                 } else if (investorAfn !== null && totalProfit !== null && investorAfn > totalProfit + 0.0001) {
-                    clientErrors[`purchases.${i}.profit_per_unit`] =
-                        `Investor profit estimate (${fmt(investorAfn)} AFN) exceeds estimated gross profit (${fmt(totalProfit)} AFN).`;
+                    let message = `Investor profit (${fmt(investorAfn)} AFN) exceeds gross profit (${fmt(totalProfit)} AFN).`;
+
+                    if (totalProfit <= 0) {
+                        message += `\n\nReason: Sale price is not higher than purchase price. `;
+                        message += `Please set a sale price greater than the purchase price (current: purchase=${fmt(costAfn)} AFN, sale=${fmt(saleAfn)} AFN).`;
+                    } else {
+                        message += `\n\nPlease reduce the investor profit to at most ${fmt(totalProfit)} AFN, or increase the sale price.`;
+                    }
+
+                    clientErrors[`purchases.${i}.profit_per_unit`] = message;
                 }
             }
         });

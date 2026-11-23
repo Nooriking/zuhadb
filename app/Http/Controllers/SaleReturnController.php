@@ -576,7 +576,7 @@ class SaleReturnController extends Controller
                     branchId: $saleReturn->branch_id,
                     variantId: $item->variant_id,
                     qty: $item->quantity,
-                    type: 'return',    // ✅ اصلاح شد (قبلاً 'sale_return' بود)
+                    type: 'return',    // ✅ fixed (was previously 'sale_return')
                     batchId: $item->batch_id,
                     referenceType: SaleReturn::class,
                     referenceId: $saleReturn->id,
@@ -766,15 +766,6 @@ class SaleReturnController extends Controller
 
         if ($customer) {
             app(CustomerLedgerService::class)->recordReturn($saleReturn);
-            $customer->refresh();
-
-            if ($sale) {
-                $sale->update([
-                    'remaining_due_afn' => $customer->current_due_afn,
-                    'due_afn' => $customer->current_due_afn,
-                    'payment_status' => $customer->current_due_afn <= 0.01 ? 'paid' : 'partial',
-                ]);
-            }
         }
 
         $this->adjustSaleTotals(
@@ -783,6 +774,20 @@ class SaleReturnController extends Controller
             $reversedCogs,
             $reversedInvestorProfit
         );
+
+        // Sale-level due must follow this invoice (total − paid), never the customer's aggregate balance.
+        if ($sale) {
+            $sale->refresh();
+            $due = max(0, round((float) $sale->total_afn - (float) $sale->paid_afn, 2));
+            $paid = (float) $sale->paid_afn;
+            $sale->update([
+                'remaining_due_afn' => $due,
+                'due_afn' => $due,
+                'payment_status' => $due <= 0.01
+                    ? 'paid'
+                    : ($paid > 0.01 ? 'partial' : 'unpaid'),
+            ]);
+        }
 
         $saleReturn->update(['status' => SaleReturn::STATUS_COMPLETED]);
 
@@ -1012,18 +1017,15 @@ class SaleReturnController extends Controller
             }
 
             $name = $item->variant?->product?->name ?? 'Returned item';
-            $expense = Expense::create([
+            $expense = app(\App\Services\ExpenseService::class)->createLedgerOnly([
                 'branch_id' => $saleReturn->branch_id,
-                'expense_number' => Expense::generateExpenseNumber(),
                 'title' => "Sale return expense {$saleReturn->return_number}",
                 'category' => 'other',
                 'amount_afn' => $item->effectiveExpenseAmount(),
                 'expense_date' => $saleReturn->return_date ?? now()->toDateString(),
                 'payment_method' => 'cash',
                 'description' => "Shop-borne expense for returned {$name} on {$saleReturn->return_number}. {$marker}",
-                'created_by' => Auth::id(),
-                'trash' => false,
-            ]);
+            ], Auth::id());
 
             $item->update(['expense_id' => $expense->id]);
         }

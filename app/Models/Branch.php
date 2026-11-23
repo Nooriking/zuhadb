@@ -71,7 +71,7 @@ class Branch extends Model
     public function isTrashed(): bool  { return (bool) $this->trash; }
 
     /**
-     * ⭐ آیا این شعبه مدیر دارد؟
+     * ⭐ Does this branch have a manager?
      */
     public function hasManager(): bool
     {
@@ -79,7 +79,7 @@ class Branch extends Model
     }
 
     /**
-     * ⭐ فقط Super Admin و Admin می‌توانند شعبه را ویرایش کنند.
+     * ⭐ Only Super Admin and Admin can edit a branch.
      */
     public function canBeEditedBy(User $authUser): bool
     {
@@ -88,7 +88,7 @@ class Branch extends Model
     }
 
     /**
-     * ⭐ فقط Super Admin می‌تواند شعبه را غیرفعال/فعال کند.
+     * ⭐ Only Super Admin can deactivate/activate a branch.
      */
     public function canBeDeactivatedBy(User $authUser): bool
     {
@@ -97,7 +97,7 @@ class Branch extends Model
     }
 
     /**
-     * ⭐ Branch هرگز قابل حذف نیست — نه نرم، نه سخت.
+     * ⭐ Branch can never be deleted — neither soft nor hard.
      */
     public function canBeDeletedBy(User $authUser): bool
     {
@@ -106,11 +106,11 @@ class Branch extends Model
 
     /* =========================================================
      |  ⭐ Manager Assignment (Two-way Link)
-     |  منطق:
-     |  - اگر manager قبلی داشت و در حال تغییر است → آزادش کن
-     |  - manager جدید را ست کن
-     |  - user جدید را هم به این شعبه وصل کن (branch_id)
-     |  - ⛔ فقط branch_manager های معتبر پذیرفته می‌شوند
+     |  Logic:
+     |  - If there was a previous manager and it is changing → free them
+     |  - Set the new manager
+     |  - Also link the new user to this branch (branch_id)
+     |  - ⛔ Only valid branch_managers are accepted
      ========================================================= */
 
     public function assignManager(?User $user): void

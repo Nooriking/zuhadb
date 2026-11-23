@@ -60,7 +60,7 @@ class ExchangeRateHistory extends Model
      ========================================================= */
 
     /**
-     * آخرین نرخ ثبت‌شده
+     * Latest recorded rate
      */
     public static function latestRate(): ?self
     {
@@ -68,7 +68,7 @@ class ExchangeRateHistory extends Model
     }
 
     /**
-     * نرخ یک تاریخ مشخص (یا نزدیک‌ترین قبل از آن)
+     * Rate for a given date (or nearest before it)
      */
     public static function rateOnDate(string $date): ?self
     {
@@ -78,7 +78,7 @@ class ExchangeRateHistory extends Model
     }
 
     /**
-     * میانگین نرخ یک ماه مشخص
+     * Average rate for a given month
      */
     public static function averageForMonth(int $year, int $month): float
     {
@@ -88,7 +88,7 @@ class ExchangeRateHistory extends Model
     }
 
     /**
-     * میانگین نرخ این ماه
+     * Average rate for this month
      */
     public static function averageThisMonth(): float
     {
@@ -96,7 +96,7 @@ class ExchangeRateHistory extends Model
     }
 
     /**
-     * بالاترین و پایین‌ترین نرخ این ماه
+     * Highest and lowest rate this month
      */
     public static function monthMinMax(): array
     {

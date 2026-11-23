@@ -15,11 +15,11 @@ class AppSettingFactory extends Factory
         return [
             'name' => 'ZUHA PERFUME',
             'company_name' => 'ZUHA PERFUME',
-            'company_name_local' => 'Tezhoshan Support',
+            'company_name_local' => null,
             'phone' => '0744442863',
-            'email' => 'support@tezhoshan.test',
+            'email' => 'shop@example.test',
             'address' => 'Kabul, Afghanistan',
-            'website' => 'Tezhoshan',
+            'website' => 'https://example.test',
         ];
     }
 }

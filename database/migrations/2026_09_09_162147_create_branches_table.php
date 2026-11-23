@@ -11,11 +11,11 @@ return new class extends Migration
         Schema::create('branches', function (Blueprint $table) {
             $table->id();
 
-            // ⭐ Manager اختیاری — FK بعداً در migration جداگانه اضافه می‌شود
-            // چون جدول users هنوز ساخته نشده
+            // ⭐ Manager is optional — FK added later in a separate migration
+            // because the users table is not created yet
             $table->unsignedBigInteger('manager_user_id')->nullable();
 
-            // ⭐ سازنده شعبه (Super Admin) — FK بعداً
+            // ⭐ Branch creator (Super Admin) — FK added later
             $table->unsignedBigInteger('user_id')->nullable();
 
             // Basic info

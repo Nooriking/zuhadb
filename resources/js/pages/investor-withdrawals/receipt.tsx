@@ -12,6 +12,9 @@ interface Props {
         title: string;
         lines: { name: string; amount: number }[];
         amount: number;
+        amount_currency?: number;
+        currency_code?: string;
+        exchange_rate?: number;
         balance: number;
         notes?: string | null;
     };
@@ -20,6 +23,8 @@ interface Props {
 const money = (value: number) => new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value || 0);
 
 export default function InvestorPayoutReceipt({ company, investor, printedAt, receipt }: Props) {
+    const code = receipt.currency_code || 'AFN';
+
     useEffect(() => {
         const timer = setTimeout(() => window.print(), 500);
         return () => clearTimeout(timer);
@@ -55,7 +60,7 @@ export default function InvestorPayoutReceipt({ company, investor, printedAt, re
                         <thead>
                             <tr>
                                 <th>Description</th>
-                                <th>USD</th>
+                                <th>AFN</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -68,8 +73,22 @@ export default function InvestorPayoutReceipt({ company, investor, printedAt, re
                         </tbody>
                     </table>
                     <dl className="bill-totals">
-                        <div className="bill-grand"><dt>Paid</dt><dd>{money(receipt.amount)} USD</dd></div>
-                        <div><dt>Account balance</dt><dd>{money(receipt.balance)} USD</dd></div>
+                        <div className="bill-grand">
+                            <dt>Paid (ledger)</dt>
+                            <dd>{money(receipt.amount)} AFN</dd>
+                        </div>
+                        {receipt.amount_currency != null && code !== 'AFN' && (
+                            <div>
+                                <dt>Paid ({code})</dt>
+                                <dd>
+                                    {money(receipt.amount_currency)} {code}
+                                </dd>
+                            </div>
+                        )}
+                        <div>
+                            <dt>Account balance</dt>
+                            <dd>{money(receipt.balance)} AFN</dd>
+                        </div>
                     </dl>
                     <p className="bill-status">Paid in full. Account is zero.</p>
                     {receipt.notes && <p className="bill-note">{receipt.notes}</p>}

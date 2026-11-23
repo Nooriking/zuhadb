@@ -164,8 +164,8 @@ class ExchangeRate extends Model
      ========================================================= */
 
     /**
-     * نرخ تبدیل جاری بین دو ارز را برمی‌گرداند.
-     * اگر نرخی ثبت نشده باشد، null برمی‌گرداند.
+     * Return the current conversion rate between two currencies.
+     * Returns null if no rate is recorded.
      */
     public static function getRate(int $fromId, int $toId): ?float
     {
@@ -185,7 +185,7 @@ class ExchangeRate extends Model
             return (float) $rate;
         }
 
-        // اگر نرخ معکوس ثبت شده بود، معکوسش را برگردان
+        // If the inverse rate was recorded, return its reciprocal
         $inverse = self::query()
             ->where('from_currency_id', $toId)
             ->where('to_currency_id', $fromId)
@@ -233,7 +233,7 @@ class ExchangeRate extends Model
     }
 
     /**
-     * نرخ جاری بین AFN و ارز دیگر.
+     * Current rate between AFN and another currency.
      */
     public static function rateToBase(int $currencyId): ?float
     {
@@ -247,7 +247,7 @@ class ExchangeRate extends Model
     }
 
     /**
-     * تبدیل مبلغ به ارز پایه (AFN).
+     * Convert an amount to the base currency (AFN).
      */
     public static function convertToBase(float $amount, int $fromCurrencyId): ?float
     {

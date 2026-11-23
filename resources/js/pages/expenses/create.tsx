@@ -1,15 +1,16 @@
 import { BackButton, FormActions } from '@/components/form-page';
-// resources/js/pages/expenses/create.tsx
-
+import { MoneyField } from '@/components/money-field';
 import AppLayout from '@/layouts/app-layout';
+import { defaultCurrencyId, type CatalogCurrency } from '@/lib/currencies';
 import { type BreadcrumbItem } from '@/types';
-import { Head, Link, router } from '@inertiajs/react';
+import { Head, router } from '@inertiajs/react';
 import { useState } from 'react';
 
 interface Props {
     branches: { id: number; name: string; code: string }[];
     categories: Record<string, string>;
     methods: Record<string, string>;
+    currencies: CatalogCurrency[];
     nextNumber: string;
     errors?: Record<string, string>;
 }
@@ -20,12 +21,20 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Create', href: '/expenses/create' },
 ];
 
-export default function ExpensesCreate({ branches, categories, methods, nextNumber, errors: initialErrors }: Props) {
+export default function ExpensesCreate({
+    branches,
+    categories,
+    methods,
+    currencies = [],
+    nextNumber,
+    errors: initialErrors,
+}: Props) {
     const [form, setForm] = useState({
         branch_id: branches[0] ? String(branches[0].id) : '',
         title: '',
         category: 'rent',
-        amount_afn: '',
+        amount: '',
+        currency_id: defaultCurrencyId(currencies),
         expense_date: new Date().toISOString().slice(0, 10),
         payment_method: 'cash',
         description: '',
@@ -35,15 +44,25 @@ export default function ExpensesCreate({ branches, categories, methods, nextNumb
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
+        if (loading) return;
         setLoading(true);
         setErrors({});
-        router.post('/expenses', form, {
-            onSuccess: () => setLoading(false),
-            onError: (err) => {
-                setErrors(err);
-                setLoading(false);
+        router.post(
+            '/expenses',
+            {
+                ...form,
+                amount: parseFloat(form.amount) || 0,
+                currency_id: form.currency_id,
             },
-        });
+            {
+                onSuccess: () => setLoading(false),
+                onError: (err) => {
+                    setErrors(err);
+                    setLoading(false);
+                },
+                onFinish: () => setLoading(false),
+            },
+        );
     };
 
     return (
@@ -62,104 +81,104 @@ export default function ExpensesCreate({ branches, categories, methods, nextNumb
                 <div className="bg-card rounded-lg border shadow-sm">
                     <div className="border-b px-6 py-4">
                         <h2 className="text-lg font-semibold">Expense</h2>
-                        <p className="text-muted-foreground text-sm">What was paid, then how it was paid.</p>
+                        <p className="text-muted-foreground text-sm">Record the original currency; AFN ledger amount is calculated at save time.</p>
                     </div>
                     <div className="space-y-6 p-6">
                         <div className="space-y-4">
                             <h3 className="text-sm font-semibold">What was spent</h3>
                             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                            <div className="space-y-2 md:col-span-2">
-                                <label className="text-sm font-medium">Title *</label>
-                                <input
-                                    type="text"
-                                    value={form.title}
-                                    onChange={(e) => setForm({ ...form, title: e.target.value })}
-                                    placeholder="e.g. Monthly rent"
-                                    className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm"
-                                    required
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">Category *</label>
-                                <select
-                                    value={form.category}
-                                    onChange={(e) => setForm({ ...form, category: e.target.value })}
-                                    className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm"
-                                >
-                                    {Object.entries(categories).map(([k, v]) => (
-                                        <option key={k} value={k}>
-                                            {v}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                            <div className="space-y-2 md:col-span-2">
-                                <label className="text-sm font-medium">Description</label>
-                                <textarea
-                                    value={form.description}
-                                    onChange={(e) => setForm({ ...form, description: e.target.value })}
-                                    rows={3}
-                                    className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm"
-                                />
-                            </div>
+                                <div className="space-y-2 md:col-span-2">
+                                    <label className="text-sm font-medium">Title *</label>
+                                    <input
+                                        type="text"
+                                        value={form.title}
+                                        onChange={(e) => setForm({ ...form, title: e.target.value })}
+                                        placeholder="e.g. Monthly rent"
+                                        className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm"
+                                        required
+                                    />
+                                    {errors.title && <p className="text-destructive text-xs">{errors.title}</p>}
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Category *</label>
+                                    <select
+                                        value={form.category}
+                                        onChange={(e) => setForm({ ...form, category: e.target.value })}
+                                        className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm"
+                                    >
+                                        {Object.entries(categories).map(([k, v]) => (
+                                            <option key={k} value={k}>
+                                                {v}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div className="space-y-2 md:col-span-2">
+                                    <label className="text-sm font-medium">Description</label>
+                                    <textarea
+                                        value={form.description}
+                                        onChange={(e) => setForm({ ...form, description: e.target.value })}
+                                        rows={3}
+                                        className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm"
+                                    />
+                                </div>
                             </div>
                         </div>
                         <div className="space-y-4 border-t pt-6">
                             <h3 className="text-sm font-semibold">Payment</h3>
-                        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                            {branches.length > 1 && (
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">Branch *</label>
-                                <select
-                                    value={form.branch_id}
-                                    onChange={(e) => setForm({ ...form, branch_id: e.target.value })}
-                                    className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm"
-                                >
-                                    {branches.map((b) => (
-                                        <option key={b.id} value={String(b.id)}>
-                                            {b.name}
-                                        </option>
-                                    ))}
-                                </select>
+                            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                                {branches.length > 1 && (
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium">Branch *</label>
+                                        <select
+                                            value={form.branch_id}
+                                            onChange={(e) => setForm({ ...form, branch_id: e.target.value })}
+                                            className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm"
+                                        >
+                                            {branches.map((b) => (
+                                                <option key={b.id} value={String(b.id)}>
+                                                    {b.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                )}
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Date *</label>
+                                    <input
+                                        type="date"
+                                        value={form.expense_date}
+                                        onChange={(e) => setForm({ ...form, expense_date: e.target.value })}
+                                        className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm"
+                                    />
+                                </div>
+                                <div className="space-y-2 md:col-span-2">
+                                    <MoneyField
+                                        label="Amount"
+                                        required
+                                        amount={form.amount}
+                                        currencyId={form.currency_id}
+                                        currencies={currencies}
+                                        onAmountChange={(val) => setForm({ ...form, amount: val })}
+                                        onCurrencyChange={(val) => setForm({ ...form, currency_id: val })}
+                                        error={errors.amount || errors.currency_id}
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Payment method</label>
+                                    <select
+                                        value={form.payment_method}
+                                        onChange={(e) => setForm({ ...form, payment_method: e.target.value })}
+                                        className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm"
+                                    >
+                                        {Object.entries(methods).map(([k, v]) => (
+                                            <option key={k} value={k}>
+                                                {v}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
                             </div>
-                            )}
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">Date *</label>
-                                <input
-                                    type="date"
-                                    value={form.expense_date}
-                                    onChange={(e) => setForm({ ...form, expense_date: e.target.value })}
-                                    className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">Amount (AFN) *</label>
-                                <input
-                                    type="number"
-                                    step="0.01"
-                                    min="0.01"
-                                    value={form.amount_afn}
-                                    onChange={(e) => setForm({ ...form, amount_afn: e.target.value })}
-                                    className="border-input bg-background w-full rounded-md border px-3 py-2 font-mono text-sm"
-                                    required
-                                />
-                                {errors.amount_afn && <p className="text-destructive text-xs">{errors.amount_afn}</p>}
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">Payment method</label>
-                                <select
-                                    value={form.payment_method}
-                                    onChange={(e) => setForm({ ...form, payment_method: e.target.value })}
-                                    className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm"
-                                >
-                                    {Object.entries(methods).map(([k, v]) => (
-                                        <option key={k} value={k}>
-                                            {v}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                        </div>
                         </div>
                     </div>
                 </div>

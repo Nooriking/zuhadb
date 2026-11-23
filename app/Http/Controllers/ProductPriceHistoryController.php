@@ -11,7 +11,7 @@ use Inertia\Response;
 class ProductPriceHistoryController extends Controller
 {
     /* =========================================================
-     |  INDEX — همه تغییرات قیمت
+     |  INDEX — all price changes
      ========================================================= */
 
     public function index(Request $request): Response
@@ -47,7 +47,7 @@ class ProductPriceHistoryController extends Controller
     }
 
     /* =========================================================
-     |  BY VARIANT — تاریخچه یک واریانت
+     |  BY VARIANT — history for one variant
      ========================================================= */
 
     public function byVariant(ProductVariant $variant): Response

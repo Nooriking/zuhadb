@@ -72,24 +72,7 @@ class AppSettingController extends Controller
                 ->with('error', 'A setting already exists. Creating new settings is not allowed.');
         }
 
-        $validated = $request->validate([
-            'name'               => ['required', 'string', 'max:255'],
-            'company_name'       => ['nullable', 'string', 'max:255'],
-            'company_name_local' => ['nullable', 'string', 'max:255'],
-            'logo'               => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp,svg', 'max:2048'],
-
-            'phone'              => ['nullable', 'string', 'max:50'],
-            'phone_2'            => ['nullable', 'string', 'max:50'],
-            'email'              => ['nullable', 'email', 'max:255'],
-            'website'            => ['nullable', 'url', 'max:255'],
-
-            'address'            => ['nullable', 'string', 'max:500'],
-
-            'social_facebook'    => ['nullable', 'string', 'max:255'],
-            'social_instagram'   => ['nullable', 'string', 'max:255'],
-            'social_whatsapp'    => ['nullable', 'string', 'max:255'],
-            'social_telegram'    => ['nullable', 'string', 'max:255'],
-        ]);
+        $validated = $this->validatedCompanyPayload($request);
 
         // Upload logo
         if ($request->hasFile('logo')) {
@@ -99,6 +82,7 @@ class AppSettingController extends Controller
         }
 
         AppSetting::create($validated);
+        AppSetting::forgetCache();
 
         return redirect()
             ->route('app-settings.index')
@@ -133,24 +117,7 @@ class AppSettingController extends Controller
 
     public function update(Request $request, AppSetting $appSetting): RedirectResponse
     {
-        $validated = $request->validate([
-            'name'               => ['required', 'string', 'max:255'],
-            'company_name'       => ['nullable', 'string', 'max:255'],
-            'company_name_local' => ['nullable', 'string', 'max:255'],
-            'logo'               => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp,svg', 'max:2048'],
-
-            'phone'              => ['nullable', 'string', 'max:50'],
-            'phone_2'            => ['nullable', 'string', 'max:50'],
-            'email'              => ['nullable', 'email', 'max:255'],
-            'website'            => ['nullable', 'url', 'max:255'],
-
-            'address'            => ['nullable', 'string', 'max:500'],
-
-            'social_facebook'    => ['nullable', 'string', 'max:255'],
-            'social_instagram'   => ['nullable', 'string', 'max:255'],
-            'social_whatsapp'    => ['nullable', 'string', 'max:255'],
-            'social_telegram'    => ['nullable', 'string', 'max:255'],
-        ]);
+        $validated = $this->validatedCompanyPayload($request);
 
         // Upload new logo
         if ($request->hasFile('logo')) {
@@ -165,6 +132,7 @@ class AppSettingController extends Controller
         }
 
         $appSetting->update($validated);
+        AppSetting::forgetCache();
 
         return redirect()
             ->route('app-settings.index')
@@ -188,9 +156,49 @@ class AppSettingController extends Controller
         }
 
         $appSetting->delete();
+        AppSetting::forgetCache();
 
         return redirect()
             ->route('app-settings.index')
             ->with('success', 'Settings deleted successfully.');
+    }
+
+    /**
+     * Shared validation for company / receipt identity fields.
+     *
+     * @return array<string, mixed>
+     */
+    private function validatedCompanyPayload(Request $request): array
+    {
+        $validated = $request->validate([
+            'name'                 => ['required', 'string', 'max:255'],
+            'company_name'         => ['nullable', 'string', 'max:255'],
+            'company_name_local'   => ['nullable', 'string', 'max:255'],
+            'logo'                 => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp,svg', 'max:2048'],
+
+            'phone'                => ['nullable', 'string', 'max:50'],
+            'phone_2'              => ['nullable', 'string', 'max:50'],
+            'email'                => ['nullable', 'email', 'max:255'],
+            'website'              => ['nullable', 'string', 'max:255'],
+
+            'address'              => ['nullable', 'string', 'max:500'],
+
+            'tax_number'           => ['nullable', 'string', 'max:50'],
+            'registration_no'      => ['nullable', 'string', 'max:50'],
+
+            'invoice_title'        => ['nullable', 'string', 'max:100'],
+            'invoice_footer_text'  => ['nullable', 'string', 'max:500'],
+            'thank_you_message'    => ['nullable', 'string', 'max:255'],
+            'invoice_show_logo'    => ['nullable', 'boolean'],
+
+            'social_facebook'      => ['nullable', 'string', 'max:255'],
+            'social_instagram'     => ['nullable', 'string', 'max:255'],
+            'social_whatsapp'      => ['nullable', 'string', 'max:255'],
+            'social_telegram'      => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $validated['invoice_show_logo'] = $request->boolean('invoice_show_logo', true);
+
+        return $validated;
     }
 }

@@ -9,7 +9,7 @@ use Symfony\Component\HttpFoundation\Response;
 class PermissionMiddleware
 {
     /**
-     * استفاده:
+     * Usage:
      *   ->middleware('permission:sales.create')
      *   ->middleware('permission:sales.create,sales.update')   // OR
      *
@@ -23,7 +23,7 @@ class PermissionMiddleware
             abort(401, 'Unauthenticated.');
         }
 
-        // Super Admin = همه چیز
+        // Super Admin = everything
         if ($user->isSuperAdmin()) {
             return $next($request);
         }
@@ -32,7 +32,7 @@ class PermissionMiddleware
             return $next($request);
         }
 
-        // OR — اگر یکی از permissionها را داشت کافی است
+        // OR — having any one of the permissions is enough
         foreach ($permissions as $permission) {
             if ($user->hasPermission($permission)) {
                 return $next($request);

@@ -26,7 +26,7 @@ return new class extends Migration
             $table->string('withdrawal_number', 50)
                   ->unique();
 
-            // نوع برداشت
+            // Withdrawal type
             $table->enum('type', ['profit', 'capital'])
                   ->default('profit');
 
@@ -47,7 +47,7 @@ return new class extends Migration
 
             $table->date('withdrawal_date');
 
-            // وضعیت تأیید
+            // Approval status
             $table->enum('status', ['pending', 'approved', 'paid', 'rejected'])
                   ->default('pending');
 
