@@ -122,6 +122,9 @@ test('fully paid sale receipt exposes consistent totals and company settings', f
         'sale_currency_code' => 'AFN',
         'sale_currency_symbol' => '؋',
         'sale_amount_currency' => 14000,
+        'usd_to_afn_rate' => 65.6,
+        'aed_to_afn_rate' => 45,
+        'rate_source' => 'sale_board',
     ]);
 
     SaleItem::factory()->create([
@@ -148,6 +151,7 @@ test('fully paid sale receipt exposes consistent totals and company settings', f
             ->where('sale.display_grand_total_due', 14000)
             ->where('sale.display_paid', 14000)
             ->where('sale.display_remaining', 0)
+            ->where('sale.usd_to_afn_rate', fn ($v) => (float) $v === 65.6)
             ->where('company.name', 'ZUHA PERFUME TEST')
             ->where('company.phone', '0744442863')
             ->where('company.address', 'Test Street')
