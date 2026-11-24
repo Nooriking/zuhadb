@@ -7,7 +7,6 @@ use App\Http\Requests\UpdateUserRequest;
 use App\Models\Branch;
 use App\Models\Expense;
 use App\Models\Investor;
-use App\Models\Product;
 use App\Models\Sale;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
@@ -196,10 +195,7 @@ class UserController extends Controller
 
         $stats = [
             'total_sales'     => (int) Sale::query()->where('created_by', $user->id)->count(),
-            'total_purchases' => (int) Product::query()
-                ->where('user_id', $user->id)
-                ->whereNotNull('purchase_date')
-                ->count(),
+            'total_purchases' => (int) $user->purchases()->count(),
             'total_expenses'  => (int) Expense::query()->where('created_by', $user->id)->count(),
         ];
 
