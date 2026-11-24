@@ -437,12 +437,12 @@
     "isDynamicEntry": true
   },
   "resources/css/app.css": {
-    "file": "assets/app-BfQmRZHZ.css",
+    "file": "assets/app-DA5zv1-X.css",
     "src": "resources/css/app.css",
     "isEntry": true
   },
   "resources/js/app.tsx": {
-    "file": "assets/app-Chdowa8s.js",
+    "file": "assets/app-DeAgIptm.js",
     "name": "app",
     "src": "resources/js/app.tsx",
     "isEntry": true,
@@ -582,7 +582,7 @@
       "node_modules/sonner/dist/index.mjs"
     ],
     "css": [
-      "assets/app-BfQmRZHZ.css"
+      "assets/app-DA5zv1-X.css"
     ]
   },
   "resources/js/components/dashboard/branch-bar.tsx": {
