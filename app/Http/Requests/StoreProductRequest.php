@@ -76,25 +76,12 @@ class StoreProductRequest extends FormRequest
                     }
                 }
 
-                $postedCurrencies = array_values(array_unique(array_filter([
-                    $payload['variants'][$i]['purchase_currency_id'] ?? null,
-                    $payload['variants'][$i]['sale_currency_id'] ?? null,
-                    $payload['variants'][$i]['wholesale_currency_id'] ?? null,
-                ], fn ($id) => $id !== null && $id !== '')));
-
+                // Keep purchase / sale / wholesale currencies independent.
+                // catalog_currency_id is display-only (defaults to sale); never overwrite other price currencies.
+                $saleCurrencyId = $payload['variants'][$i]['sale_currency_id'] ?? null;
                 $catalogCurrencyId = $payload['variants'][$i]['catalog_currency_id'] ?? null;
-
-                // Only auto-unify when no conflicting per-price currencies were posted.
-                if (! empty($catalogCurrencyId) && count($postedCurrencies) <= 1) {
-                    $payload['variants'][$i]['catalog_currency_id'] = (int) $catalogCurrencyId;
-                    $payload['variants'][$i]['purchase_currency_id'] = (int) $catalogCurrencyId;
-                    $payload['variants'][$i]['sale_currency_id'] = (int) $catalogCurrencyId;
-                    $payload['variants'][$i]['wholesale_currency_id'] = (int) $catalogCurrencyId;
-                } elseif (empty($catalogCurrencyId) && count($postedCurrencies) === 1) {
-                    $payload['variants'][$i]['catalog_currency_id'] = (int) $postedCurrencies[0];
-                    $payload['variants'][$i]['purchase_currency_id'] = (int) $postedCurrencies[0];
-                    $payload['variants'][$i]['sale_currency_id'] = (int) $postedCurrencies[0];
-                    $payload['variants'][$i]['wholesale_currency_id'] = (int) $postedCurrencies[0];
+                if (empty($catalogCurrencyId) && ! empty($saleCurrencyId)) {
+                    $payload['variants'][$i]['catalog_currency_id'] = (int) $saleCurrencyId;
                 }
 
                 // Allow sale_amount to satisfy required sale_price_afn for unified entry.
@@ -322,6 +309,7 @@ class StoreProductRequest extends FormRequest
             'purchases.*.line_profit'         => ['nullable', 'numeric', 'min:0'],
             'purchases.*.invoice_number'      => ['nullable', 'string', 'max:100'],
             'purchases.*.purchase_date'       => ['nullable', 'date'],
+            'purchases.*.purchase_currency_id'=> ['nullable', 'integer', 'exists:currencies,id'],
             'purchases.*.exchange_rate'       => ['nullable', 'numeric', 'min:0'],
             'purchases.*.paid_now'            => ['nullable', 'numeric', 'min:0'],
             'purchases.*.payment_status'      => ['nullable', Rule::in(['paid', 'unpaid', 'partial', 'credit'])],

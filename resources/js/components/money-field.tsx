@@ -1,10 +1,10 @@
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useExchange } from '@/hooks/useExchange';
 import { catalogEquivalents, resolveCatalogFxRates } from '@/lib/currency';
 import { currencyLabel, findCurrency, formatAmount, type CatalogCurrency } from '@/lib/currencies';
 import { estimateToAfn } from '@/lib/product-estimate';
+import { cn } from '@/lib/utils';
 
 type Props = {
     label: string;
@@ -18,6 +18,8 @@ type Props = {
     disabled?: boolean;
     /** When true, currency selector is locked (e.g. profit follows purchase currency). */
     currencyLocked?: boolean;
+    /** Unique name so sibling currency selects never share browser/autofill state. */
+    currencySelectName?: string;
     /** Optional pair rates for estimate hints; prefer board rates. */
     usdToAfn?: number;
     usdToAed?: number;
@@ -48,6 +50,7 @@ export function MoneyField({
     error,
     disabled,
     currencyLocked = false,
+    currencySelectName,
     usdToAfn = 0,
     usdToAed = 0,
     boardUsdToAfn = 0,
@@ -59,6 +62,7 @@ export function MoneyField({
     const exchange = useExchange();
     const boardUsd = boardUsdToAfn || exchange.usdToAfn || 0;
     const boardAed = boardAedToAfn || exchange.aedToAfn || 0;
+    const selectName = currencySelectName || `money-currency-${label.replace(/\s+/g, '-').toLowerCase()}`;
 
     return (
         <div className="space-y-2">
@@ -76,22 +80,29 @@ export function MoneyField({
                     onChange={(e) => onAmountChange(e.target.value)}
                     className={`min-w-0 flex-1 font-mono ${error ? 'border-destructive' : ''}`}
                 />
-                <Select
+                {/* Native select: each instance has its own value; avoids Radix sibling-select glitches. */}
+                <select
+                    name={selectName}
+                    autoComplete="off"
                     value={currencyId}
-                    onValueChange={onCurrencyChange}
                     disabled={disabled || currencyLocked || currencies.length === 0}
+                    onChange={(e) => onCurrencyChange(e.target.value)}
+                    className={cn(
+                        'border-input bg-background ring-offset-background focus:ring-ring h-10 w-full rounded-md border px-3 py-2 text-sm focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-50 sm:w-52',
+                        error ? 'border-destructive' : '',
+                    )}
                 >
-                    <SelectTrigger className="w-full sm:w-52">
-                        <SelectValue placeholder="Currency" />
-                    </SelectTrigger>
-                    <SelectContent>
-                        {currencies.map((currency) => (
-                            <SelectItem key={currency.id} value={String(currency.id)}>
-                                {currencyLabel(currency)}
-                            </SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
+                    {!currencyId ? (
+                        <option value="" disabled>
+                            Currency
+                        </option>
+                    ) : null}
+                    {currencies.map((currency) => (
+                        <option key={currency.id} value={String(currency.id)}>
+                            {currencyLabel(currency)}
+                        </option>
+                    ))}
+                </select>
             </div>
             {currencyLocked ? (
                 <p className="text-muted-foreground text-xs">Currency follows the purchase currency.</p>
@@ -238,13 +249,15 @@ function ConversionHint({
     }
 
     const from = findCurrency(currencies, currencyId);
-    const ledger = currencies.find((row) => row.is_default) ?? currencies.find((row) => row.code === 'AFN');
+    const ledger =
+        currencies.find((row) => String(row.code || '').toUpperCase() === 'AFN') ??
+        currencies.find((row) => row.is_default);
     if (!from || !ledger) {
         return null;
     }
 
-    if (from.id === ledger.id || from.code === ledger.code) {
-        return <p className="text-muted-foreground text-xs">Entered in {from.code} (ledger)</p>;
+    if (String(from.code || '').toUpperCase() === 'AFN') {
+        return <p className="text-muted-foreground text-xs">Entered in AFN (ledger)</p>;
     }
 
     const converted = estimateToAfn(value, from, ledger, usdToAfn, usdToAed);

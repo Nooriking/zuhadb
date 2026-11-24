@@ -42,7 +42,16 @@ export default defineConfig({
             host: '127.0.0.1',
         },
         watch: {
-            ignored: ['**/storage/**', '**/vendor/**', '**/node_modules/**', '**/public/build/**'],
+            ignored: [
+                '**/storage/**',
+                '**/vendor/**',
+                '**/node_modules/**',
+                '**/public/build/**',
+                // Temp PHP probes lock under Windows and crash Vite (EBUSY).
+                '**/_pp.php',
+                '**/_fx*.php',
+                '**/_*.php',
+            ],
         },
     },
     optimizeDeps: {

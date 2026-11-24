@@ -13,7 +13,13 @@ import { Textarea } from '@/components/ui/textarea';
 import { useExchange } from '@/hooks/useExchange';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
-import { defaultCurrencyId, findCurrency, type CatalogCurrency } from '@/lib/currencies';
+import { catalogEquivalents, resolveCatalogFxRates, type FxRates, type ThreeCurrency } from '@/lib/currency';
+import {
+    defaultCurrencyId,
+    findCurrency,
+    ledgerCurrencyId as resolveLedgerCurrencyId,
+    type CatalogCurrency,
+} from '@/lib/currencies';
 import { calcProfits, estimateToAfn, formatEstimate as fmt } from '@/lib/product-estimate';
 import { getSwal } from '@/lib/swal';
 import { type BreadcrumbItem } from '@/types';
@@ -83,6 +89,8 @@ interface Purchase {
     paid_now: string;
     notes: string;
     billImage?: File | null;
+    purchase_currency_id: string;
+    exchange_rate: string;
 }
 
 interface Props {
@@ -147,35 +155,37 @@ const newBarcode = (isPrimary: boolean): BarcodeItem => ({
     current_stock: '0',
 });
 
-const newVariant = (): Variant => ({
+const newVariant = (defaultCurrencyId = ''): Variant => ({
     _key: Math.random().toString(36).slice(2),
     volume_ml: '',
     concentration: '',
     purchase_price_afn: '',
-    purchase_currency_id: '',
+    // Each currency field is independent; they may start equal but never sync on change.
+    purchase_currency_id: defaultCurrencyId,
     sale_price_afn: '',
-    sale_currency_id: '',
+    sale_currency_id: defaultCurrencyId,
     wholesale_price_afn: '',
-    wholesale_currency_id: '',
+    wholesale_currency_id: defaultCurrencyId,
     wholesale_min_qty: '10',
     barcodes: [newBarcode(true)],
 });
 
-// ✨ CHANGED: default profit currency = ledger currency (not empty)
-const newPurchase = (variantIndex: number, defaultCurrencyId?: string): Purchase => ({
+const newPurchase = (variantIndex: number): Purchase => ({
     _key: Math.random().toString(36).slice(2),
     variant_index: variantIndex,
     investor_id: 'store',
     supplier_id: 'none',
     quantity: '1',
     profit_per_unit: '0',
-    profit_currency_id: defaultCurrencyId || '',
+    profit_currency_id: '',
     invoice_number: '',
     purchase_date: today(),
     payment_status: 'paid',
     paid_now: '',
     notes: '',
     billImage: null,
+    purchase_currency_id: '',
+    exchange_rate: '',
 });
 
 const detectBarcodeType = (code: string): string => {
@@ -217,7 +227,9 @@ export default function ProductsCreate({
     const { usdToAfn, aedToAfn, usdToAed, effectiveAt, source } = useExchange();
     const refUsdToAfn = usdToAfn ?? 0;
     const refUsdToAed = usdToAed ?? 0;
-    const ledgerCurrencyId = defaultCurrencyId(currencies);
+    // Catalog is_base may be USD — OK for initial selects. Ledger for AFN estimates is always AFN.
+    const catalogDefaultId = defaultCurrencyId(currencies);
+    const ledgerCurrencyId = resolveLedgerCurrencyId(currencies);
     const ledgerCur = useMemo(() => findCurrency(currencies, ledgerCurrencyId), [currencies, ledgerCurrencyId]);
 
     const [form, setForm] = useState({
@@ -228,16 +240,8 @@ export default function ProductsCreate({
         description: '',
     });
 
-    const withDefaultCurrency = (variant: Variant): Variant => ({
-        ...variant,
-        purchase_currency_id: variant.purchase_currency_id || ledgerCurrencyId,
-        sale_currency_id: variant.sale_currency_id || ledgerCurrencyId,
-        wholesale_currency_id: variant.wholesale_currency_id || ledgerCurrencyId,
-    });
-
-    const [variants, setVariants] = useState<Variant[]>([withDefaultCurrency(newVariant())]);
-    // ✨ CHANGED: pass ledgerCurrencyId to newPurchase
-    const [purchases, setPurchases] = useState<Purchase[]>([newPurchase(0, ledgerCurrencyId)]);
+    const [variants, setVariants] = useState<Variant[]>(() => [newVariant(catalogDefaultId)]);
+    const [purchases, setPurchases] = useState<Purchase[]>([newPurchase(0)]);
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
     const [loading, setLoading] = useState(false);
 
@@ -263,31 +267,10 @@ export default function ProductsCreate({
         });
     }, []);
 
-    // ✨ CHANGED: sync all three price currencies AND all related purchases' profit_currency_id
-    const syncVariantCurrency = useCallback((index: number, currencyId: string) => {
-        setVariants((prev) => {
-            const copy = [...prev];
-            copy[index] = {
-                ...copy[index],
-                purchase_currency_id: currencyId,
-                sale_currency_id: currencyId,
-                wholesale_currency_id: currencyId,
-            };
-            return copy;
-        });
-
-        // ✨ Sync profit currency of every purchase that belongs to this variant
-        setPurchases((prev) =>
-            prev.map((p) =>
-                p.variant_index === index ? { ...p, profit_currency_id: currencyId } : p,
-            ),
-        );
-    }, []);
-
     const addVariant = () => {
         const nextIndex = variants.length;
-        setVariants((prev) => [...prev, withDefaultCurrency(newVariant())]);
-        setPurchases((prev) => [...prev, newPurchase(nextIndex, ledgerCurrencyId)]);
+        setVariants((prev) => [...prev, newVariant(catalogDefaultId)]);
+        setPurchases((prev) => [...prev, newPurchase(nextIndex)]);
     };
 
     const removeVariant = (index: number) => {
@@ -442,7 +425,7 @@ export default function ProductsCreate({
         });
     }, []);
 
-    const addPurchase = () => setPurchases((prev) => [...prev, newPurchase(0, ledgerCurrencyId)]);
+    const addPurchase = () => setPurchases((prev) => [...prev, newPurchase(0)]);
     const removePurchase = (index: number) => setPurchases((prev) => prev.filter((_, i) => i !== index));
 
     /* ═══════════ Submit ═══════════ */
@@ -518,8 +501,8 @@ export default function ProductsCreate({
                 clientErrors[`variants.${i}.sale_price_afn`] = 'Prices cannot be negative.';
                 return;
             }
-            const costAfn = estimateToAfn(toNum(v.purchase_price_afn), findCurrency(currencies, v.purchase_currency_id || ledgerCurrencyId), ledgerCur, refUsdToAfn, refUsdToAed);
-            const saleAfn = estimateToAfn(toNum(v.sale_price_afn), findCurrency(currencies, v.sale_currency_id || ledgerCurrencyId), ledgerCur, refUsdToAfn, refUsdToAed);
+            const costAfn = estimateToAfn(toNum(v.purchase_price_afn), findCurrency(currencies, v.purchase_currency_id || catalogDefaultId), ledgerCur, refUsdToAfn, refUsdToAed);
+            const saleAfn = estimateToAfn(toNum(v.sale_price_afn), findCurrency(currencies, v.sale_currency_id || catalogDefaultId), ledgerCur, refUsdToAfn, refUsdToAed);
             if (costAfn !== null && saleAfn !== null && saleAfn < costAfn) {
                 clientErrors[`variants.${i}.sale_price_afn`] =
                     'Estimated selling price (AFN) cannot be less than estimated purchase cost (AFN).';
@@ -533,9 +516,9 @@ export default function ProductsCreate({
             }
             if (isInvestorPurchase(p.investor_id)) {
                 const variant = variants[p.variant_index];
-                const costAfn = estimateToAfn(toNum(variant?.purchase_price_afn), findCurrency(currencies, variant?.purchase_currency_id || ledgerCurrencyId), ledgerCur, refUsdToAfn, refUsdToAed);
-                const saleAfn = estimateToAfn(toNum(variant?.sale_price_afn), findCurrency(currencies, variant?.sale_currency_id || ledgerCurrencyId), ledgerCur, refUsdToAfn, refUsdToAed);
-                const investorAfn = estimateToAfn(toNum(p.profit_per_unit), findCurrency(currencies, p.profit_currency_id || ledgerCurrencyId), ledgerCur, refUsdToAfn, refUsdToAed);
+                const costAfn = estimateToAfn(toNum(variant?.purchase_price_afn), findCurrency(currencies, variant?.purchase_currency_id || catalogDefaultId), ledgerCur, refUsdToAfn, refUsdToAed);
+                const saleAfn = estimateToAfn(toNum(variant?.sale_price_afn), findCurrency(currencies, variant?.sale_currency_id || catalogDefaultId), ledgerCur, refUsdToAfn, refUsdToAed);
+                const investorAfn = estimateToAfn(toNum(p.profit_per_unit), findCurrency(currencies, p.profit_currency_id || catalogDefaultId), ledgerCur, refUsdToAfn, refUsdToAed);
                 const totalProfit = costAfn !== null && saleAfn !== null ? saleAfn - costAfn : null;
                 if (toNum(p.profit_per_unit) <= 0) {
                     clientErrors[`purchases.${i}.profit_per_unit`] = 'Investor profit per unit is required';
@@ -580,13 +563,13 @@ export default function ProductsCreate({
             if (v.concentration) formData.append(`variants[${i}][concentration]`, v.concentration);
             formData.append(`variants[${i}][purchase_price_afn]`, v.purchase_price_afn || '0');
             formData.append(`variants[${i}][purchase_amount]`, v.purchase_price_afn || '0');
-            formData.append(`variants[${i}][purchase_currency_id]`, v.purchase_currency_id || ledgerCurrencyId);
+            formData.append(`variants[${i}][purchase_currency_id]`, v.purchase_currency_id || catalogDefaultId);
             formData.append(`variants[${i}][sale_price_afn]`, v.sale_price_afn || '0');
             formData.append(`variants[${i}][sale_amount]`, v.sale_price_afn || '0');
-            formData.append(`variants[${i}][sale_currency_id]`, v.sale_currency_id || ledgerCurrencyId);
+            formData.append(`variants[${i}][sale_currency_id]`, v.sale_currency_id || catalogDefaultId);
             formData.append(`variants[${i}][wholesale_price_afn]`, v.wholesale_price_afn || '0');
             formData.append(`variants[${i}][wholesale_amount]`, v.wholesale_price_afn || '0');
-            formData.append(`variants[${i}][wholesale_currency_id]`, v.wholesale_currency_id || ledgerCurrencyId);
+            formData.append(`variants[${i}][wholesale_currency_id]`, v.wholesale_currency_id || catalogDefaultId);
             formData.append(`variants[${i}][wholesale_min_qty]`, v.wholesale_min_qty || '0');
             (v.barcodes ?? []).forEach((b, j) => {
                 if (b.barcode.trim()) {
@@ -603,10 +586,19 @@ export default function ProductsCreate({
             if (p.investor_id && p.investor_id !== 'none') formData.append(`purchases[${i}][investor_id]`, p.investor_id);
             if (p.supplier_id && p.supplier_id !== 'none') formData.append(`purchases[${i}][supplier_id]`, p.supplier_id);
             formData.append(`purchases[${i}][quantity]`, p.quantity || '1');
+            const variant = variants[p.variant_index];
+            const effectivePurchaseCurrencyId =
+                p.purchase_currency_id || variant?.purchase_currency_id || catalogDefaultId;
+            formData.append(`purchases[${i}][purchase_currency_id]`, effectivePurchaseCurrencyId);
+            if (p.exchange_rate && toNum(p.exchange_rate) > 0) {
+                formData.append(`purchases[${i}][exchange_rate]`, p.exchange_rate);
+            }
             if (isInvestorPurchase(p.investor_id)) {
                 formData.append(`purchases[${i}][profit_per_unit]`, p.profit_per_unit || '0');
-                // ✨ always send profit currency (synced already)
-                formData.append(`purchases[${i}][profit_currency_id]`, p.profit_currency_id || ledgerCurrencyId);
+                formData.append(
+                    `purchases[${i}][profit_currency_id]`,
+                    p.profit_currency_id || effectivePurchaseCurrencyId,
+                );
             }
             if (p.invoice_number) formData.append(`purchases[${i}][invoice_number]`, p.invoice_number);
             formData.append(`purchases[${i}][purchase_date]`, p.purchase_date || today());
@@ -936,48 +928,68 @@ export default function ProductsCreate({
                                     </div>
                                 </div>
 
-                                {/* PRODUCT PRICES — ✨ dynamic currency sync */}
+                                {/* PRODUCT PRICES — each field keeps its own currency */}
                                 <div className="space-y-4 rounded-lg border p-4">
                                     <div className="flex items-center gap-2">
                                         <Tag className="h-4 w-4 text-amber-600" />
                                         <h4 className="text-sm font-semibold">Product Prices</h4>
                                     </div>
+                                    <p className="text-muted-foreground text-xs">
+                                        Purchase, selling, and wholesale currencies are independent. Changing one does not change the others.
+                                    </p>
 
                                     {/* Purchase cost first */}
-                                    <div className="rounded-md border border-blue-200 bg-blue-50/50 p-3">
+                                    <div className="space-y-3 rounded-md border border-blue-200 bg-blue-50/50 p-3">
                                         <MoneyField
+                                            key={`purchase-money-${v._key}`}
                                             label="Purchase cost per unit"
                                             amount={v.purchase_price_afn}
-                                            currencyId={v.purchase_currency_id || ledgerCurrencyId}
+                                            currencyId={v.purchase_currency_id}
                                             currencies={currencies}
+                                            currencySelectName={`variant-${vIndex}-purchase-currency`}
+                                            showHint={false}
                                             onAmountChange={(val) => { if (toNum(val) >= 0) updateVariant(vIndex, 'purchase_price_afn', val); }}
-                                            // ✨ sync all three price currencies + profit currency
-                                            onCurrencyChange={(val) => syncVariantCurrency(vIndex, val)}
+                                            onCurrencyChange={(val) => {
+                                                updateVariant(vIndex, 'purchase_currency_id', val);
+                                            }}
                                             error={errors[`variants.${vIndex}.purchase_price_afn`] || errors[`variants.${vIndex}.purchase_currency_id`]}
+                                        />
+                                        <LiveExchangeRatePanel
+                                            amount={v.purchase_price_afn}
+                                            currencyId={v.purchase_currency_id}
+                                            currencies={currencies}
                                         />
                                     </div>
 
                                     {/* Sale + Wholesale */}
                                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                                         <MoneyField
+                                            key={`sale-money-${v._key}`}
                                             label="Selling price per unit"
                                             required
                                             amount={v.sale_price_afn}
-                                            currencyId={v.sale_currency_id || ledgerCurrencyId}
+                                            currencyId={v.sale_currency_id}
                                             currencies={currencies}
+                                            currencySelectName={`variant-${vIndex}-sale-currency`}
+                                            showHint={false}
                                             onAmountChange={(val) => { if (toNum(val) >= 0) updateVariant(vIndex, 'sale_price_afn', val); }}
-                                            // ✨ sync all three price currencies + profit currency
-                                            onCurrencyChange={(val) => syncVariantCurrency(vIndex, val)}
+                                            onCurrencyChange={(val) => {
+                                                updateVariant(vIndex, 'sale_currency_id', val);
+                                            }}
                                             error={errors[`variants.${vIndex}.sale_price_afn`] || errors[`variants.${vIndex}.sale_currency_id`]}
                                         />
                                         <MoneyField
+                                            key={`wholesale-money-${v._key}`}
                                             label="Wholesale price per unit"
                                             amount={v.wholesale_price_afn}
-                                            currencyId={v.wholesale_currency_id || ledgerCurrencyId}
+                                            currencyId={v.wholesale_currency_id}
                                             currencies={currencies}
+                                            currencySelectName={`variant-${vIndex}-wholesale-currency`}
+                                            showHint={false}
                                             onAmountChange={(val) => { if (toNum(val) >= 0) updateVariant(vIndex, 'wholesale_price_afn', val); }}
-                                            // ✨ sync all three price currencies + profit currency
-                                            onCurrencyChange={(val) => syncVariantCurrency(vIndex, val)}
+                                            onCurrencyChange={(val) => {
+                                                updateVariant(vIndex, 'wholesale_currency_id', val);
+                                            }}
                                             error={errors[`variants.${vIndex}.wholesale_price_afn`] || errors[`variants.${vIndex}.wholesale_currency_id`]}
                                         />
                                     </div>
@@ -997,13 +1009,10 @@ export default function ProductsCreate({
                                         </div>
                                     </div>
 
-                                    {/* Exchange Equivalents */}
+                                    {/* Exchange Equivalents — each price uses its own amount + currency */}
                                     <ExchangeEquivalents
                                         variant={v}
                                         currencies={currencies}
-                                        ledgerCur={ledgerCur}
-                                        refUsdToAfn={refUsdToAfn}
-                                        refUsdToAed={refUsdToAed}
                                     />
                                 </div>
 
@@ -1036,12 +1045,12 @@ export default function ProductsCreate({
                                                 </div>
                                                 <div className="space-y-2">
                                                     <MoneyField
-                                                        label="Investor profit / unit"
+                                                        label="Investor profit / unit (own currency)"
                                                         required={investorBuy}
                                                         amount={p.profit_per_unit}
-                                                        // ✨ profit currency is kept in sync via syncVariantCurrency
-                                                        currencyId={p.profit_currency_id || ledgerCurrencyId}
+                                                        currencyId={p.profit_currency_id}
                                                         currencies={currencies}
+                                                        currencySelectName={`purchase-${pIndex}-profit-currency`}
                                                         disabled={!investorBuy}
                                                         onAmountChange={(val) => { if (toNum(val) >= 0) updatePurchase(pIndex, 'profit_per_unit', val); }}
                                                         onCurrencyChange={(val) => updatePurchase(pIndex, 'profit_currency_id', val)}
@@ -1081,13 +1090,12 @@ export default function ProductsCreate({
                         {purchases.map((p, pIndex) => {
                             const isInvestor = isInvestorPurchase(p.investor_id);
                             const variant = variants[p.variant_index];
-                            const defaultCur = findCurrency(currencies, ledgerCurrencyId);
-                            const purchaseCur = findCurrency(currencies, variant?.purchase_currency_id || ledgerCurrencyId);
-                            const saleCur = findCurrency(currencies, variant?.sale_currency_id || ledgerCurrencyId);
-                            const profitCur = findCurrency(currencies, p.profit_currency_id || ledgerCurrencyId);
-                            const costLedger = estimateToAfn(toNum(variant?.purchase_price_afn), purchaseCur, defaultCur, refUsdToAfn, refUsdToAed);
-                            const saleLedger = estimateToAfn(toNum(variant?.sale_price_afn), saleCur, defaultCur, refUsdToAfn, refUsdToAed);
-                            const investorLedger = estimateToAfn(isInvestor ? toNum(p.profit_per_unit) : 0, profitCur, defaultCur, refUsdToAfn, refUsdToAed);
+                            const purchaseCur = findCurrency(currencies, variant?.purchase_currency_id || catalogDefaultId);
+                            const saleCur = findCurrency(currencies, variant?.sale_currency_id || catalogDefaultId);
+                            const profitCur = findCurrency(currencies, p.profit_currency_id || catalogDefaultId);
+                            const costLedger = estimateToAfn(toNum(variant?.purchase_price_afn), purchaseCur, ledgerCur, refUsdToAfn, refUsdToAed);
+                            const saleLedger = estimateToAfn(toNum(variant?.sale_price_afn), saleCur, ledgerCur, refUsdToAfn, refUsdToAed);
+                            const investorLedger = estimateToAfn(isInvestor ? toNum(p.profit_per_unit) : 0, profitCur, ledgerCur, refUsdToAfn, refUsdToAed);
                             const unitPrice = costLedger ?? toNum(variant?.purchase_price_afn);
                             const profits = calcProfits(costLedger ?? 0, saleLedger ?? 0, investorLedger ?? 0, toNum(p.quantity));
 
@@ -1234,64 +1242,253 @@ export default function ProductsCreate({
 }
 
 /* ═══════════════════════════════════════════════════════
- |  Exchange Equivalents sub-component
+ |  Product Prices FX helpers (Create page only)
  ═══════════════════════════════════════════════════════ */
 
-function ExchangeEquivalents({
-    variant,
-    currencies,
-    ledgerCur,
-    refUsdToAfn,
-    refUsdToAed,
-}: {
-    variant: Variant;
-    currencies: CatalogCurrency[];
-    ledgerCur: CatalogCurrency | null;
-    refUsdToAfn: number;
-    refUsdToAed: number;
-}) {
-    const { convert } = useExchange();
-    const purchaseCur = findCurrency(currencies, variant.purchase_currency_id);
-    const saleCur = findCurrency(currencies, variant.sale_currency_id);
+type PriceFxView = {
+    amount: number;
+    code: string;
+    symbol: string | null;
+    eq: ThreeCurrency;
+};
 
-    const purchaseAfn = estimateToAfn(toNum(variant.purchase_price_afn), purchaseCur, ledgerCur, refUsdToAfn, refUsdToAed);
-    const saleAfn = estimateToAfn(toNum(variant.sale_price_afn), saleCur, ledgerCur, refUsdToAfn, refUsdToAed);
+function useBoardFxRates(): { rates: FxRates | null; effectiveAt: string | null; source: string | null } {
+    const { usdToAfn, aedToAfn, usdToAed, effectiveAt, source } = useExchange();
+    const rates = resolveCatalogFxRates({
+        boardUsdToAfn: usdToAfn ?? 0,
+        boardAedToAfn: aedToAfn ?? 0,
+        usdToAed: usdToAed ?? 0,
+    });
+    return { rates, effectiveAt, source };
+}
 
-    const triad = (afn: number | null) => {
-        if (afn == null) return null;
-        return {
-            afn,
-            usd: convert(afn, 'AFN', 'USD'),
-            aed: convert(afn, 'AFN', 'AED'),
-        };
+/** Resolve one price field from its own amount + selected currency (never assume AFN/USD). */
+function resolvePriceFx(
+    amountStr: string,
+    currencyId: string,
+    currencies: CatalogCurrency[],
+    rates: FxRates | null,
+): PriceFxView | null {
+    const raw = String(amountStr ?? '').trim();
+    const amount = toNum(raw);
+    if (raw === '' || !(amount > 0)) return null;
+
+    const cur = findCurrency(currencies, currencyId);
+    if (!cur) return null;
+    if (!rates) return null;
+
+    const eq = catalogEquivalents(amount, cur.code, rates);
+    if (!eq) return null;
+
+    return {
+        amount,
+        code: cur.code.toUpperCase(),
+        symbol: cur.symbol,
+        eq,
     };
-    const purchase3 = triad(purchaseAfn);
-    const sale3 = triad(saleAfn);
-    const marginAfn = purchaseAfn !== null && saleAfn !== null ? saleAfn - purchaseAfn : null;
-    const margin3 = triad(marginAfn);
+}
 
-    if (purchaseAfn === null && saleAfn === null) {
+function rateToAfnLabel(code: string, rates: FxRates): number | null {
+    const u = code.toUpperCase();
+    if (u === 'AFN') return 1;
+    if (u === 'USD') return rates.usd_to_afn > 0 ? rates.usd_to_afn : null;
+    if (u === 'AED') return rates.aed_to_afn > 0 ? rates.aed_to_afn : null;
+    return null;
+}
+
+/** Live board rate + AFN/USD/AED preview under Purchase Cost. */
+function LiveExchangeRatePanel({
+    amount,
+    currencyId,
+    currencies,
+}: {
+    amount: string;
+    currencyId: string;
+    currencies: CatalogCurrency[];
+}) {
+    const { rates, effectiveAt, source } = useBoardFxRates();
+    const cur = findCurrency(currencies, currencyId);
+    const code = (cur?.code || '').toUpperCase();
+    const view = resolvePriceFx(amount, currencyId, currencies, rates);
+
+    if (!cur) {
         return (
-            <div className="rounded-md border border-dashed p-3 text-center text-xs text-muted-foreground">
-                Enter purchase and sale prices above to see exchange equivalents.
+            <div className="rounded border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900">
+                Select a purchase currency to see the live exchange rate.
             </div>
         );
     }
 
-    const row = (label: string, values: { afn: number; usd: number | null; aed: number | null } | null, emphasize = false) => (
-        <div className="rounded bg-white p-2">
-            <div className="text-muted-foreground mb-0.5 text-[10px] uppercase tracking-wide">{label}</div>
-            <div className={`font-mono font-semibold ${emphasize ? 'text-emerald-700' : ''}`}>
-                {values ? fmt(values.afn) : '—'} <span className="text-muted-foreground">AFN</span>
+    if (!rates) {
+        return (
+            <div className="rounded border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900">
+                Central Exchange Board rates unavailable — configure USD→AFN and AED→AFN under Exchange Rates.
             </div>
-            {values && (
-                <div className="text-muted-foreground mt-1 space-y-0.5 font-mono text-[10px]">
-                    <div>≈ {values.usd != null ? fmt(values.usd) : '—'} USD</div>
-                    <div>≈ {values.aed != null ? fmt(values.aed) : '—'} AED</div>
+        );
+    }
+
+    const perUnitAfn = rateToAfnLabel(code, rates);
+    const oneUnitEq = catalogEquivalents(1, code, rates);
+
+    return (
+        <div className="rounded border border-blue-200 bg-white/80 px-3 py-2 text-xs">
+            <div className="mb-1.5 flex items-center gap-1.5 font-semibold text-blue-800">
+                <ArrowRightLeft className="h-3.5 w-3.5" />
+                Live Exchange Rate
+                <span className="text-muted-foreground font-normal">· base {code}</span>
+            </div>
+            <p className="font-mono text-sm font-semibold text-blue-950">
+                {perUnitAfn != null && oneUnitEq ? (
+                    code === 'AFN' ? (
+                        <>1 AFN = 1 AFN (ledger)</>
+                    ) : (
+                        <>
+                            1 {code} = {fmt(oneUnitEq.afn)} AFN
+                            {code !== 'USD' ? ` · ${fmt(oneUnitEq.usd)} USD` : ''}
+                            {code !== 'AED' ? ` · ${fmt(oneUnitEq.aed)} AED` : ''}
+                        </>
+                    )
+                ) : (
+                    <>No board rate for {code}</>
+                )}
+            </p>
+            {view ? (
+                <div className="mt-2 space-y-1">
+                    <p className="text-muted-foreground">
+                        Entered:{' '}
+                        <span className="font-mono font-semibold text-foreground">
+                            {fmt(view.amount)} {view.code}
+                            {view.symbol ? ` (${view.symbol})` : ''}
+                        </span>
+                        <span className="ml-1 text-[10px] text-amber-700">original</span>
+                    </p>
+                    <div className="grid grid-cols-3 gap-2 font-mono">
+                        {(
+                            [
+                                { code: 'AFN', value: view.eq.afn },
+                                { code: 'USD', value: view.eq.usd },
+                                { code: 'AED', value: view.eq.aed },
+                            ] as const
+                        ).map((row) => {
+                            const isOriginal = row.code === view.code;
+                            return (
+                                <div key={row.code} className={isOriginal ? 'font-semibold text-foreground' : 'text-muted-foreground'}>
+                                    <span className="block text-[10px] uppercase tracking-wide">
+                                        {row.code}
+                                        {isOriginal ? ' · entered' : ' · converted'}
+                                    </span>
+                                    {fmt(row.value)}
+                                </div>
+                            );
+                        })}
+                    </div>
                 </div>
+            ) : (
+                <p className="text-muted-foreground mt-1">Enter a purchase amount to see live equivalents in {code}.</p>
+            )}
+            {(effectiveAt || source) && (
+                <p className="text-muted-foreground mt-1.5 text-[10px]">
+                    {effectiveAt ? `Board: ${effectiveAt}` : null}
+                    {effectiveAt && source ? ' · ' : null}
+                    {source || null}
+                </p>
             )}
         </div>
     );
+}
+
+function EquivalentCard({
+    label,
+    view,
+    emphasize = false,
+    showEnteredBadge = true,
+}: {
+    label: string;
+    view: PriceFxView | null;
+    emphasize?: boolean;
+    showEnteredBadge?: boolean;
+}) {
+    return (
+        <div className={`rounded bg-white p-2 ${emphasize ? 'ring-1 ring-emerald-200' : ''}`}>
+            <div className="text-muted-foreground mb-0.5 text-[10px] uppercase tracking-wide">{label}</div>
+            {view ? (
+                <>
+                    <div className={`font-mono text-sm font-semibold ${emphasize ? 'text-emerald-700' : ''}`}>
+                        {fmt(view.amount)}{' '}
+                        <span className="text-muted-foreground">{view.code}</span>
+                        {showEnteredBadge ? (
+                            <span className="ml-1 text-[10px] font-normal text-amber-700">entered</span>
+                        ) : null}
+                    </div>
+                    <div className="text-muted-foreground mt-1 space-y-0.5 font-mono text-[10px]">
+                        {(
+                            [
+                                { code: 'AFN', value: view.eq.afn },
+                                { code: 'USD', value: view.eq.usd },
+                                { code: 'AED', value: view.eq.aed },
+                            ] as const
+                        )
+                            .filter((row) => row.code !== view.code)
+                            .map((row) => (
+                                <div key={row.code}>
+                                    ≈ {fmt(row.value)} {row.code}
+                                </div>
+                            ))}
+                    </div>
+                </>
+            ) : (
+                <div className="text-muted-foreground font-mono">—</div>
+            )}
+        </div>
+    );
+}
+
+function ExchangeEquivalents({
+    variant,
+    currencies,
+}: {
+    variant: Variant;
+    currencies: CatalogCurrency[];
+}) {
+    const { rates } = useBoardFxRates();
+
+    const purchase = resolvePriceFx(variant.purchase_price_afn, variant.purchase_currency_id, currencies, rates);
+    const sale = resolvePriceFx(variant.sale_price_afn, variant.sale_currency_id, currencies, rates);
+    const wholesale = resolvePriceFx(variant.wholesale_price_afn, variant.wholesale_currency_id, currencies, rates);
+
+    const marginView: PriceFxView | null =
+        purchase && sale && rates
+            ? (() => {
+                  const marginAfn = sale.eq.afn - purchase.eq.afn;
+                  const signed = {
+                      afn: Math.round(marginAfn * 100) / 100,
+                      usd: Math.round((marginAfn / rates.usd_to_afn) * 100) / 100,
+                      aed: Math.round((marginAfn / rates.aed_to_afn) * 100) / 100,
+                  };
+                  return {
+                      amount: signed.afn,
+                      code: 'AFN',
+                      symbol: null,
+                      eq: signed,
+                  };
+              })()
+            : null;
+
+    if (!purchase && !sale && !wholesale) {
+        return (
+            <div className="text-muted-foreground rounded-md border border-dashed p-3 text-center text-xs">
+                Enter purchase, selling, or wholesale prices above to see exchange equivalents.
+            </div>
+        );
+    }
+
+    if (!rates) {
+        return (
+            <div className="rounded-md border border-amber-200 bg-amber-50/70 p-3 text-center text-xs text-amber-900">
+                Central Exchange Board rates unavailable — equivalents cannot be calculated.
+            </div>
+        );
+    }
 
     return (
         <div className="rounded-md border border-dashed bg-gray-50/60 p-3">
@@ -1299,10 +1496,14 @@ function ExchangeEquivalents({
                 <ArrowRightLeft className="h-3.5 w-3.5" />
                 Exchange Equivalents (estimate)
             </div>
-            <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
-                {row('Purchase', purchase3)}
-                {row('Sale', sale3)}
-                {row('Gross margin', margin3, true)}
+            <p className="text-muted-foreground mb-2 text-[10px]">
+                Each row keeps its own entered amount and currency. Equivalents use the Central Exchange Board.
+            </p>
+            <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+                <EquivalentCard label="Purchase" view={purchase} />
+                <EquivalentCard label="Selling" view={sale} />
+                <EquivalentCard label="Wholesale" view={wholesale} />
+                <EquivalentCard label="Gross margin (AFN)" view={marginView} emphasize showEnteredBadge={false} />
             </div>
         </div>
     );

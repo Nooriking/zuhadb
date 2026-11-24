@@ -21,6 +21,7 @@ class ProductPrice extends Model
         'amount',
         'min_qty',
         'is_active',
+        'is_original',
         'valid_from',
         'valid_to',
     ];
@@ -29,6 +30,7 @@ class ProductPrice extends Model
         'amount' => 'decimal:4',
         'min_qty' => 'integer',
         'is_active' => 'boolean',
+        'is_original' => 'boolean',
         'valid_from' => 'date',
         'valid_to' => 'date',
         'created_at' => 'datetime',

@@ -54,6 +54,12 @@ interface Sale {
     sale_currency_symbol?: string | null;
     sale_currency_label?: string | null;
     sale_currency_known?: boolean;
+    /** Snapshot board rate used for this sale day (1 USD → AFN). */
+    usd_to_afn_rate?: string | number | null;
+    aed_to_afn_rate?: string | number | null;
+    usd_to_aed_rate?: string | number | null;
+    rate_effective_at?: string | null;
+    rate_source?: string | null;
     display_total?: number | null;
     display_subtotal?: number | null;
     display_discount?: number | null;
@@ -102,6 +108,15 @@ const methodLabel = (method: string) =>
     ({ cash: 'Cash', card: 'Card', bank: 'Bank', mobile: 'Mobile', other: 'Other', credit: 'Credit' })[method] ||
     method;
 
+const formatFxRate = (value: string | number | null | undefined): string | null => {
+    const n = typeof value === 'string' ? parseFloat(value) : Number(value);
+    if (!Number.isFinite(n) || !(n > 0)) return null;
+    return new Intl.NumberFormat('en-US', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 4,
+    }).format(n);
+};
+
 export default function SaleReceipt({ sale, company, printedAt }: Props) {
     const [logoFailed, setLogoFailed] = useState(false);
 
@@ -140,6 +155,12 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
     const email = (company.email || '').trim();
     const website = (company.website || '').trim();
     const invoiceFooter = (company.invoice_footer || '').trim();
+
+    // Day-of-sale USD board rate (snapshot on the sale — not today's live board).
+    const usdToAfn = formatFxRate(sale.usd_to_afn_rate);
+    const rateDay = sale.rate_effective_at
+        ? new Date(sale.rate_effective_at).toLocaleDateString('en-GB')
+        : dateOnly;
 
     const itemLabel = (item: SaleItem) => {
         const name = item.product_name_snapshot || item.variant?.product?.name || 'Product';
@@ -209,6 +230,14 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
                             <dd className="ltr">{sale.sale_currency_label || currencyCode || 'AFN'}</dd>
                         </div>
                     </dl>
+
+                    {usdToAfn && (
+                        <div className="bill-fx">
+                            <p className="bill-fx-title">Exchange Rate (Sale Day)</p>
+                            <p className="bill-fx-rate ltr">1 USD = {usdToAfn} AFN</p>
+                            <p className="bill-fx-day ltr">Rate date: {rateDay}</p>
+                        </div>
+                    )}
 
                     <table className="bill-items">
                         <thead>
@@ -332,6 +361,32 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
                 .bill-meta div, .bill-totals div { display: flex; justify-content: space-between; gap: 12px; margin: 3px 0; }
                 .bill-meta dt, .bill-totals dt { color: #111; }
                 .bill-meta dd, .bill-totals dd { margin: 0; text-align: right; }
+                .bill-fx {
+                    margin: 8px 0;
+                    padding: 6px 0;
+                    border-top: 1px dashed #111;
+                    border-bottom: 1px dashed #111;
+                    text-align: center;
+                }
+                .bill-fx-title {
+                    margin: 0 0 2px;
+                    font-size: 10px;
+                    letter-spacing: .08em;
+                    text-transform: uppercase;
+                    font-weight: 700;
+                }
+                .bill-fx-rate {
+                    margin: 0;
+                    font-size: 13px;
+                    font-weight: 700;
+                    font-variant-numeric: tabular-nums;
+                }
+                .bill-fx-day {
+                    margin: 2px 0 0;
+                    font-size: 10px;
+                    font-weight: 500;
+                    color: #333;
+                }
                 .ltr { direction: ltr; unicode-bidi: isolate; }
                 .num { white-space: nowrap; font-variant-numeric: tabular-nums; }
                 .bill-items { width: 100%; border-collapse: collapse; margin-top: 6px; table-layout: fixed; }

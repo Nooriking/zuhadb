@@ -5,6 +5,7 @@ import { CustomerCombobox } from '@/components/customer-combobox';
 import {
     TransactionExchangeRateSection,
     threeCurrencyEquivalents,
+    type EditedRates,
     type FxBoardContext,
 } from '@/components/transaction-exchange-rate-section';
 import { Badge } from '@/components/ui/badge';
@@ -125,6 +126,7 @@ interface Props {
     nextNumber: string;
     currencies?: CurrencyOption[];
     fxBoard?: FxBoardContext;
+    canManageRates?: boolean;
     supplierCredits?: {
         total: number;
         suppliers: { supplier: string; amount: number; count: number }[];
@@ -250,11 +252,13 @@ export default function SalesCreate({
     nextNumber,
     currencies = [],
     fxBoard,
+    canManageRates = false,
     supplierCredits,
     errors: initialErrors,
 }: Props) {
     const { toast } = useToast();
     const { usdToAfn, aedToAfn } = useExchange();
+    const [editedRates, setEditedRates] = useState<EditedRates | null>(null);
 
     const ledgerCurrency = useMemo(() => currencies.find((c) => c.code === 'AFN') || currencies[0], [currencies]);
 
@@ -424,8 +428,9 @@ export default function SalesCreate({
         () => currencies.find((c) => String(c.id) === form.sale_currency_id) || ledgerCurrency,
         [currencies, form.sale_currency_id, ledgerCurrency],
     );
-    const usdRate = usdToAfn || 0;
-    const aedRate = aedToAfn || 0;
+    /* Prefer cashier override; otherwise live board from useExchange. */
+    const usdRate = (editedRates?.usd_to_afn || usdToAfn) || 0;
+    const aedRate = (editedRates?.aed_to_afn || aedToAfn) || 0;
 
     const totals = useMemo(() => {
         let subtotalAfn = 0;
@@ -842,9 +847,18 @@ export default function SalesCreate({
             payments,
             due_date: totals.remainingDueAfn > 0 ? dueDate || null : null,
         };
-        delete payload.usd_to_afn_rate;
-        delete payload.aed_to_afn_rate;
-        delete payload.rate_source;
+
+        /* Only send FX overrides when the cashier actually changed board rates.
+         * Otherwise SaleService snapshots the live Central Exchange Board. */
+        if (editedRates?.is_edited && editedRates.usd_to_afn > 0 && editedRates.aed_to_afn > 0) {
+            payload.usd_to_afn_rate = editedRates.usd_to_afn;
+            payload.aed_to_afn_rate = editedRates.aed_to_afn;
+            if (editedRates.usd_to_aed > 0) {
+                payload.usd_to_aed_rate = editedRates.usd_to_aed;
+            }
+            payload.rate_source = editedRates.rate_source || 'manual_override';
+        }
+
         return payload;
     };
 
@@ -1093,7 +1107,11 @@ export default function SalesCreate({
                     </div>
                 </div>
 
-                <TransactionExchangeRateSection context={fxBoard} />
+                <TransactionExchangeRateSection
+                    context={fxBoard}
+                    editable={canManageRates}
+                    onChange={setEditedRates}
+                />
 
                 <div className="rounded-lg border p-4">
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-3">

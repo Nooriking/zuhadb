@@ -80,6 +80,24 @@ class SaleService
 
             // Central Exchange Board (exchange_rates) only — never invent a silent 1:1.
             $rateOverrides = $this->resolveSaleBoardOverrides($data);
+
+            // Persist cashier board edits into exchange_rates so future sales
+            // pick them up. Historical sales keep their own FX snapshots.
+            if (
+                ! empty($data['usd_to_afn_rate'])
+                && (float) $data['usd_to_afn_rate'] > 0
+                && ! empty($data['aed_to_afn_rate'])
+                && (float) $data['aed_to_afn_rate'] > 0
+            ) {
+                $this->currency->postBoardRates(
+                    (string) $data['usd_to_afn_rate'],
+                    (string) $data['aed_to_afn_rate'],
+                    $data['sale_date'] ?? now(),
+                    $actor->id,
+                    (string) ($data['rate_source'] ?? 'sale_board'),
+                );
+            }
+
             $board = $this->currency->boardAt($data['sale_date'], $rateOverrides, allowCatalogFallback: false);
 
             unset(

@@ -63,7 +63,7 @@ test('catalog converter converts usd input into afn and aed with one board', fun
         ->and((float) $converted['purchase']['afn'])->toBe(6500.0)
         ->and((float) $converted['sale']['afn'])->toBe(9750.0)
         ->and((float) $converted['wholesale']['afn'])->toBe(8450.0)
-        ->and($converted['snapshot']['catalog_usd_to_afn_rate'])->toBe('65.00000000');
+        ->and($converted['snapshot']['usd_to_afn'])->toBe('65.00000000');
 });
 
 test('catalog converter converts aed input into afn and usd', function () {
@@ -123,5 +123,5 @@ test('independent converter converts each price field with its own currency on o
         ->and((float) $converted['sale']['aed'])->toBe(550.0)
         ->and((float) $converted['wholesale']['afn'])->toBe(8500.0)
         ->and($converted['board'])->toBeInstanceOf(FxBoard::class)
-        ->and($converted['snapshot']['catalog_usd_to_afn_rate'])->toBe('65.00000000');
+        ->and($converted['snapshot']['usd_to_afn'])->toBe('65.00000000');
 });

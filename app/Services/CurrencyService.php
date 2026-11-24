@@ -246,6 +246,75 @@ class CurrencyService
     }
 
     /**
+     * Post the Central Exchange Board base pairs (USD→AFN, AED→AFN).
+     * USD→AED is never stored — it is always derived as usd_to_afn ÷ aed_to_afn.
+     *
+     * @return array{
+     *     usd_to_afn: ExchangeRate,
+     *     aed_to_afn: ExchangeRate,
+     *     usd_to_aed: string,
+     *     board: FxBoard
+     * }
+     */
+    public function postBoardRates(
+        string $usdToAfn,
+        string $aedToAfn,
+        CarbonInterface|\DateTimeInterface|string|null $effectiveAt = null,
+        ?int $createdBy = null,
+        string $source = 'manual',
+    ): array {
+        if ((float) $usdToAfn <= 0) {
+            throw ValidationException::withMessages([
+                'usd_to_afn' => 'USD→AFN rate must be greater than zero.',
+            ]);
+        }
+        if ((float) $aedToAfn <= 0) {
+            throw ValidationException::withMessages([
+                'aed_to_afn' => 'AED→AFN rate must be greater than zero.',
+            ]);
+        }
+
+        $ledger = Currency::ledger();
+        $usd = Currency::query()->notTrashed()->where('code', 'USD')->first();
+        $aed = Currency::query()->notTrashed()->where('code', 'AED')->first();
+
+        if (! $ledger || ! $usd || ! $aed) {
+            throw ValidationException::withMessages([
+                'exchange_rate' => 'AFN, USD, and AED currencies must exist before posting board rates.',
+            ]);
+        }
+
+        $at = $effectiveAt ?? now();
+
+        return DB::transaction(function () use ($usd, $aed, $ledger, $usdToAfn, $aedToAfn, $at, $createdBy, $source) {
+            $usdRow = $this->postRate($usd, $ledger, (string) $usdToAfn, $at, $createdBy, $source);
+            $aedRow = $this->postRate($aed, $ledger, (string) $aedToAfn, $at, $createdBy, $source);
+
+            $board = FxBoard::fromArray([
+                'usd_to_afn' => (string) $usdRow->rate,
+                'aed_to_afn' => (string) $aedRow->rate,
+                'effective_at' => optional($usdRow->effective_at)?->toIso8601String()
+                    ?? optional($aedRow->effective_at)?->toIso8601String(),
+                'source' => $source,
+                'kind' => 'operational',
+            ]);
+
+            try {
+                app(ExchangeRateService::class)->forget();
+            } catch (\Throwable) {
+                // Cache clear is best-effort.
+            }
+
+            return [
+                'usd_to_afn' => $usdRow,
+                'aed_to_afn' => $aedRow,
+                'usd_to_aed' => $board->usdToAed,
+                'board' => $board,
+            ];
+        });
+    }
+
+    /**
      * Resolve the AFN-based FX board at a timestamp.
      * Base rates: USD→AFN and AED→AFN. USD→AED is always derived as usd/aed.
      *

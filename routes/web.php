@@ -523,6 +523,8 @@ Route::middleware(['auth', 'verified', 'lock.records'])->group(function () {
                 ->name('report');
         Route::post('/preview-cost', [SaleController::class, 'previewCost'])
             ->middleware('permission:sales.create')->name('previewCost');
+        Route::post('/exchange-board', [SaleController::class, 'updateExchangeBoard'])
+            ->middleware('permission:sales.create')->name('exchangeBoard');
 
         Route::post('/{id}/restore', [SaleController::class, 'restore'])
             ->middleware('role:admin,branch_manager')->whereNumber('id')->name('restore');

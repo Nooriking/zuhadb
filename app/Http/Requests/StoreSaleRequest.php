@@ -33,6 +33,7 @@ class StoreSaleRequest extends FormRequest
             'sale_currency_id' => ['nullable', 'integer', $activeCurrency],
             'usd_to_afn_rate' => ['nullable', 'numeric', 'gt:0', 'max:'.SafeData::MONEY_MAX],
             'aed_to_afn_rate' => ['nullable', 'numeric', 'gt:0', 'max:'.SafeData::MONEY_MAX],
+            'usd_to_aed_rate' => ['nullable', 'numeric', 'gt:0', 'max:'.SafeData::MONEY_MAX],
             'rate_source' => ['nullable', 'string', 'max:40'],
             'payment_method' => ['nullable', Rule::in(['cash', 'card', 'bank', 'mobile', 'credit', 'other'])],
             'due_date' => ['nullable', 'date', 'after_or_equal:sale_date'],

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\AddSalePaymentRequest;
 use App\Http\Requests\StoreSaleRequest;
+use App\Http\Requests\UpdateBoardExchangeRatesRequest;
 use App\Http\Requests\UpdateSaleRequest;
 use App\Models\Branch;
 use App\Models\Currency;
@@ -317,6 +318,35 @@ class SaleController extends Controller
         return redirect()
             ->route('sales.show', $sale)
             ->with('success', "Sale \"{$sale->invoice_number}\" created successfully.");
+    }
+
+    /* =========================================================
+     |  UPDATE EXCHANGE BOARD (from Sale create)
+     |  Posts USD→AFN / AED→AFN into exchange_rates. Past sales
+     |  keep their own FX snapshots and are never rewritten.
+     ========================================================= */
+
+    public function updateExchangeBoard(UpdateBoardExchangeRatesRequest $request): RedirectResponse
+    {
+        $data = $request->validated();
+
+        $posted = $this->currency->postBoardRates(
+            (string) $data['usd_to_afn'],
+            (string) $data['aed_to_afn'],
+            $data['effective_at'] ?? now(),
+            $request->user()?->id,
+            (string) ($data['source'] ?? 'sale_board'),
+        );
+
+        return back()->with(
+            'success',
+            sprintf(
+                'Exchange rates saved: 1 USD = %s AFN · 1 AED = %s AFN · 1 USD ≈ %s AED',
+                rtrim(rtrim(number_format((float) $posted['usd_to_afn']->rate, 4, '.', ''), '0'), '.') ?: '0',
+                rtrim(rtrim(number_format((float) $posted['aed_to_afn']->rate, 4, '.', ''), '0'), '.') ?: '0',
+                rtrim(rtrim(number_format((float) $posted['usd_to_aed'], 4, '.', ''), '0'), '.') ?: '0',
+            ),
+        );
     }
 
     /* =========================================================

@@ -42,8 +42,11 @@ export const calcProfits = (
 };
 
 /**
- * Convert an original amount to AFN using product reference rates when available,
- * else catalog rates. Returns null when conversion cannot be proven.
+ * Convert an original amount to AFN using board rates when available,
+ * else catalog rates toward an AFN ledger row.
+ *
+ * IMPORTANT: never treat catalog is_base (which may be USD) as “already AFN”.
+ * Only skip conversion when the source currency code is AFN.
  */
 export const estimateToAfn = (
     amount: number,
@@ -55,18 +58,32 @@ export const estimateToAfn = (
     if (!Number.isFinite(amount)) {
         return null;
     }
-    if (!from || !ledger || from.code === 'AFN' || from.id === ledger.id) {
-        return amount;
-    }
-    if (from.code === 'USD' && usdToAfn > 0) {
-        return amount * usdToAfn;
-    }
-    if (from.code === 'AED' && usdToAfn > 0 && usdToAed > 0) {
-        const aedToAfn = usdToAfn / usdToAed;
-        return amount * aedToAfn;
+    if (!from) {
+        return null;
     }
 
-    return convertToDefault(amount, from, ledger);
+    const code = String(from.code || '').toUpperCase();
+    if (code === 'AFN') {
+        return amount;
+    }
+    if (code === 'USD') {
+        return usdToAfn > 0 ? amount * usdToAfn : null;
+    }
+    if (code === 'AED') {
+        if (usdToAfn > 0 && usdToAed > 0) {
+            return amount * (usdToAfn / usdToAed);
+        }
+        return null;
+    }
+
+    // Non AFN/USD/AED: only convert via catalog rates when ledger is actually AFN.
+    const afnLedger =
+        ledger && String(ledger.code || '').toUpperCase() === 'AFN' ? ledger : undefined;
+    if (!afnLedger) {
+        return null;
+    }
+
+    return convertToDefault(amount, from, afnLedger);
 };
 
 export const formatEstimate = (n: number): string =>

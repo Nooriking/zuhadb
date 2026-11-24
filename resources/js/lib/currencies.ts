@@ -28,8 +28,22 @@ export function findCurrency(currencies: CatalogCurrency[], id: string | number 
     return currencies.find((row) => String(row.id) === String(id));
 }
 
+/** Catalog is_base / is_default — OK for initial form select defaults only. */
 export function defaultCurrencyId(currencies: CatalogCurrency[]): string {
     const preferred = currencies.find((row) => row.is_default) ?? currencies.find((row) => row.code === 'AFN') ?? currencies[0];
+
+    return preferred ? String(preferred.id) : '';
+}
+
+/**
+ * POS ledger currency id. Always prefer AFN when present.
+ * Do NOT use catalog is_base here — is_base may be USD/AED while ledger stays AFN.
+ */
+export function ledgerCurrencyId(currencies: CatalogCurrency[]): string {
+    const preferred =
+        currencies.find((row) => String(row.code || '').toUpperCase() === 'AFN') ??
+        currencies.find((row) => row.is_default) ??
+        currencies[0];
 
     return preferred ? String(preferred.id) : '';
 }
