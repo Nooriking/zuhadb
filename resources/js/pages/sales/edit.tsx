@@ -136,27 +136,6 @@ function variantLabel(v: Variant): string {
 export default function SalesEdit({ sale, branches, customers, variants, canEditCompleted = false, errors: initialErrors }: Props) {
     const { toast } = useToast();
 
-    /* ─────────────── Form State ─────────────── */
-    const [form, setForm] = useState({
-        branch_id: String(sale.branch_id),
-        customer_id: sale.customer_id ? String(sale.customer_id) : 'none',
-        exchange_rate: '1',
-        sale_date: sale.sale_date?.substring(0, 10) || '', // yyyy-mm-dd
-        payment_status: sale.payment_status,
-        status: sale.status,
-        notes: sale.notes || '',
-        discount_currency: sale.discount_afn || '0',
-        tax_currency: sale.tax_afn || '0',
-    });
-
-    /* ─────────────── Customer Fields ─────────────── */
-    const [customerData, setCustomerData] = useState({
-        name: sale.customer_name_snapshot || '',
-        phone: sale.customer_phone_snapshot || '',
-        address: '',
-        notes: '',
-    });
-
     /* ─────────────── Items ─────────────── */
     const [items, setItems] = useState<LineItem[]>(
         sale.items.length > 0
@@ -169,6 +148,31 @@ export default function SalesEdit({ sale, branches, customers, variants, canEdit
               }))
             : [newLine()],
     );
+
+    // sale.discount_afn = line discounts + header; form field is header-only.
+    const initialLineDiscount = sale.items.reduce((sum, it) => sum + (parseFloat(it.discount_afn) || 0), 0);
+    const initialHeaderDiscount = Math.max(0, (parseFloat(sale.discount_afn) || 0) - initialLineDiscount);
+
+    /* ─────────────── Form State ─────────────── */
+    const [form, setForm] = useState({
+        branch_id: String(sale.branch_id),
+        customer_id: sale.customer_id ? String(sale.customer_id) : 'none',
+        exchange_rate: '1',
+        sale_date: sale.sale_date?.substring(0, 10) || '', // yyyy-mm-dd
+        payment_status: sale.payment_status,
+        status: sale.status,
+        notes: sale.notes || '',
+        discount_currency: String(initialHeaderDiscount),
+        tax_currency: sale.tax_afn || '0',
+    });
+
+    /* ─────────────── Customer Fields ─────────────── */
+    const [customerData, setCustomerData] = useState({
+        name: sale.customer_name_snapshot || '',
+        phone: sale.customer_phone_snapshot || '',
+        address: '',
+        notes: '',
+    });
 
     /* ─────────────── States ─────────────── */
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
@@ -202,6 +206,7 @@ export default function SalesEdit({ sale, branches, customers, variants, canEdit
     const totals = useMemo(() => {
         const exchangeRate = parseFloat(form.exchange_rate) || 1;
         let subtotalCurrency = 0;
+        let lineDiscount = 0;
         let itemCount = 0;
         let totalQty = 0;
 
@@ -210,14 +215,16 @@ export default function SalesEdit({ sale, branches, customers, variants, canEdit
             const qty = parseFloat(item.quantity) || 0;
             const price = parseFloat(item.sale_price_currency) || 0;
             const disc = parseFloat(item.discount_currency) || 0;
-            subtotalCurrency += qty * price - disc;
+            subtotalCurrency += qty * price;
+            lineDiscount += disc;
             itemCount++;
             totalQty += qty;
         });
 
-        const discount = parseFloat(form.discount_currency) || 0;
+        const headerDiscount = parseFloat(form.discount_currency) || 0;
+        const discount = lineDiscount + headerDiscount;
         const tax = parseFloat(form.tax_currency) || 0;
-        const totalCurrency = subtotalCurrency - discount + tax;
+        const totalCurrency = Math.max(0, subtotalCurrency - discount) + tax;
 
         return {
             subtotalCurrency,

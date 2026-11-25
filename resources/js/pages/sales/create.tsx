@@ -435,6 +435,7 @@ export default function SalesCreate({
     const totals = useMemo(() => {
         let subtotalAfn = 0;
         let subtotalOriginal = 0;
+        let lineDiscountOriginal = 0;
         let itemCount = 0;
         let totalQty = 0;
         const code = saleCurrency?.code || 'AFN';
@@ -444,17 +445,20 @@ export default function SalesCreate({
             const qty = parseFloat(item.quantity) || 0;
             const price = parseFloat(item.sale_unit_amount) || 0;
             const disc = parseFloat(item.discount_amount) || 0;
-            const lineOriginal = round2(qty * price - disc);
-            const lineAfn = threeCurrencyEquivalents(lineOriginal, code, usdRate, aedRate).afn;
-            subtotalOriginal = round2(subtotalOriginal + lineOriginal);
-            subtotalAfn = round2(subtotalAfn + lineAfn);
+            // Gross line (before discount) — matches receipt Subtotal / Discount split.
+            const lineGrossOriginal = round2(qty * price);
+            const lineGrossAfn = threeCurrencyEquivalents(lineGrossOriginal, code, usdRate, aedRate).afn;
+            subtotalOriginal = round2(subtotalOriginal + lineGrossOriginal);
+            subtotalAfn = round2(subtotalAfn + lineGrossAfn);
+            lineDiscountOriginal = round2(lineDiscountOriginal + disc);
             itemCount++;
             totalQty += qty;
         });
 
         subtotalAfn = round2(subtotalAfn);
 
-        const discountOriginal = round2(parseFloat(form.discount_amount) || 0);
+        const headerDiscountOriginal = round2(parseFloat(form.discount_amount) || 0);
+        const discountOriginal = round2(lineDiscountOriginal + headerDiscountOriginal);
         const discount = threeCurrencyEquivalents(discountOriginal, code, usdRate, aedRate).afn;
         const totalAfn = round2(Math.max(0, subtotalAfn - discount));
         const totalOriginal = round2(Math.max(0, subtotalOriginal - discountOriginal));

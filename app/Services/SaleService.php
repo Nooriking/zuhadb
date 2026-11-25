@@ -116,17 +116,26 @@ class SaleService
 
             $subtotalAfn = 0.0;
             $totalCostAfn = 0.0;
+            $lineDiscountAfn = 0.0;
             $originalSubtotal = '0';
+            $lineDiscountOriginal = '0';
             $lineData = [];
 
             foreach ($items as $item) {
                 $prepared = $this->prepareSaleLine($branchId, $item, $variants, $saleCurrency, $board);
                 $subtotalAfn = round($subtotalAfn + $prepared['line_subtotal_afn'], 2);
                 $totalCostAfn = round($totalCostAfn + $prepared['line_cost_afn'], 2);
+                $lineDiscountAfn = round($lineDiscountAfn + (float) $prepared['line_discount_afn'], 2);
                 $originalSubtotal = Money::round(
                     function_exists('bcadd')
                         ? bcadd($originalSubtotal, (string) $prepared['line_original_subtotal'], 2)
                         : (string) ((float) $originalSubtotal + (float) $prepared['line_original_subtotal']),
+                    2
+                );
+                $lineDiscountOriginal = Money::round(
+                    function_exists('bcadd')
+                        ? bcadd($lineDiscountOriginal, (string) $prepared['line_original_discount'], 2)
+                        : (string) ((float) $lineDiscountOriginal + (float) $prepared['line_original_discount']),
                     2
                 );
                 $lineData[] = $prepared['line'];
@@ -145,17 +154,26 @@ class SaleService
 
             $this->assertInvestorProfitFitsGross($lineData, $batchesById);
 
-            // Document discount may be entered in sale currency (discount_amount) or legacy AFN.
+            // Header discount may be entered in sale currency (discount_amount) or legacy AFN.
+            // Sale discount_afn = sum(line discounts) + header discount.
             if (isset($data['discount_amount']) && $data['discount_amount'] !== '' && $data['discount_amount'] !== null) {
-                $discountOriginal = Money::round((string) $data['discount_amount'], 2);
-                $discountAfn = (float) $board->equivalents($discountOriginal, $saleCurrency->code, 2)['afn'];
+                $headerDiscountOriginal = Money::round((string) $data['discount_amount'], 2);
+                $headerDiscountAfn = (float) $board->equivalents($headerDiscountOriginal, $saleCurrency->code, 2)['afn'];
             } else {
-                $discountAfn = round((float) ($data['discount_afn'] ?? 0), 2);
-                $discountOriginal = $board->equivalents((string) $discountAfn, 'AFN', 2)[
+                $headerDiscountAfn = round((float) ($data['discount_afn'] ?? 0), 2);
+                $headerDiscountOriginal = $board->equivalents((string) $headerDiscountAfn, 'AFN', 2)[
                     strtolower($saleCurrency->code) === 'usd' ? 'usd' : (strtolower($saleCurrency->code) === 'aed' ? 'aed' : 'afn')
                 ];
             }
             unset($data['discount_amount']);
+
+            $discountAfn = round($lineDiscountAfn + $headerDiscountAfn, 2);
+            $discountOriginal = Money::round(
+                function_exists('bcadd')
+                    ? bcadd($lineDiscountOriginal, (string) $headerDiscountOriginal, 2)
+                    : (string) ((float) $lineDiscountOriginal + (float) $headerDiscountOriginal),
+                2
+            );
 
             $data['subtotal_afn'] = $subtotalAfn;
             $data['discount_afn'] = $discountAfn;
@@ -327,10 +345,22 @@ class SaleService
             ]);
 
             if ($customer) {
-                // Cash-only POS: no customer ledger / balances tables.
-                $customer->update([
-                    'last_sale_at' => now(),
-                ]);
+                $lockedCustomer = Customer::query()->whereKey($customer->id)->lockForUpdate()->first();
+                if ($lockedCustomer) {
+                    // Payment applies to previous due + this sale; customer due becomes remaining.
+                    $deltaAfn = round($newSaleAmountAfn - $paidAfn, 2);
+                    if (abs($deltaAfn) > 0.009) {
+                        $code = strtoupper((string) ($sale->sale_currency_code ?: 'AFN'));
+                        $rate = $sale->rateToAfn();
+                        $deltaCurrency = $sale->sale_amount_currency !== null && (float) $sale->total_afn > 0
+                            ? round(((float) $sale->sale_amount_currency) * ($deltaAfn / max((float) $sale->total_afn, 0.01)), 2)
+                            : ($rate > 0 ? round($deltaAfn / $rate, 2) : $deltaAfn);
+                        $lockedCustomer->adjustBalance($code, $deltaCurrency, $deltaAfn, $rate);
+                    }
+                    $lockedCustomer->update([
+                        'last_sale_at' => now(),
+                    ]);
+                }
             }
 
             return $sale->fresh();
@@ -411,7 +441,14 @@ class SaleService
                 'payment_status' => $paymentStatus,
             ]);
 
-            // Cash-only POS: no customer ledger / balance recalculation.
+            if ($customer) {
+                $code = strtoupper((string) ($sale->sale_currency_code ?: $salePayment->currency_code ?: 'AFN'));
+                $rate = $sale->rateToAfn();
+                $amountCurrency = $salePayment->amount_currency !== null
+                    ? round((float) $salePayment->amount_currency, 2)
+                    : ($rate > 0 ? round($amountAfn / $rate, 2) : $amountAfn);
+                $customer->adjustBalance($code, -1 * $amountCurrency, -1 * $amountAfn, $rate);
+            }
 
             return Receipt::create([
                 'customer_id' => $sale->customer_id,
@@ -498,14 +535,14 @@ class SaleService
         $customerIdInput = $data['customer_id'] ?? null;
 
         if (! empty($customerIdInput) && is_numeric($customerIdInput)) {
-            $customer = Customer::find((int) $customerIdInput);
+            $customer = Customer::query()->lockForUpdate()->find((int) $customerIdInput);
 
             if ($customer) {
                 $data['customer_id'] = $customer->id;
                 $data['customer_name_snapshot'] = $customer->name;
                 $data['customer_phone_snapshot'] = $customer->phone;
-                // Cash-only: no outstanding customer balances.
-                $previousDueAfn = 0.0;
+                // Snapshot outstanding balance onto the sale for receipt / grand total.
+                $previousDueAfn = round(max(0, (float) $customer->current_due_afn), 2);
             } else {
                 $data['customer_id'] = null;
                 $data['customer_name_snapshot'] = null;
@@ -541,7 +578,14 @@ class SaleService
      *
      * @param  \Illuminate\Support\Collection<int, ProductVariant>  $variants
      * @param  array<string, mixed>  $item
-     * @return array{line_subtotal_afn: float, line_cost_afn: float, line_original_subtotal: string, line: array<string, mixed>}
+     * @return array{
+     *     line_subtotal_afn: float,
+     *     line_discount_afn: float,
+     *     line_cost_afn: float,
+     *     line_original_subtotal: string,
+     *     line_original_discount: string,
+     *     line: array<string, mixed>
+     * }
      */
     public function prepareSaleLine(
         int $branchId,
@@ -597,6 +641,9 @@ class SaleService
             $discAfn = (float) $board->equivalents($discOriginal, $code, 2)['afn'];
         } else {
             $discAfn = round((float) ($item['discount_afn'] ?? 0), 2);
+            $discOriginal = $board->equivalents((string) $discAfn, 'AFN', 2)[
+                strtolower($code) === 'usd' ? 'usd' : (strtolower($code) === 'aed' ? 'aed' : 'afn')
+            ];
         }
 
         $lineSubtotalAfn = round($priceAfn * $qty, 2);
@@ -676,8 +723,10 @@ class SaleService
 
         return [
             'line_subtotal_afn' => $lineSubtotalAfn,
+            'line_discount_afn' => $discAfn,
             'line_cost_afn' => $lineCostAfn,
             'line_original_subtotal' => $lineOriginal,
+            'line_original_discount' => Money::round((string) $discOriginal, 2),
             'line' => $line,
         ];
     }

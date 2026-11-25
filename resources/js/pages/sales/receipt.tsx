@@ -279,16 +279,16 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
                             </div>
                         )}
                         {previousDue > 0 && (
-                            <>
-                                <div>
-                                    <dt>Previous due</dt>
-                                    <dd className="ltr num">{money(previousDue)}</dd>
-                                </div>
-                                <div>
-                                    <dt>This sale</dt>
-                                    <dd className="ltr num">{money(thisSale)}</dd>
-                                </div>
-                            </>
+                            <div>
+                                <dt>This sale</dt>
+                                <dd className="ltr num">{money(thisSale)}</dd>
+                            </div>
+                        )}
+                        {previousDue > 0 && (
+                            <div>
+                                <dt>Previous due</dt>
+                                <dd className="ltr num">{money(previousDue)}</dd>
+                            </div>
                         )}
                         <div className="bill-grand">
                             <dt>Grand Total</dt>

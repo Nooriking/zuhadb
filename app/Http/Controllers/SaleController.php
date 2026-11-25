@@ -544,9 +544,12 @@ class SaleController extends Controller
                 'barcodes' => fn ($q) => $q->orderByDesc('is_primary'),
             ])->whereIn('id', $variantIds)->get()->keyBy('id');
 
-            $subtotalAfn  = 0.0;
+            $subtotalAfn = 0.0;
             $totalCostAfn = 0.0;
-            $lineData     = [];
+            $lineDiscountAfn = 0.0;
+            $originalSubtotal = 0.0;
+            $lineDiscountOriginal = 0.0;
+            $lineData = [];
 
             // Preserve the sale's recorded currency + FX snapshot when recalculating lines.
             $saleCurrency = $sale->sale_currency_id
@@ -585,19 +588,35 @@ class SaleController extends Controller
                     $editBoard,
                 );
 
-                $subtotalAfn  = round($subtotalAfn + $prepared['line_subtotal_afn'], 2);
+                $subtotalAfn = round($subtotalAfn + $prepared['line_subtotal_afn'], 2);
                 $totalCostAfn = round($totalCostAfn + $prepared['line_cost_afn'], 2);
+                $lineDiscountAfn = round($lineDiscountAfn + (float) $prepared['line_discount_afn'], 2);
+                $originalSubtotal = round($originalSubtotal + (float) $prepared['line_original_subtotal'], 2);
+                $lineDiscountOriginal = round($lineDiscountOriginal + (float) $prepared['line_original_discount'], 2);
 
                 $lineData[] = $prepared['line'];
             }
 
-            $discountAfn = round((float) ($data['discount_afn'] ?? 0), 2);
+            // Header field is header-only; sale discount = line discounts + header.
+            $headerDiscountAfn = round((float) ($data['discount_afn'] ?? 0), 2);
+            $code = strtoupper((string) ($saleCurrency?->code ?? 'AFN'));
+            $headerDiscountOriginal = (float) $editBoard->equivalents((string) $headerDiscountAfn, 'AFN', 2)[
+                strtolower($code) === 'usd' ? 'usd' : (strtolower($code) === 'aed' ? 'aed' : 'afn')
+            ];
+            $discountAfn = round($lineDiscountAfn + $headerDiscountAfn, 2);
+            $discountOriginal = round($lineDiscountOriginal + $headerDiscountOriginal, 2);
 
-            $data['subtotal_afn']     = $subtotalAfn;
-            $data['discount_afn']     = $discountAfn;
-            $data['total_afn']        = round($subtotalAfn - $discountAfn, 2);
-            $data['total_cost_afn']   = $totalCostAfn;
+            $data['subtotal_afn'] = $subtotalAfn;
+            $data['discount_afn'] = $discountAfn;
+            $data['total_afn'] = $this->sales->calculateTotal($subtotalAfn, $discountAfn);
+            $data['total_cost_afn'] = $totalCostAfn;
             $data['total_profit_afn'] = round($data['total_afn'] - $totalCostAfn, 2);
+            $data['sale_amount_currency'] = round(max(0, $originalSubtotal - $discountOriginal), 2);
+
+            $newSaleAmountAfn = round((float) $data['total_afn'], 2);
+            $previousDueAfn = round((float) ($sale->previous_due_afn ?? 0), 2);
+            $data['new_sale_amount_afn'] = $newSaleAmountAfn;
+            $data['grand_total_due_afn'] = round($previousDueAfn + $newSaleAmountAfn, 2);
 
             $sale->update($data);
 
