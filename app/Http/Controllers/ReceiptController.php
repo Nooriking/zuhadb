@@ -113,14 +113,30 @@ class ReceiptController extends Controller
     {
         $receipt->load([
             'customer:id,name,phone,current_due_afn',
-            'sale:id,invoice_number,sale_date,total_afn,paid_afn,remaining_due_afn,payment_status,previous_due_afn,grand_total_due_afn',
+            'customer.balances',
+            'sale:id,invoice_number,sale_date,total_afn,paid_afn,remaining_due_afn,payment_status,previous_due_afn,previous_due_by_currency,grand_total_due_afn,remaining_due_by_currency,sale_currency_code,sale_amount_currency',
             'sale.branch:id,name,code,address,phone',
             'sale.creator:id,name',
             'sale.items.variant.product:id,name',
             'sale.items.variant.product.brand:id,name',
-            'salePayment:id,amount_afn,remaining_due_afn,payment_method,paid_at',
+            'salePayment:id,amount_afn,amount_currency,currency_code,remaining_due_afn,payment_method,paid_at',
             'creator:id,name',
         ]);
+
+        $remainingByCurrency = [];
+        if ($receipt->sale && is_array($receipt->sale->remaining_due_by_currency)) {
+            $remainingByCurrency = $receipt->sale->remaining_due_by_currency;
+        } elseif ($receipt->customer) {
+            $remainingByCurrency = $receipt->customer->dueByCurrencySnapshot();
+        }
+
+        $previousByCurrency = [];
+        if ($receipt->sale && is_array($receipt->sale->previous_due_by_currency)) {
+            $previousByCurrency = $receipt->sale->previous_due_by_currency;
+        }
+
+        $receipt->setAttribute('remaining_due_by_currency', $remainingByCurrency);
+        $receipt->setAttribute('previous_due_by_currency', $previousByCurrency);
 
         return Inertia::render('receipts/print', [
             'receipt' => $receipt,

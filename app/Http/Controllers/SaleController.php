@@ -283,9 +283,17 @@ class SaleController extends Controller
         return Inertia::render('sales/create', [
             'branches'   => Branch::notTrashed()->active()->visibleTo($user)->select('id', 'name', 'code')->get(),
             'customers'  => Customer::notTrashed()->active()
+                ->with(['balances' => fn ($q) => $q->orderBy('currency_code')])
                 ->select('id', 'name', 'phone', 'address', 'notes', 'status', 'current_due_afn', 'credit_limit_afn')
                 ->orderBy('name')
-                ->get(),
+                ->get()
+                ->map(function (Customer $customer) {
+                    $breakdown = $customer->dueBreakdown();
+                    $customer->setAttribute('due_breakdown', $breakdown);
+                    $customer->setAttribute('due_by_currency', $breakdown['by_currency']);
+
+                    return $customer;
+                }),
             'variants'   => ProductVariant::query()
                 ->notTrashed()
                 ->with([
@@ -360,6 +368,7 @@ class SaleController extends Controller
         $sale->load([
             'branch:id,name,code',
             'customer:id,name,phone,address,current_due_afn,credit_limit_afn',
+            'customer.balances',
             'creator:id,name,email',
             'items.variant.product:id,name',
             'items.variant.product.brand:id,name',
@@ -398,6 +407,7 @@ class SaleController extends Controller
         $sale->load([
             'branch:id,name,code,address,phone',
             'customer:id,name,phone,current_due_afn',
+            'customer.balances',
             'creator:id,name',
             'items.variant.product:id,name',
             'items.variant.product.brand:id,name',
@@ -443,9 +453,17 @@ class SaleController extends Controller
             'sale'      => $sale,
             'branches'  => Branch::notTrashed()->active()->visibleTo($user)->select('id', 'name', 'code')->get(),
             'customers' => Customer::notTrashed()->active()
+                ->with(['balances' => fn ($q) => $q->orderBy('currency_code')])
                 ->select('id', 'name', 'phone', 'current_due_afn', 'credit_limit_afn')
                 ->orderBy('name')
-                ->get(),
+                ->get()
+                ->map(function (Customer $customer) {
+                    $breakdown = $customer->dueBreakdown();
+                    $customer->setAttribute('due_breakdown', $breakdown);
+                    $customer->setAttribute('due_by_currency', $breakdown['by_currency']);
+
+                    return $customer;
+                }),
             'variants'  => ProductVariant::query()
                 ->notTrashed()
                 ->with([
@@ -605,6 +623,23 @@ class SaleController extends Controller
             ];
             $discountAfn = round($lineDiscountAfn + $headerDiscountAfn, 2);
             $discountOriginal = round($lineDiscountOriginal + $headerDiscountOriginal, 2);
+
+            $batchIds = collect($lineData)
+                ->flatMap(fn (array $line) => collect($line['cost_breakdown'] ?? [])->pluck('batch_id'))
+                ->unique()
+                ->values();
+            $batchesById = ProductBatch::query()
+                ->whereIn('id', $batchIds)
+                ->get()
+                ->keyBy('id');
+
+            $this->sales->assertDiscountWithinProfit(
+                $subtotalAfn,
+                $totalCostAfn,
+                $discountAfn,
+                $lineData,
+                $batchesById,
+            );
 
             $data['subtotal_afn'] = $subtotalAfn;
             $data['discount_afn'] = $discountAfn;
@@ -1404,9 +1439,25 @@ class SaleController extends Controller
             'display_remaining',
             OriginalCurrencyMoney::fromLedgerAfn((float) $sale->remaining_due_afn, $money['code'], $sale)
         );
+        $previousDueByCurrency = is_array($sale->previous_due_by_currency)
+            ? $sale->previous_due_by_currency
+            : [];
+        if ($previousDueByCurrency === [] && (float) ($sale->previous_due_afn ?? 0) > 0.009) {
+            // Legacy sales: keep AFN line rather than inventing a FX conversion.
+            $previousDueByCurrency = [[
+                'currency_code' => 'AFN',
+                'balance_currency' => round((float) $sale->previous_due_afn, 2),
+                'balance_afn' => round((float) $sale->previous_due_afn, 2),
+                'last_rate' => 1.0,
+            ]];
+        }
+        $sale->setAttribute('previous_due_by_currency', $previousDueByCurrency);
         $sale->setAttribute(
             'display_previous_due',
-            OriginalCurrencyMoney::fromLedgerAfn((float) ($sale->previous_due_afn ?? 0), $money['code'], $sale)
+            // Prefer original-currency snapshot; fall back only for single-currency AFN legacy.
+            count($previousDueByCurrency) === 1 && strtoupper((string) ($previousDueByCurrency[0]['currency_code'] ?? '')) === strtoupper((string) $money['code'])
+                ? round((float) $previousDueByCurrency[0]['balance_currency'], 2)
+                : OriginalCurrencyMoney::fromLedgerAfn((float) ($sale->previous_due_afn ?? 0), $money['code'], $sale)
         );
 
         $newSaleLedger = $sale->new_sale_amount_afn !== null && $sale->new_sale_amount_afn !== ''
@@ -1414,7 +1465,9 @@ class SaleController extends Controller
             : (float) $sale->total_afn;
         $sale->setAttribute(
             'display_new_sale_amount',
-            OriginalCurrencyMoney::fromLedgerAfn($newSaleLedger, $money['code'], $sale)
+            $sale->sale_amount_currency !== null
+                ? round((float) $sale->sale_amount_currency, 2)
+                : OriginalCurrencyMoney::fromLedgerAfn($newSaleLedger, $money['code'], $sale)
         );
 
         $grandLedger = $sale->grand_total_due_afn !== null && $sale->grand_total_due_afn !== ''
@@ -1424,6 +1477,27 @@ class SaleController extends Controller
             'display_grand_total_due',
             OriginalCurrencyMoney::fromLedgerAfn($grandLedger, $money['code'], $sale)
         );
+
+        $remainingDueByCurrency = is_array($sale->remaining_due_by_currency)
+            ? $sale->remaining_due_by_currency
+            : [];
+        if ($remainingDueByCurrency === [] && $sale->customer_id) {
+            $customer = $sale->relationLoaded('customer')
+                ? $sale->customer
+                : Customer::query()->with('balances')->find($sale->customer_id);
+            if ($customer) {
+                $remainingDueByCurrency = $customer->dueByCurrencySnapshot();
+            }
+        }
+        if ($remainingDueByCurrency === [] && (float) ($sale->remaining_due_afn ?? 0) > 0.009) {
+            $remainingDueByCurrency = [[
+                'currency_code' => 'AFN',
+                'balance_currency' => round((float) $sale->remaining_due_afn, 2),
+                'balance_afn' => round((float) $sale->remaining_due_afn, 2),
+                'last_rate' => 1.0,
+            ]];
+        }
+        $sale->setAttribute('remaining_due_by_currency', $remainingDueByCurrency);
 
         if ($withProfit) {
             $sale->setAttribute(

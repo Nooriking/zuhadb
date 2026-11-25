@@ -3,6 +3,12 @@ import { Head } from '@inertiajs/react';
 import { ArrowLeft, Printer } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
+type DueCurrencyRow = {
+    currency_code: string;
+    balance_currency: number | string;
+    balance_afn?: number | string;
+};
+
 interface SaleItem {
     id: number;
     product_name_snapshot: string | null;
@@ -68,6 +74,9 @@ interface Sale {
     display_previous_due?: number | null;
     display_new_sale_amount?: number | null;
     display_grand_total_due?: number | null;
+    previous_due_by_currency?: DueCurrencyRow[] | null;
+    remaining_due_by_currency?: DueCurrencyRow[] | null;
+    sale_amount_currency?: string | number | null;
     customer: { id: number; name: string; phone: string | null } | null;
     creator: { name: string } | null;
     items: SaleItem[];
@@ -139,6 +148,12 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
 
     const subtotal = sale.display_subtotal ?? parseFloat(sale.subtotal_afn || '0');
     const discount = sale.display_discount ?? parseFloat(sale.discount_afn || '0');
+    const previousDueRows = (sale.previous_due_by_currency || []).filter(
+        (row) => Math.abs(Number(row.balance_currency ?? 0)) > 0.009,
+    );
+    const remainingDueRows = (sale.remaining_due_by_currency || []).filter(
+        (row) => Math.abs(Number(row.balance_currency ?? 0)) > 0.009,
+    );
     const previousDue = sale.display_previous_due ?? parseFloat(sale.previous_due_afn || '0');
     const thisSale = sale.display_new_sale_amount ?? sale.display_total ?? parseFloat(sale.total_afn || '0');
     const grandTotal =
@@ -146,6 +161,19 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
         parseFloat(sale.grand_total_due_afn || sale.total_afn || '0');
     const paid = sale.display_paid ?? parseFloat(sale.paid_afn || '0');
     const remaining = sale.display_remaining ?? parseFloat(sale.remaining_due_afn || sale.due_afn || '0');
+    const hasPreviousDue = previousDueRows.length > 0 || previousDue > 0.009;
+    const hasRemaining = remainingDueRows.length > 0 || remaining > 0.009;
+
+    const renderDueRows = (rows: DueCurrencyRow[], fallback: number) => {
+        if (rows.length > 0) {
+            return rows.map((row) => (
+                <div key={row.currency_code} className="ltr num">
+                    {money(row.balance_currency, row.currency_code)}
+                </div>
+            ));
+        }
+        return <span className="ltr num">{money(fallback)}</span>;
+    };
 
     const showLogo = company.show_logo !== false && !!company.logo && !logoFailed;
     const invoiceTitle = company.invoice_title || 'Invoice';
@@ -278,29 +306,57 @@ export default function SaleReceipt({ sale, company, printedAt }: Props) {
                                 <dd className="ltr num">-{money(discount)}</dd>
                             </div>
                         )}
-                        {previousDue > 0 && (
+                        {hasPreviousDue && (
                             <div>
                                 <dt>This sale</dt>
                                 <dd className="ltr num">{money(thisSale)}</dd>
                             </div>
                         )}
-                        {previousDue > 0 && (
+                        {hasPreviousDue && (
                             <div>
                                 <dt>Previous due</dt>
-                                <dd className="ltr num">{money(previousDue)}</dd>
+                                <dd>{renderDueRows(previousDueRows, previousDue)}</dd>
                             </div>
                         )}
                         <div className="bill-grand">
                             <dt>Grand Total</dt>
-                            <dd className="ltr num">{money(grandTotal)}</dd>
+                            <dd>
+                                {hasPreviousDue && previousDueRows.length > 0 ? (
+                                    <div className="space-y-0.5 text-right">
+                                        {previousDueRows.map((row) => (
+                                            <div key={`g-${row.currency_code}`} className="ltr num">
+                                                {money(row.balance_currency, row.currency_code)}
+                                            </div>
+                                        ))}
+                                        <div className="ltr num">{money(thisSale)} (this sale)</div>
+                                    </div>
+                                ) : (
+                                    <span className="ltr num">{money(grandTotal)}</span>
+                                )}
+                            </dd>
                         </div>
                         <div>
                             <dt>Paid</dt>
-                            <dd className="ltr num">{money(paid)}</dd>
+                            <dd>
+                                {sale.payments.length > 0 ? (
+                                    <div className="space-y-0.5 text-right">
+                                        {sale.payments.map((p) => (
+                                            <div key={p.id} className="ltr num">
+                                                {money(
+                                                    p.display_amount ?? p.amount_afn,
+                                                    p.display_currency_code || currencyCode,
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <span className="ltr num">{money(paid)}</span>
+                                )}
+                            </dd>
                         </div>
                         <div className="bill-due">
                             <dt>Remaining</dt>
-                            <dd className="ltr num">{money(remaining)}</dd>
+                            <dd>{hasRemaining ? renderDueRows(remainingDueRows, remaining) : money(0)}</dd>
                         </div>
                     </dl>
 

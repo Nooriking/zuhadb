@@ -47,10 +47,12 @@ class Sale extends Model
 
         // Due Flow
         'previous_due_afn',
+        'previous_due_by_currency',
         'new_sale_amount_afn',
         'grand_total_due_afn',
         'received_now_afn',
         'remaining_due_afn',
+        'remaining_due_by_currency',
         'due_date',
 
         // Payments
@@ -94,10 +96,12 @@ class Sale extends Model
         'rate_effective_at'          => 'datetime',
 
         'previous_due_afn'           => 'decimal:2',
+        'previous_due_by_currency'   => 'array',
         'new_sale_amount_afn'        => 'decimal:2',
         'grand_total_due_afn'        => 'decimal:2',
         'received_now_afn'           => 'decimal:2',
         'remaining_due_afn'          => 'decimal:2',
+        'remaining_due_by_currency'  => 'array',
         'due_date'                   => 'date',
 
         'paid_afn'                   => 'decimal:2',

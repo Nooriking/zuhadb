@@ -17,7 +17,7 @@ import {
     ledgerCurrencyId as resolveLedgerCurrencyId,
     type CatalogCurrency,
 } from '@/lib/currencies';
-import { calcProfits, estimateToAfn, formatEstimate as fmt } from '@/lib/product-estimate';
+import { calcProfits, estimateToAfn, formatEstimate as fmt, investorProfitExceedsGross } from '@/lib/product-estimate';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
 import {
@@ -387,6 +387,37 @@ export default function ProductsEdit({
 
     const barcodeInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
     const barcodeDebounceRefs = useRef<Record<string, ReturnType<typeof setTimeout> | null>>({});
+
+    const hasInvestorProfitError = useMemo(() => {
+        return purchases.some((p) => {
+            if (!isInvestorPurchase(p.investor_id)) return false;
+            const variant = variants[p.variant_index];
+            if (!variant) return false;
+            const costAfn = estimateToAfn(
+                toNum(variant.purchase_price_afn),
+                findCurrency(currencies, variant.purchase_currency_id || catalogDefaultId),
+                ledgerCur,
+                refUsdToAfn,
+                refUsdToAed,
+            );
+            const saleAfn = estimateToAfn(
+                toNum(variant.sale_price_afn),
+                findCurrency(currencies, variant.sale_currency_id || catalogDefaultId),
+                ledgerCur,
+                refUsdToAfn,
+                refUsdToAed,
+            );
+            const investorAfn = estimateToAfn(
+                toNum(p.profit_per_unit),
+                findCurrency(currencies, p.profit_currency_id || catalogDefaultId),
+                ledgerCur,
+                refUsdToAfn,
+                refUsdToAed,
+            );
+            if (costAfn === null || saleAfn === null || investorAfn === null) return false;
+            return investorProfitExceedsGross(investorAfn, saleAfn - costAfn);
+        });
+    }, [purchases, variants, currencies, catalogDefaultId, ledgerCur, refUsdToAfn, refUsdToAed]);
 
     const allBarcodesInForm = useMemo(
         () => variants.flatMap((v) => (v.barcodes ?? []).filter((b) => b.barcode.trim()).map((b) => b.barcode.trim())),
@@ -1420,12 +1451,17 @@ export default function ProductsEdit({
                                 investorLedger ?? 0,
                                 toNum(p.quantity),
                             );
+                            const exceedsGross =
+                                isInvestor && canCompare && investorProfitExceedsGross(profits.investorPerUnit, profits.totalPerUnit);
+                            const liveProfitError = exceedsGross
+                                ? `Investor profit (${fmt(profits.investorPerUnit)} AFN) exceeds gross profit (${fmt(profits.totalPerUnit)} AFN). Reduce investor profit or raise the sale price.`
+                                : undefined;
 
                             return (
                                 <div
                                     key={p._key}
-                                    data-error={errors[`purchases.${pIndex}.quantity`] ? 'true' : undefined}
-                                    className="rounded-lg border p-4"
+                                    data-error={errors[`purchases.${pIndex}.quantity`] || exceedsGross ? 'true' : undefined}
+                                    className={`rounded-lg border p-4 ${exceedsGross ? 'border-red-400 bg-red-50/40 ring-1 ring-red-200' : ''}`}
                                 >
                                     <div className="mb-4 flex items-center justify-between">
                                         <h3 className="flex items-center gap-2 font-semibold">
@@ -1492,7 +1528,7 @@ export default function ProductsEdit({
                                     </div>
 
                                     {isInvestor && (
-                                        <div className="mb-4">
+                                        <div className={`mb-4 rounded-lg border p-4 ${exceedsGross ? 'border-red-400 bg-red-50 ring-1 ring-red-300' : 'border-transparent'}`}>
                                             <MoneyField
                                                 label="Investor profit / unit (own currency — independent of purchase/sale currency)"
                                                 required
@@ -1509,10 +1545,20 @@ export default function ProductsEdit({
                                                     recalcPurchase(pIndex);
                                                 }}
                                                 error={
+                                                    liveProfitError ||
                                                     errors[`purchases.${pIndex}.profit_per_unit`] ||
                                                     errors[`purchases.${pIndex}.profit_currency_id`]
                                                 }
                                             />
+                                            {exceedsGross && (
+                                                <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-300 bg-red-100/80 p-3 text-xs text-red-800">
+                                                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                                    <span>
+                                                        Logical error: investor profit is higher than product profit
+                                                        ({fmt(profits.totalPerUnit)} AFN). Fix this before saving.
+                                                    </span>
+                                                </div>
+                                            )}
                                         </div>
                                     )}
 
@@ -1565,7 +1611,7 @@ export default function ProductsEdit({
                                     </div>
 
                                     {/* Estimate-only profit preview — sale-time FIFO is authoritative */}
-                                    <div className="mb-4 rounded-lg border p-4">
+                                    <div className={`mb-4 rounded-lg border p-4 ${exceedsGross ? 'border-red-400 bg-red-50' : ''}`}>
                                         <h4 className="mb-3 flex items-center gap-1 text-sm font-semibold">
                                             <TrendingUp className="h-3 w-3" />
                                             Totals &amp; Profit Split (estimate)
@@ -1628,12 +1674,12 @@ export default function ProductsEdit({
 
                                             {isInvestor ? (
                                                 <div className="space-y-2">
-                                                    <Label className="flex items-center gap-1 text-xs text-blue-700">
+                                                    <Label className={`flex items-center gap-1 text-xs ${exceedsGross ? 'text-red-700' : 'text-blue-700'}`}>
                                                         <Wallet className="h-3 w-3" /> Investor profit (estimate)
                                                     </Label>
-                                                    <div className="flex h-10 items-center rounded-md border border-dashed bg-blue-50 px-3 font-mono text-sm font-semibold text-blue-700 dark:bg-blue-950/30">
+                                                    <div className={`flex h-10 items-center rounded-md border border-dashed px-3 font-mono text-sm font-semibold ${exceedsGross ? 'border-red-300 bg-red-100 text-red-800' : 'bg-blue-50 text-blue-700 dark:bg-blue-950/30'}`}>
                                                         {fmt(toNum(p.profit_per_unit))} {profitCur?.code || ''}
-                                                        <span className="ml-2 text-xs font-normal text-blue-600/80">
+                                                        <span className="ml-2 text-xs font-normal">
                                                             ≈ {fmt(profits.investorLine)} AFN
                                                         </span>
                                                     </div>
@@ -1654,10 +1700,10 @@ export default function ProductsEdit({
                                             )}
 
                                             <div className="space-y-2">
-                                                <Label className="flex items-center gap-1 text-xs text-emerald-700">
+                                                <Label className={`flex items-center gap-1 text-xs ${profits.storePerUnit < 0 ? 'text-red-700' : 'text-emerald-700'}`}>
                                                     <Store className="h-3 w-3" /> Store profit (AFN estimate)
                                                 </Label>
-                                                <div className="flex h-10 items-center rounded-md border border-dashed bg-emerald-50 px-3 font-mono text-sm font-semibold text-emerald-700 dark:bg-emerald-950/30">
+                                                <div className={`flex h-10 items-center rounded-md border border-dashed px-3 font-mono text-sm font-semibold ${profits.storePerUnit < 0 ? 'border-red-300 bg-red-100 text-red-800' : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30'}`}>
                                                     {fmt(profits.storeLine)} <span className="ml-1 text-xs">AFN</span>
                                                 </div>
                                                 <p className="text-muted-foreground text-xs">
@@ -1666,13 +1712,13 @@ export default function ProductsEdit({
                                             </div>
                                         </div>
 
-                                        {isInvestor && canCompare && profits.investorPerUnit > profits.totalPerUnit + 0.0001 && (
-                                            <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-3 text-xs text-red-800">
+                                        {exceedsGross && (
+                                            <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-300 bg-red-100/80 p-3 text-xs text-red-800">
                                                 <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                                                 <span>
                                                     Investor profit estimate ({fmt(toNum(p.profit_per_unit))} {profitCur?.code || ''} ≈{' '}
                                                     {fmt(profits.investorPerUnit)} AFN) exceeds estimated gross ({fmt(profits.totalPerUnit)} AFN).
-                                                    The sale will be blocked by default — investor profit is not silently reduced.
+                                                    The sale will be blocked — investor profit is not silently reduced.
                                                 </span>
                                             </div>
                                         )}
@@ -1768,7 +1814,7 @@ export default function ProductsEdit({
 
                 {/* ═══════════ Submit ═══════════ */}
                 <div className="flex gap-2">
-                    <Button type="submit" disabled={loading} className="gap-2">
+                    <Button type="submit" disabled={loading || hasInvestorProfitError} className="gap-2">
                         <Save className="h-4 w-4" />
                         {loading ? 'Saving...' : 'Update Product'}
                     </Button>

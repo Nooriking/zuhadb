@@ -165,26 +165,55 @@ class Customer extends Model
     /**
      * Due breakdown for UI: primary currency balances + AFN total.
      *
+     * Falls back to denormalized current_due_afn as a single AFN line when
+     * customer_balances has not been populated yet (legacy rows).
+     *
      * @return array{total_afn: float, by_currency: list<array{currency_code: string, balance_currency: float, balance_afn: float, last_rate: float|null}>}
      */
     public function dueBreakdown(): array
     {
-        $rows = $this->balances()
-            ->orderBy('currency_code')
-            ->get(['currency_code', 'balance_currency', 'balance_afn', 'last_rate']);
+        $rows = $this->relationLoaded('balances')
+            ? $this->balances
+            : $this->balances()->orderBy('currency_code')->get(['currency_code', 'balance_currency', 'balance_afn', 'last_rate']);
+
+        $byCurrency = $rows
+            ->filter(fn (CustomerBalance $b) => abs((float) $b->balance_currency) > 0.009 || abs((float) $b->balance_afn) > 0.009)
+            ->sortBy('currency_code')
+            ->map(fn (CustomerBalance $b) => [
+                'currency_code' => strtoupper((string) $b->currency_code),
+                'balance_currency' => round((float) $b->balance_currency, 2),
+                'balance_afn' => round((float) $b->balance_afn, 2),
+                'last_rate' => $b->last_rate !== null ? (float) $b->last_rate : null,
+            ])
+            ->values()
+            ->all();
+
+        $totalAfn = round((float) collect($byCurrency)->sum('balance_afn'), 2);
+
+        if ($byCurrency === [] && abs((float) $this->current_due_afn) > 0.009) {
+            $dueAfn = round((float) $this->current_due_afn, 2);
+            $byCurrency = [[
+                'currency_code' => 'AFN',
+                'balance_currency' => $dueAfn,
+                'balance_afn' => $dueAfn,
+                'last_rate' => 1.0,
+            ]];
+            $totalAfn = $dueAfn;
+        }
 
         return [
-            'total_afn' => round((float) $rows->sum('balance_afn'), 2),
-            'by_currency' => $rows
-                ->filter(fn (CustomerBalance $b) => abs((float) $b->balance_currency) > 0.009 || abs((float) $b->balance_afn) > 0.009)
-                ->map(fn (CustomerBalance $b) => [
-                    'currency_code' => (string) $b->currency_code,
-                    'balance_currency' => round((float) $b->balance_currency, 2),
-                    'balance_afn' => round((float) $b->balance_afn, 2),
-                    'last_rate' => $b->last_rate !== null ? (float) $b->last_rate : null,
-                ])
-                ->values()
-                ->all(),
+            'total_afn' => $totalAfn,
+            'by_currency' => $byCurrency,
         ];
+    }
+
+    /**
+     * Compact due snapshot for sale / receipt JSON columns.
+     *
+     * @return list<array{currency_code: string, balance_currency: float, balance_afn: float, last_rate: float|null}>
+     */
+    public function dueByCurrencySnapshot(): array
+    {
+        return $this->dueBreakdown()['by_currency'];
     }
 }

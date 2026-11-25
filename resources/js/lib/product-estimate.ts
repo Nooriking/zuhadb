@@ -41,6 +41,24 @@ export const calcProfits = (
     };
 };
 
+/** True when fixed investor profit per unit exceeds estimated gross margin (sale − cost). */
+export const investorProfitExceedsGross = (
+    investorProfitPerUnitAfn: number | null | undefined,
+    grossProfitPerUnitAfn: number | null | undefined,
+): boolean => {
+    if (investorProfitPerUnitAfn === null || investorProfitPerUnitAfn === undefined) {
+        return false;
+    }
+    if (grossProfitPerUnitAfn === null || grossProfitPerUnitAfn === undefined) {
+        return false;
+    }
+    if (!(investorProfitPerUnitAfn > 0)) {
+        return false;
+    }
+
+    return investorProfitPerUnitAfn > grossProfitPerUnitAfn + 0.0001;
+};
+
 /**
  * Convert an original amount to AFN using board rates when available,
  * else catalog rates toward an AFN ledger row.

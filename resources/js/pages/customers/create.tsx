@@ -14,8 +14,15 @@ import { Head, Link, router } from '@inertiajs/react';
 import { ArrowLeft, Save, UserCircle, Wallet } from 'lucide-react';
 import { useState } from 'react';
 
+interface CurrencyOption {
+    id: number;
+    code: string;
+    name?: string;
+}
+
 interface Props {
     errors?: Record<string, string>;
+    currencies?: CurrencyOption[];
 }
 
 const breadcrumbs: BreadcrumbItem[] = [
@@ -24,8 +31,11 @@ const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Create Customer', href: '/customers/create' },
 ];
 
-export default function CustomersCreate({ errors: initialErrors }: Props) {
+export default function CustomersCreate({ errors: initialErrors, currencies = [] }: Props) {
     const { toast } = useToast();
+    const defaultCurrencyId = String(
+        currencies.find((c) => c.code.toUpperCase() === 'AFN')?.id ?? currencies[0]?.id ?? '',
+    );
     const [form, setForm] = useState({
         name: '',
         phone: '',
@@ -33,10 +43,14 @@ export default function CustomersCreate({ errors: initialErrors }: Props) {
         notes: '',
         status: 'active' as 'active' | 'inactive',
         credit_limit_afn: '',
-        current_due_afn: '',
+        current_due_currency: '',
+        due_currency_id: defaultCurrencyId,
     });
     const [errors, setErrors] = useState<Record<string, string>>(initialErrors || {});
     const [loading, setLoading] = useState(false);
+
+    const selectedDueCode =
+        currencies.find((c) => String(c.id) === String(form.due_currency_id))?.code || 'AFN';
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -184,19 +198,46 @@ export default function CustomersCreate({ errors: initialErrors }: Props) {
                                     </div>
 
                                     <div className="space-y-2">
-                                        <Label>Initial Due (AFN)</Label>
+                                        <Label>Initial Due Currency</Label>
+                                        <Select
+                                            value={form.due_currency_id || undefined}
+                                            onValueChange={(v) => handleChange('due_currency_id', v)}
+                                        >
+                                            <SelectTrigger className={errors.due_currency_id ? 'border-destructive' : ''}>
+                                                <SelectValue placeholder="Currency" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {currencies.map((c) => (
+                                                    <SelectItem key={c.id} value={String(c.id)}>
+                                                        {c.code}
+                                                        {c.name ? ` — ${c.name}` : ''}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                        {errors.due_currency_id && (
+                                            <p className="text-destructive text-sm">{errors.due_currency_id}</p>
+                                        )}
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <Label>Initial Due ({selectedDueCode})</Label>
                                         <Input
                                             type="number"
                                             step="0.01"
                                             min="0"
-                                            value={form.current_due_afn}
-                                            onChange={(e) => handleChange('current_due_afn', e.target.value)}
-                                            placeholder="e.g. 5000"
+                                            value={form.current_due_currency}
+                                            onChange={(e) => handleChange('current_due_currency', e.target.value)}
+                                            placeholder={selectedDueCode === 'USD' ? 'e.g. 700' : 'e.g. 5000'}
                                             dir="ltr"
-                                            className={errors.current_due_afn ? 'border-destructive' : ''}
+                                            className={errors.current_due_currency ? 'border-destructive' : ''}
                                         />
-                                        {errors.current_due_afn && <p className="text-destructive text-sm">{errors.current_due_afn}</p>}
-                                        <p className="text-muted-foreground text-xs">Opening due, if the customer already owes money. Default is 0.</p>
+                                        {errors.current_due_currency && (
+                                            <p className="text-destructive text-sm">{errors.current_due_currency}</p>
+                                        )}
+                                        <p className="text-muted-foreground text-xs">
+                                            Opening due in the selected currency. FX to AFN uses Exchange Rates.
+                                        </p>
                                     </div>
                                 </div>
                             </CardContent>

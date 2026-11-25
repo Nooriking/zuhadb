@@ -53,6 +53,12 @@ interface Branch {
     name: string;
     code: string;
 }
+interface DueCurrencyRow {
+    currency_code: string;
+    balance_currency: number | string;
+    balance_afn?: number | string;
+}
+
 interface Customer {
     id: number;
     name: string;
@@ -62,6 +68,7 @@ interface Customer {
     status?: string;
     current_due_afn?: number | string;
     credit_limit_afn?: number | string;
+    due_by_currency?: DueCurrencyRow[];
 }
 interface Variant {
     id: number;
@@ -415,6 +422,18 @@ export default function SalesCreate({
         return Number(selectedCustomer.current_due_afn ?? 0);
     }, [selectedCustomer]);
 
+    const previousDueRows = useMemo(() => {
+        if (!selectedCustomer) return [] as DueCurrencyRow[];
+        const rows = (selectedCustomer.due_by_currency || []).filter(
+            (row) => Math.abs(Number(row.balance_currency ?? 0)) > 0.009,
+        );
+        if (rows.length > 0) return rows;
+        if (previousDueAfn > 0.009) {
+            return [{ currency_code: 'AFN', balance_currency: previousDueAfn, balance_afn: previousDueAfn }];
+        }
+        return [];
+    }, [selectedCustomer, previousDueAfn]);
+
     const creditLimitAfn = useMemo(() => {
         if (!selectedCustomer) return 0;
         return Number(selectedCustomer.credit_limit_afn ?? 0);
@@ -484,7 +503,10 @@ export default function SalesCreate({
             const unitCost = parseFloat(variant?.purchase_price_afn || '0') || 0;
             estimatedCostAfn = round2(estimatedCostAfn + unitCost * qty);
         });
+        const estimatedGrossBeforeDiscountAfn = round2(subtotalAfn - estimatedCostAfn);
         const estimatedGrossProfitAfn = round2(totalAfn - estimatedCostAfn);
+        const maxDiscountAfn = Math.max(0, estimatedGrossBeforeDiscountAfn);
+        const discountExceedsProfit = discount > maxDiscountAfn + 0.01;
 
         return {
             subtotalAfn,
@@ -502,7 +524,10 @@ export default function SalesCreate({
             newCustomerDueAfterSale,
             exceedsCreditLimit,
             estimatedCostAfn,
+            estimatedGrossBeforeDiscountAfn,
             estimatedGrossProfitAfn,
+            maxDiscountAfn,
+            discountExceedsProfit,
         };
     }, [items, form, paidAmount, previousDueAfn, creditLimitAfn, saleCurrency, usdRate, aedRate, variants]);
 
@@ -980,6 +1005,37 @@ export default function SalesCreate({
             return;
         }
 
+        if (totals.discountExceedsProfit) {
+            setErrors({
+                discount_amount: `Discount cannot exceed estimated profit (${formatPrice(totals.maxDiscountAfn)} AFN).`,
+            });
+            toast({
+                title: 'Discount too high',
+                description: `Maximum discount is about ${formatPrice(totals.maxDiscountAfn)} AFN (estimated profit). The sale was not submitted.`,
+                variant: 'destructive',
+            });
+            setLoading(false);
+            return;
+        }
+
+        const badLineDiscount = items.find((item) => {
+            if (!item.variant_id) return false;
+            const qty = parseFloat(item.quantity) || 0;
+            const price = parseFloat(item.sale_unit_amount) || 0;
+            const disc = parseFloat(item.discount_amount) || 0;
+            return disc > round2(qty * price) + 0.01;
+        });
+        if (badLineDiscount) {
+            setErrors({ items: 'A line discount cannot be greater than that line total.' });
+            toast({
+                title: 'Line discount',
+                description: 'Reduce the line discount. The sale was not submitted.',
+                variant: 'destructive',
+            });
+            setLoading(false);
+            return;
+        }
+
         if (items.every((it) => !it.variant_id)) {
             setErrors({ items: 'At least one product must be added.' });
             toast({
@@ -1305,7 +1361,13 @@ export default function SalesCreate({
                                 </div>
                                 <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
                                     <span className="text-amber-800">Current due:</span>
-                                    <span className="text-right font-mono font-bold text-amber-900">{formatPrice(previousDueAfn)} AFN</span>
+                                    <div className="space-y-0.5 text-right font-mono font-bold text-amber-900">
+                                        {previousDueRows.map((row) => (
+                                            <div key={row.currency_code}>
+                                                {formatPrice(Number(row.balance_currency))} {row.currency_code}
+                                            </div>
+                                        ))}
+                                    </div>
                                     {creditLimitAfn > 0 && (
                                         <>
                                             <span className="text-amber-800">Credit limit:</span>
@@ -1439,18 +1501,26 @@ export default function SalesCreate({
                             const lineTotal = round2(qty * price - discount);
                             const lineEq = threeCurrencyEquivalents(lineTotal, saleCurrency?.code || 'AFN', usdRate, aedRate);
                             const unitEq = threeCurrencyEquivalents(price, saleCurrency?.code || 'AFN', usdRate, aedRate);
+                            const priceAfn = unitEq.afn;
 
                             const variantInfo = item.variant_id ? variants.find((v) => String(v.id) === item.variant_id) : null;
                             const catalog = variantInfo ? catalogOriginal(variantInfo) : null;
                             const catalogEq = variantInfo ? liveCatalogEquivalents(variantInfo, usdRate, aedRate) : null;
+                            const unitCost = parseFloat(variantInfo?.purchase_price_afn || '0') || 0;
+                            const underCost = !!item.variant_id && priceAfn > 0 && unitCost > 0 && priceAfn + 0.01 < unitCost;
+                            const lineDiscountTooHigh = discount > round2(qty * price) + 0.01;
+                            const lineHasError = underCost || lineDiscountTooHigh || lineTotal < 0;
 
                             return (
-                                <div key={item._key} className="bg-muted/10 rounded-lg border p-3">
+                                <div
+                                    key={item._key}
+                                    className={`rounded-lg border p-3 ${lineHasError ? 'border-red-400 bg-red-50/50 ring-1 ring-red-200' : 'bg-muted/10'}`}
+                                >
                                     <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
                                         <div className="space-y-1.5 md:col-span-4">
                                             <Label className="text-xs">Product Variant</Label>
                                             <Select value={item.variant_id} onValueChange={(v) => updateItem(index, 'variant_id', v)}>
-                                                <SelectTrigger className={errors[`items.${index}.variant_id`] ? 'border-destructive' : ''}>
+                                                <SelectTrigger className={errors[`items.${index}.variant_id`] || lineHasError ? 'border-destructive' : ''}>
                                                     <SelectValue placeholder="Select variant">
                                                         {item.variant_id &&
                                                             (() => {
@@ -1518,12 +1588,17 @@ export default function SalesCreate({
                                                 min="0"
                                                 value={item.sale_unit_amount}
                                                 onChange={(e) => updateItem(index, 'sale_unit_amount', e.target.value)}
-                                                className="font-mono"
+                                                className={`font-mono ${underCost ? 'border-destructive bg-red-50' : ''}`}
                                             />
                                             {price > 0 && (
                                                 <p className="text-muted-foreground font-mono text-[10px] leading-tight">
                                                     ≈ {formatPrice(unitEq.afn)} AFN · ≈ ${formatPrice(unitEq.usd)} USD · ≈{' '}
                                                     {formatPrice(unitEq.aed)} AED
+                                                </p>
+                                            )}
+                                            {underCost && (
+                                                <p className="text-destructive text-[11px] font-medium">
+                                                    Price below cost ({formatPrice(unitCost)} AFN).
                                                 </p>
                                             )}
                                         </div>
@@ -1536,12 +1611,17 @@ export default function SalesCreate({
                                                 min="0"
                                                 value={item.discount_amount}
                                                 onChange={(e) => updateItem(index, 'discount_amount', e.target.value)}
-                                                className="font-mono"
+                                                className={`font-mono ${lineDiscountTooHigh ? 'border-destructive bg-red-50' : ''}`}
                                             />
+                                            {lineDiscountTooHigh && (
+                                                <p className="text-destructive text-[11px] font-medium">
+                                                    Discount is higher than line total.
+                                                </p>
+                                            )}
                                         </div>
 
                                         <div className="flex items-end justify-end gap-1 md:col-span-2">
-                                            <div className="flex-1 rounded border bg-gray-50 px-2 py-1.5 text-center font-mono text-xs font-semibold">
+                                            <div className={`flex-1 rounded border px-2 py-1.5 text-center font-mono text-xs font-semibold ${lineHasError ? 'border-red-300 bg-red-50 text-red-800' : 'bg-gray-50'}`}>
                                                 {formatPrice(lineTotal)} {saleCurrency?.code || 'AFN'}
                                                 <div className="text-muted-foreground text-[10px] font-normal leading-tight">
                                                     ≈ {formatPrice(lineEq.afn)} AFN
@@ -1719,12 +1799,18 @@ export default function SalesCreate({
                                     {previousDueAfn > 0 && (
                                         <>
                                             <span className="text-gray-600">Previous Due:</span>
-                                            <span className="text-right font-mono font-semibold text-amber-700">
-                                                {formatPrice(previousDueAfn)} AFN
-                                            </span>
+                                            <div className="space-y-0.5 text-right font-mono font-semibold text-amber-700">
+                                                {previousDueRows.map((row) => (
+                                                    <div key={row.currency_code}>
+                                                        {formatPrice(Number(row.balance_currency))} {row.currency_code}
+                                                    </div>
+                                                ))}
+                                            </div>
 
                                             <span className="text-gray-600">New Sale:</span>
-                                            <span className="text-right font-mono font-semibold">{formatPrice(totals.totalAfn)} AFN</span>
+                                            <span className="text-right font-mono font-semibold">
+                                                {formatPrice(totals.totalOriginal)} {totals.saleCurrencyCode}
+                                            </span>
 
                                             <span className="col-span-2 my-1 border-t border-emerald-300" />
                                         </>
@@ -1782,7 +1868,7 @@ export default function SalesCreate({
                                 </div>
                             </div>
 
-                            <div className="space-y-2">
+                            <div className={`space-y-2 rounded-lg border p-3 ${totals.discountExceedsProfit ? 'border-red-400 bg-red-50 ring-1 ring-red-300' : 'border-transparent'}`}>
                                 <Label>Header Discount ({totals.saleCurrencyCode})</Label>
                                 <Input
                                     type="number"
@@ -1790,8 +1876,19 @@ export default function SalesCreate({
                                     min="0"
                                     value={form.discount_amount}
                                     onChange={(e) => setForm({ ...form, discount_amount: e.target.value })}
-                                    className="font-mono"
+                                    className={`font-mono ${totals.discountExceedsProfit ? 'border-destructive bg-red-50' : ''}`}
                                 />
+                                <p className="text-muted-foreground text-[11px]">
+                                    Max discount ≈ {formatPrice(totals.maxDiscountAfn)} AFN (estimated profit before discount).
+                                </p>
+                                {totals.discountExceedsProfit && (
+                                    <p className="text-destructive text-xs font-medium">
+                                        Discount is higher than estimated profit. Reduce discount before saving — sale will not be registered.
+                                    </p>
+                                )}
+                                {errors.discount_amount && (
+                                    <p className="text-destructive text-xs font-medium">{errors.discount_amount}</p>
+                                )}
                             </div>
 
                             <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-4">
@@ -1801,14 +1898,17 @@ export default function SalesCreate({
                                 <div className="grid grid-cols-2 gap-y-2 text-sm">
                                     <span className="text-amber-900/70">Est. FIFO cost:</span>
                                     <span className="text-right font-mono">{formatPrice(totals.estimatedCostAfn)} AFN</span>
-                                    <span className="text-amber-900/70">Est. gross profit:</span>
+                                    <span className="text-amber-900/70">Est. profit before discount:</span>
+                                    <span className="text-right font-mono font-semibold text-amber-900">
+                                        {formatPrice(totals.estimatedGrossBeforeDiscountAfn)} AFN
+                                    </span>
+                                    <span className="text-amber-900/70">Est. profit after discount:</span>
                                     <span className="text-right font-mono font-semibold text-amber-900">
                                         {formatPrice(totals.estimatedGrossProfitAfn)} AFN
                                     </span>
                                 </div>
                                 <p className="text-muted-foreground mt-2 text-[11px]">
-                                    Investor and company profit are finalized per batch on submit. Fixed investor profit per unit is never a
-                                    percentage.
+                                    Discount cannot exceed profit. Investor and company profit are finalized per batch on submit.
                                 </p>
                             </div>
 
@@ -1903,7 +2003,12 @@ export default function SalesCreate({
                 )}
 
                 <div className="flex flex-wrap gap-2">
-                    <Button type="submit" disabled={loading || !!createdSale} className="gap-2" size="lg">
+                    <Button
+                        type="submit"
+                        disabled={loading || !!createdSale || totals.discountExceedsProfit}
+                        className="gap-2"
+                        size="lg"
+                    >
                         <Save className="h-4 w-4" />
                         {loading ? 'Saving...' : 'Save Sale'}
                     </Button>

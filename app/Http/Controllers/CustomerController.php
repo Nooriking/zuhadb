@@ -4,7 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\StoreCustomerRequest;
 use App\Http\Requests\UpdateCustomerRequest;
+use App\Models\Currency;
 use App\Models\Customer;
+use App\Models\CustomerBalance;
 use App\Models\Receipt;
 use App\Models\Sale;
 use App\Models\SalePayment;
@@ -32,7 +34,10 @@ class CustomerController extends Controller
         $onlyDue = $request->boolean('only_due');
 
         $customers = Customer::query()
-            ->with('creator:id,name')
+            ->with([
+                'creator:id,name',
+                'balances' => fn ($q) => $q->orderBy('currency_code'),
+            ])
             ->withCount('sales')
             ->notTrashed()
             ->when($search, function ($query, $search) {
@@ -46,13 +51,36 @@ class CustomerController extends Controller
             ->when($onlyDue, fn ($q) => $q->where('current_due_afn', '>', 0))
             ->orderBy('name')
             ->paginate(15)
-            ->withQueryString();
+            ->withQueryString()
+            ->through(function (Customer $customer) {
+                $breakdown = $customer->dueBreakdown();
+                $customer->setAttribute('due_breakdown', $breakdown);
+                $customer->setAttribute('due_by_currency', $breakdown['by_currency']);
+
+                return $customer;
+            });
+
+        $dueTotals = CustomerBalance::query()
+            ->selectRaw('currency_code, SUM(balance_currency) as balance_currency, SUM(balance_afn) as balance_afn')
+            ->whereHas('customer', fn ($q) => $q->notTrashed())
+            ->groupBy('currency_code')
+            ->orderBy('currency_code')
+            ->get()
+            ->filter(fn ($row) => abs((float) $row->balance_currency) > 0.009 || abs((float) $row->balance_afn) > 0.009)
+            ->map(fn ($row) => [
+                'currency_code' => strtoupper((string) $row->currency_code),
+                'balance_currency' => round((float) $row->balance_currency, 2),
+                'balance_afn' => round((float) $row->balance_afn, 2),
+            ])
+            ->values()
+            ->all();
 
         $stats = [
             'total_customers'  => Customer::notTrashed()->count(),
             'active_customers' => Customer::notTrashed()->where('status', 'active')->count(),
             'total_due_afn'    => Customer::notTrashed()->sum('current_due_afn'),
             'debtors_count'    => Customer::notTrashed()->where('current_due_afn', '>', 0)->count(),
+            'due_by_currency'  => $dueTotals,
         ];
 
         return Inertia::render('customers/index', [
@@ -72,7 +100,9 @@ class CustomerController extends Controller
 
     public function create(): Response
     {
-        return Inertia::render('customers/create');
+        return Inertia::render('customers/create', [
+            'currencies' => Currency::formOptions(),
+        ]);
     }
 
     /* =========================================================
@@ -86,9 +116,42 @@ class CustomerController extends Controller
         $data = $request->validated();
         $data['created_by'] = Auth::id();
 
-        $data['current_due_afn'] = $data['current_due_afn'] ?? 0;
+        $openingDueCurrency = round((float) ($data['current_due_currency'] ?? $data['current_due_afn'] ?? 0), 2);
+        $openingCurrencyId = ! empty($data['due_currency_id']) ? (int) $data['due_currency_id'] : null;
+        unset($data['current_due_currency'], $data['due_currency_id'], $data['current_due_afn']);
 
-        $customer = Customer::create($data);
+        // Opening due is applied via customer_balances below — start denormalized at 0.
+        $data['current_due_afn'] = 0;
+        $data['credit_limit_afn'] = $data['credit_limit_afn'] ?? 0;
+
+        $customer = DB::transaction(function () use ($data, $openingDueCurrency, $openingCurrencyId) {
+            $customer = Customer::create($data);
+
+            if ($openingDueCurrency > 0.009) {
+                $currency = $openingCurrencyId
+                    ? Currency::query()->notTrashed()->find((int) $openingCurrencyId)
+                    : Currency::ledger();
+                $currency = $currency ?: Currency::ledger();
+                $code = strtoupper((string) ($currency?->code ?? 'AFN'));
+
+                $rate = 1.0;
+                $amountAfn = $openingDueCurrency;
+                if ($code !== 'AFN' && $currency) {
+                    $snap = app(\App\Services\ExchangeService::class)->snapshot($code, 'AFN');
+                    $rate = (float) ($snap['rate'] ?? 0);
+                    if ($rate <= 0) {
+                        throw ValidationException::withMessages([
+                            'due_currency_id' => "No exchange rate found for {$code} → AFN. Add it in Exchange Rates first.",
+                        ]);
+                    }
+                    $amountAfn = round($openingDueCurrency * $rate, 2);
+                }
+
+                $customer->adjustBalance($code, $openingDueCurrency, $amountAfn, $rate);
+            }
+
+            return $customer->fresh();
+        });
 
         ActivityLogger::log(
             action: 'create',
@@ -99,10 +162,18 @@ class CustomerController extends Controller
         );
 
         if ($request->expectsJson()) {
+            $breakdown = $customer->dueBreakdown();
+
             return response()->json([
-                'customer' => $customer->only([
-                    'id', 'name', 'phone', 'address', 'current_due_afn', 'credit_limit_afn',
-                ]),
+                'customer' => array_merge(
+                    $customer->only([
+                        'id', 'name', 'phone', 'address', 'current_due_afn', 'credit_limit_afn',
+                    ]),
+                    [
+                        'due_breakdown' => $breakdown,
+                        'due_by_currency' => $breakdown['by_currency'],
+                    ]
+                ),
             ]);
         }
 
@@ -123,10 +194,13 @@ class CustomerController extends Controller
 
         $customer->load([
             'creator:id,name,email',
+            'balances',
             'sales' => fn ($q) => $q->notTrashed()->limit(10)->latest(),
         ]);
 
-        // customer_transactions table was removed — rebuild a simple ledger from sales + payments.
+        $dueBreakdown = $customer->dueBreakdown();
+
+        // Rebuild a simple ledger from sales + payments (with original currency when known).
         $ledgerEvents = collect();
 
         Sale::query()
@@ -134,17 +208,26 @@ class CustomerController extends Controller
             ->notTrashed()
             ->orderBy('id')
             ->limit(200)
-            ->get(['id', 'invoice_number', 'total_afn', 'new_sale_amount_afn', 'created_at'])
+            ->get([
+                'id', 'invoice_number', 'total_afn', 'new_sale_amount_afn',
+                'sale_currency_code', 'sale_amount_currency', 'created_at',
+            ])
             ->each(function (Sale $sale) use ($ledgerEvents) {
-                $amount = round((float) ($sale->new_sale_amount_afn ?? $sale->total_afn), 2);
+                $amountAfn = round((float) ($sale->new_sale_amount_afn ?? $sale->total_afn), 2);
+                $code = strtoupper((string) ($sale->sale_currency_code ?: 'AFN'));
+                $amountCurrency = $sale->sale_amount_currency !== null
+                    ? round((float) $sale->sale_amount_currency, 2)
+                    : $amountAfn;
                 $ledgerEvents->push([
                     'sort_id' => (int) $sale->id,
                     'sort_at' => optional($sale->created_at)?->timestamp ?? 0,
                     'type' => 'sale',
-                    'amount_afn' => $amount,
+                    'amount_afn' => $amountAfn,
+                    'amount_currency' => $amountCurrency,
+                    'currency_code' => $code,
                     'notes' => $sale->invoice_number ? "Sale {$sale->invoice_number}" : 'Sale',
                     'created_at' => $sale->created_at,
-                    'signed' => $amount,
+                    'signed' => $amountAfn,
                 ]);
             });
 
@@ -152,18 +235,27 @@ class CustomerController extends Controller
             ->where('customer_id', $customer->id)
             ->orderBy('id')
             ->limit(200)
-            ->get(['id', 'amount_afn', 'notes', 'reference_number', 'paid_at', 'created_at'])
+            ->get([
+                'id', 'amount_afn', 'amount_currency', 'currency_code',
+                'notes', 'reference_number', 'paid_at', 'created_at',
+            ])
             ->each(function (SalePayment $payment) use ($ledgerEvents) {
-                $amount = round((float) $payment->amount_afn, 2);
+                $amountAfn = round((float) $payment->amount_afn, 2);
+                $code = strtoupper((string) ($payment->currency_code ?: 'AFN'));
+                $amountCurrency = $payment->amount_currency !== null
+                    ? round((float) $payment->amount_currency, 2)
+                    : $amountAfn;
                 $ledgerEvents->push([
                     'sort_id' => (int) $payment->id,
                     'sort_at' => optional($payment->paid_at ?? $payment->created_at)?->timestamp ?? 0,
                     'type' => 'payment',
-                    'amount_afn' => $amount,
+                    'amount_afn' => $amountAfn,
+                    'amount_currency' => $amountCurrency,
+                    'currency_code' => $code,
                     'notes' => $payment->notes
                         ?: ($payment->reference_number ? "Ref {$payment->reference_number}" : 'Payment'),
                     'created_at' => $payment->paid_at ?? $payment->created_at,
-                    'signed' => -1 * $amount,
+                    'signed' => -1 * $amountAfn,
                 ]);
             });
 
@@ -182,6 +274,8 @@ class CustomerController extends Controller
                     'id' => $index + 1,
                     'type' => $row['type'],
                     'amount_afn' => number_format((float) $row['amount_afn'], 2, '.', ''),
+                    'amount_currency' => number_format((float) $row['amount_currency'], 2, '.', ''),
+                    'currency_code' => $row['currency_code'],
                     'balance_after' => number_format($running, 2, '.', ''),
                     'notes' => $row['notes'],
                     'created_at' => $row['created_at'],
@@ -206,6 +300,8 @@ class CustomerController extends Controller
                 'receipt_number' => $receipt->receipt_number,
                 'receipt_type' => $receipt->receipt_type,
                 'amount_afn' => $receipt->amount_afn,
+                'amount_currency' => $receipt->amount_currency,
+                'currency_code' => $receipt->currency_code ?: 'AFN',
                 'remaining_due_afn' => $receipt->remaining_due_afn,
                 'previous_due_afn' => round((float) $receipt->amount_afn + (float) $receipt->remaining_due_afn, 2),
                 'invoice_number' => $receipt->sale?->invoice_number,
@@ -216,11 +312,14 @@ class CustomerController extends Controller
             'customer' => $customer,
             'transactions' => $transactions,
             'receipts' => $receipts,
+            'due_breakdown' => $dueBreakdown,
+            'currencies' => Currency::formOptions(),
             'stats'    => [
                 'total_sales'      => $customer->sales()->notTrashed()->count(),
                 'total_amount'     => $customer->sales()->notTrashed()->sum('total_afn') ?? 0,
                 'total_paid'       => $customer->payments()->sum('amount_afn') ?? 0,
-                'current_due_afn'  => $customer->current_due_afn,
+                'current_due_afn'  => $dueBreakdown['total_afn'],
+                'due_by_currency'  => $dueBreakdown['by_currency'],
                 'credit_limit_afn' => $customer->credit_limit_afn,
                 'available_credit' => $customer->availableCreditAfn(),
                 'last_sale_at'     => $customer->last_sale_at,
@@ -265,7 +364,18 @@ class CustomerController extends Controller
         );
 
         if ($request->expectsJson()) {
-            return response()->json(['customer' => $customer->only(['id', 'name', 'phone', 'address', 'notes', 'status'])]);
+            $customer->load('balances');
+            $breakdown = $customer->dueBreakdown();
+
+            return response()->json([
+                'customer' => array_merge(
+                    $customer->only(['id', 'name', 'phone', 'address', 'notes', 'status', 'current_due_afn', 'credit_limit_afn']),
+                    [
+                        'due_breakdown' => $breakdown,
+                        'due_by_currency' => $breakdown['by_currency'],
+                    ]
+                ),
+            ]);
         }
 
         return redirect()
@@ -359,38 +469,37 @@ class CustomerController extends Controller
     public function receivePayment(Request $request, Customer $customer): RedirectResponse
     {
         $validated = $request->validate([
-            'amount_afn'       => ['required', 'numeric', 'min:0.01'],
+            'amount_currency'  => ['required', 'numeric', 'min:0.01'],
+            'currency_id'      => ['nullable', 'integer', 'exists:currencies,id'],
+            // Legacy alias — treat as AFN amount when amount_currency missing (validated above).
+            'amount_afn'       => ['nullable', 'numeric', 'min:0.01'],
             'payment_method'   => ['required', 'in:cash,card,bank,mobile,credit,other'],
             'reference_number' => ['nullable', 'string', 'max:255'],
             'notes'            => ['nullable', 'string'],
         ]);
 
+        if (! isset($validated['amount_currency']) && isset($validated['amount_afn'])) {
+            $validated['amount_currency'] = $validated['amount_afn'];
+            $validated['currency_id'] = $validated['currency_id'] ?? Currency::ledger()?->id;
+        }
+
         $receipt = DB::transaction(function () use ($validated, $customer) {
             $customer = Customer::whereKey($customer->id)->lockForUpdate()->firstOrFail();
-            $amount = round((float) $validated['amount_afn'], 2);
-            $previous = round((float) $customer->current_due_afn, 2);
+            $breakdown = $customer->dueBreakdown();
+            $previousAfn = round((float) $breakdown['total_afn'], 2);
 
-            if ($amount > $previous + 0.01) {
+            if ($previousAfn <= 0.009) {
                 throw ValidationException::withMessages([
-                    'amount_afn' => 'The payment is larger than the customer current due.',
+                    'amount_currency' => 'This customer has no outstanding due.',
                 ]);
             }
 
-            $remaining = round(max(0, $previous - $amount), 2);
-            $openSales = $customer->sales()
-                ->notTrashed()
-                ->where('remaining_due_afn', '>', 0)
-                ->orderByDesc('id')
-                ->lockForUpdate()
-                ->get();
-            $sale = $openSales->first();
-
             $payment = SalePayment::createWithSnapshot([
-                'sale_id'           => $sale?->id,
+                'sale_id'           => null,
                 'customer_id'       => $customer->id,
-                'amount_currency'   => $amount,
-                'currency_id'       => null,
-                'remaining_due_afn' => $remaining,
+                'amount_currency'   => $validated['amount_currency'],
+                'currency_id'       => $validated['currency_id'] ?? null,
+                'remaining_due_afn' => 0,
                 'payment_method'    => $validated['payment_method'],
                 'reference_number'  => $validated['reference_number'] ?? null,
                 'notes'             => $validated['notes'] ?? null,
@@ -398,7 +507,26 @@ class CustomerController extends Controller
                 'received_by'       => Auth::id(),
             ]);
 
-            $left = $amount;
+            $amountAfn = round((float) $payment->amount_afn, 2);
+
+            if ($amountAfn > $previousAfn + 0.01) {
+                throw ValidationException::withMessages([
+                    'amount_currency' => 'The payment is larger than the customer current due.',
+                ]);
+            }
+
+            // Apply to oldest open sales first (AFN remaining on each sale).
+            $openSales = $customer->sales()
+                ->notTrashed()
+                ->where('remaining_due_afn', '>', 0)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+            $sale = $openSales->first();
+
+            $payment->update(['sale_id' => $sale?->id]);
+
+            $left = $amountAfn;
             foreach ($openSales as $openSale) {
                 if ($left <= 0.01) {
                     break;
@@ -417,14 +545,29 @@ class CustomerController extends Controller
 
             app(CustomerLedgerService::class)->recordPayment($payment);
             $customer->refresh();
-            $remaining = round((float) $customer->current_due_afn, 2);
+            $customer->load('balances');
+            $remainingBreakdown = $customer->dueBreakdown();
+            $remaining = round((float) $remainingBreakdown['total_afn'], 2);
+
+            $payment->update(['remaining_due_afn' => $remaining]);
+
+            if ($sale) {
+                $sale->update([
+                    'remaining_due_by_currency' => $remainingBreakdown['by_currency'],
+                ]);
+            }
 
             return Receipt::create([
                 'customer_id'       => $customer->id,
                 'sale_id'           => $sale?->id,
                 'sale_payment_id'   => $payment->id,
                 'receipt_number'    => Receipt::generateReceiptNumber(),
-                'amount_afn'        => $amount,
+                'currency_id'       => $payment->currency_id,
+                'currency_code'     => $payment->currency_code,
+                'amount_afn'        => $amountAfn,
+                'amount_currency'   => $payment->amount_currency ?? $amountAfn,
+                'exchange_rate_to_afn' => $payment->rate_to_ledger ?? 1,
+                'rate_effective_at' => $payment->rate_effective_at,
                 'remaining_due_afn' => $remaining,
                 'receipt_type'      => 'payment_receipt',
                 'notes'             => $validated['notes'] ?? null,

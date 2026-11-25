@@ -173,6 +173,56 @@ test('line and header discounts both reduce sale total', function () {
         ->and((float) $sale->sale_amount_currency)->toBe(6700.0);
 });
 
+test('discount above gross profit is rejected and sale is not saved', function () {
+    ['afn' => $afn] = saleFxEnsureCurrencies();
+
+    $branch = Branch::factory()->create();
+    $admin = User::factory()->create(['role' => User::ROLE_ADMIN, 'branch_id' => $branch->id]);
+    $customer = Customer::factory()->create();
+    $variant = ProductVariant::factory()->create();
+    saleFxSeedAfnCatalog($variant, $afn, 7000);
+
+    // Cost 5000 → gross profit before discount = 2000. Discount 2500 must fail.
+    app(PurchaseService::class)->receiveStock([
+        'variant_id' => $variant->id,
+        'quantity' => 5,
+        'purchase_currency_id' => $afn->id,
+        'purchase_unit_amount' => '5000',
+        'sale_price_afn' => 7000,
+        'funding_source' => 'office',
+        'usd_to_afn_rate' => '75',
+        'aed_to_afn_rate' => '20.56',
+        'purchase_date' => now()->toDateString(),
+    ], $admin, $branch->id);
+
+    $beforeCount = \App\Models\Sale::query()->count();
+
+    try {
+        app(SaleService::class)->createSale([
+            'branch_id' => $branch->id,
+            'customer_id' => $customer->id,
+            'sale_date' => now()->toDateString(),
+            'sale_currency_id' => $afn->id,
+            'payment_method' => 'cash',
+            'discount_amount' => '2500',
+            'items' => [[
+                'variant_id' => $variant->id,
+                'quantity' => 1,
+                'sale_unit_amount' => '7000',
+                'discount_amount' => 0,
+            ]],
+            'payments' => [],
+        ], $admin);
+        expect(false)->toBeTrue('Expected ValidationException for excessive discount');
+    } catch (\Illuminate\Validation\ValidationException $e) {
+        expect($e->errors())->toHaveKey('discount_amount')
+            ->and(implode(' ', $e->errors()['discount_amount']))
+            ->toContain('maximum allowed');
+    }
+
+    expect(\App\Models\Sale::query()->count())->toBe($beforeCount);
+});
+
 test('receipt includes customer previous due in grand total', function () {
     ['afn' => $afn] = saleFxEnsureCurrencies();
 

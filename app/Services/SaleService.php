@@ -56,7 +56,7 @@ class SaleService
             $data['payment_method'] = $data['payment_method'] ?? 'cash';
             $data['sale_date'] = $data['sale_date'] ?? now()->toDateString();
 
-            [$customer, $previousDueAfn, $data] = $this->resolveCustomerSnapshot($data);
+            [$customer, $previousDueAfn, $data, $previousDueByCurrency] = $this->resolveCustomerSnapshot($data);
 
             if (($data['payment_method'] ?? '') === 'credit' && ! $customer) {
                 throw ValidationException::withMessages([
@@ -175,6 +175,9 @@ class SaleService
                 2
             );
 
+            // Block discounts that wipe out gross profit (and reserved investor profit).
+            $this->assertDiscountWithinProfit($subtotalAfn, $totalCostAfn, $discountAfn, $lineData, $batchesById);
+
             $data['subtotal_afn'] = $subtotalAfn;
             $data['discount_afn'] = $discountAfn;
             $data['total_afn'] = $this->calculateTotal($subtotalAfn, $discountAfn);
@@ -192,6 +195,7 @@ class SaleService
             $grandTotalDueAfn = round($previousDueAfn + $newSaleAmountAfn, 2);
 
             $data['previous_due_afn'] = $previousDueAfn;
+            $data['previous_due_by_currency'] = $previousDueByCurrency;
             $data['new_sale_amount_afn'] = $newSaleAmountAfn;
             $data['grand_total_due_afn'] = $grandTotalDueAfn;
 
@@ -347,18 +351,37 @@ class SaleService
             if ($customer) {
                 $lockedCustomer = Customer::query()->whereKey($customer->id)->lockForUpdate()->first();
                 if ($lockedCustomer) {
-                    // Payment applies to previous due + this sale; customer due becomes remaining.
-                    $deltaAfn = round($newSaleAmountAfn - $paidAfn, 2);
-                    if (abs($deltaAfn) > 0.009) {
-                        $code = strtoupper((string) ($sale->sale_currency_code ?: 'AFN'));
-                        $rate = $sale->rateToAfn();
-                        $deltaCurrency = $sale->sale_amount_currency !== null && (float) $sale->total_afn > 0
-                            ? round(((float) $sale->sale_amount_currency) * ($deltaAfn / max((float) $sale->total_afn, 0.01)), 2)
-                            : ($rate > 0 ? round($deltaAfn / $rate, 2) : $deltaAfn);
-                        $lockedCustomer->adjustBalance($code, $deltaCurrency, $deltaAfn, $rate);
+                    // Previous due already lives in customer_balances.
+                    // 1) Add this sale in the document currency.
+                    // 2) Subtract each payment in the payment's own currency (from exchange_rates snapshot).
+                    $code = strtoupper((string) ($sale->sale_currency_code ?: 'AFN'));
+                    $rate = $sale->rateToAfn();
+                    $saleAmountCurrency = $sale->sale_amount_currency !== null
+                        ? round((float) $sale->sale_amount_currency, 2)
+                        : ($rate > 0 ? round($newSaleAmountAfn / $rate, 2) : $newSaleAmountAfn);
+
+                    if (abs($newSaleAmountAfn) > 0.009) {
+                        $lockedCustomer->adjustBalance($code, $saleAmountCurrency, $newSaleAmountAfn, $rate);
                     }
+
+                    foreach ($createdPayments as $createdPayment) {
+                        $payCode = strtoupper((string) ($createdPayment->currency_code ?: $code));
+                        $payCurrency = round((float) ($createdPayment->amount_currency ?? $createdPayment->amount_afn ?? 0), 2);
+                        $payAfn = round((float) ($createdPayment->amount_afn ?? 0), 2);
+                        $payRate = $createdPayment->rate_to_ledger !== null
+                            ? (float) $createdPayment->rate_to_ledger
+                            : $rate;
+                        if (abs($payAfn) > 0.009 || abs($payCurrency) > 0.009) {
+                            $lockedCustomer->adjustBalance($payCode, -1 * $payCurrency, -1 * $payAfn, $payRate);
+                        }
+                    }
+
                     $lockedCustomer->update([
                         'last_sale_at' => now(),
+                    ]);
+
+                    $sale->update([
+                        'remaining_due_by_currency' => $lockedCustomer->fresh()->dueByCurrencySnapshot(),
                     ]);
                 }
             }
@@ -442,12 +465,17 @@ class SaleService
             ]);
 
             if ($customer) {
-                $code = strtoupper((string) ($sale->sale_currency_code ?: $salePayment->currency_code ?: 'AFN'));
-                $rate = $sale->rateToAfn();
+                $code = strtoupper((string) ($salePayment->currency_code ?: $sale->sale_currency_code ?: 'AFN'));
+                $rate = $salePayment->rate_to_ledger !== null
+                    ? (float) $salePayment->rate_to_ledger
+                    : $sale->rateToAfn();
                 $amountCurrency = $salePayment->amount_currency !== null
                     ? round((float) $salePayment->amount_currency, 2)
                     : ($rate > 0 ? round($amountAfn / $rate, 2) : $amountAfn);
                 $customer->adjustBalance($code, -1 * $amountCurrency, -1 * $amountAfn, $rate);
+                $sale->update([
+                    'remaining_due_by_currency' => $customer->fresh()->dueByCurrencySnapshot(),
+                ]);
             }
 
             return Receipt::create([
@@ -488,6 +516,56 @@ class SaleService
     }
 
     /**
+     * Reject discounts that would push the sale below cost, or into investor-reserved profit.
+     *
+     * Max discount = (subtotal − FIFO cost) − reserved investor profit.
+     * Example: profit 2000 AFN → discount above 2000 is blocked and the sale is not saved.
+     *
+     * @param  array<int, array<string, mixed>>  $lineData
+     * @param  \Illuminate\Support\Collection<int, ProductBatch>|null  $batchesById
+     */
+    public function assertDiscountWithinProfit(
+        float $subtotalAfn,
+        float $totalCostAfn,
+        float $discountAfn,
+        array $lineData = [],
+        $batchesById = null,
+    ): void {
+        $discountAfn = round(max(0, $discountAfn), 2);
+        if ($discountAfn <= 0) {
+            return;
+        }
+
+        $grossBeforeDiscount = round($subtotalAfn - $totalCostAfn, 2);
+
+        $investorReserve = 0.0;
+        foreach ($lineData as $line) {
+            foreach ($line['cost_breakdown'] ?? [] as $part) {
+                $batch = $batchesById?->get($part['batch_id'] ?? null);
+                $investmentId = $batch?->investment_id ?? ($part['investment_id'] ?? null);
+                $ppu = (float) ($batch?->profit_per_unit_afn ?? $part['profit_per_unit_afn'] ?? 0);
+                if (! $investmentId || $ppu <= 0) {
+                    continue;
+                }
+                $investorReserve = round($investorReserve + ($ppu * (int) ($part['qty'] ?? 0)), 2);
+            }
+        }
+
+        $maxDiscount = max(0.0, round($grossBeforeDiscount - $investorReserve, 2));
+
+        if ($discountAfn > $maxDiscount + 0.01) {
+            $detail = $investorReserve > 0
+                ? 'gross profit before discount minus reserved investor profit'
+                : 'gross profit before discount';
+
+            throw ValidationException::withMessages([
+                'discount_amount' => "Discount ({$discountAfn} AFN) exceeds the maximum allowed ({$maxDiscount} AFN) based on {$detail}. The sale was not saved.",
+                'discount_afn' => "Maximum discount is {$maxDiscount} AFN.",
+            ]);
+        }
+    }
+
+    /**
      * @param  array<int, array<string, mixed>>  $items
      */
     public function assertStockAvailable(int $branchId, array $items): void
@@ -518,7 +596,7 @@ class SaleService
 
         if ($stockErrors !== []) {
             throw ValidationException::withMessages([
-                'stock' => 'Some products do not have enough stock.',
+                'stock' => 'Some products do not have enough stock. The sale was not saved.',
                 'stock_errors' => json_encode($stockErrors),
             ]);
         }
@@ -526,12 +604,13 @@ class SaleService
 
     /**
      * @param  array<string, mixed>  $data
-     * @return array{0: ?Customer, 1: float, 2: array<string, mixed>}
+     * @return array{0: ?Customer, 1: float, 2: array<string, mixed>, 3: list<array{currency_code: string, balance_currency: float, balance_afn: float, last_rate: float|null}>}
      */
     private function resolveCustomerSnapshot(array $data): array
     {
         $customer = null;
         $previousDueAfn = 0.0;
+        $previousDueByCurrency = [];
         $customerIdInput = $data['customer_id'] ?? null;
 
         if (! empty($customerIdInput) && is_numeric($customerIdInput)) {
@@ -542,7 +621,9 @@ class SaleService
                 $data['customer_name_snapshot'] = $customer->name;
                 $data['customer_phone_snapshot'] = $customer->phone;
                 // Snapshot outstanding balance onto the sale for receipt / grand total.
-                $previousDueAfn = round(max(0, (float) $customer->current_due_afn), 2);
+                $breakdown = $customer->dueBreakdown();
+                $previousDueAfn = round(max(0, (float) $breakdown['total_afn']), 2);
+                $previousDueByCurrency = $breakdown['by_currency'];
             } else {
                 $data['customer_id'] = null;
                 $data['customer_name_snapshot'] = null;
@@ -554,7 +635,7 @@ class SaleService
             $data['customer_phone_snapshot'] = null;
         }
 
-        return [$customer, $previousDueAfn, $data];
+        return [$customer, $previousDueAfn, $data, $previousDueByCurrency];
     }
 
     private function paymentStatus(float $paidAfn, float $grandTotalDueAfn): string
@@ -648,7 +729,33 @@ class SaleService
 
         $lineSubtotalAfn = round($priceAfn * $qty, 2);
         $lineTotalAfn = round($lineSubtotalAfn - $discAfn, 2);
-        $fifo = ProductBatch::calculateFifoCost($branchId, $variantId, $qty);
+
+        try {
+            $fifo = ProductBatch::calculateFifoCost($branchId, $variantId, $qty);
+        } catch (\Throwable $e) {
+            // Convert stock shortfall into a validation error so the sale transaction rolls back cleanly.
+            if (! str_contains($e->getMessage(), 'Insufficient stock')) {
+                throw $e;
+            }
+
+            $available = ProductBatch::getAvailableQuantity($branchId, $variantId);
+            $variant = $variants->get($variantId);
+            $variantName = $variant
+                ? trim(($variant->product?->name ?? '').' - '.($variant->name ?? ''))
+                : "Variant #{$variantId}";
+
+            throw ValidationException::withMessages([
+                'stock' => 'Some products do not have enough stock. The sale was not saved.',
+                'stock_errors' => json_encode([[
+                    'variant_id' => $variantId,
+                    'variant_name' => $variantName !== '' ? $variantName : "Variant #{$variantId}",
+                    'requested' => $qty,
+                    'available' => $available,
+                    'missing' => max(0, $qty - $available),
+                ]]),
+            ]);
+        }
+
         $lineCostAfn = round((float) $fifo['cost_afn'], 2);
         $breakdown = $fifo['breakdown'];
         $grossProfitAfn = round($lineTotalAfn - $lineCostAfn, 2);

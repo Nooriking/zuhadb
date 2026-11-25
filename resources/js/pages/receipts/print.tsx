@@ -1,6 +1,13 @@
+import { formatOriginalAmount } from '@/lib/original-currency';
 import { Head } from '@inertiajs/react';
 import { Printer, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
+
+type DueCurrencyRow = {
+    currency_code: string;
+    balance_currency: number | string;
+    balance_afn?: number | string;
+};
 
 interface SaleItem {
     id: number;
@@ -20,6 +27,8 @@ interface Receipt {
     currency_code?: string | null;
     exchange_rate_to_afn?: string | null;
     remaining_due_afn: string;
+    remaining_due_by_currency?: DueCurrencyRow[] | null;
+    previous_due_by_currency?: DueCurrencyRow[] | null;
     created_at: string;
     customer: { id: number; name: string; phone: string | null; current_due_afn: string } | null;
     sale: {
@@ -31,9 +40,16 @@ interface Receipt {
         previous_due_afn?: string;
         grand_total_due_afn?: string;
         remaining_due_afn?: string;
+        sale_currency_code?: string | null;
+        sale_amount_currency?: string | number | null;
         items?: SaleItem[];
     } | null;
-    sale_payment: { payment_method?: string; amount_afn: string } | null;
+    sale_payment: {
+        payment_method?: string;
+        amount_afn: string;
+        amount_currency?: string | null;
+        currency_code?: string | null;
+    } | null;
     creator: { id: number; name: string } | null;
 }
 
@@ -81,17 +97,39 @@ export default function ReceiptPrint({ receipt, company, printedAt }: Props) {
     const amount = parseFloat(receipt.amount_afn || '0');
     const currencyCode = (receipt.currency_code || 'AFN').toUpperCase();
     const amountCurrency = parseFloat(receipt.amount_currency || String(amount));
-    const showFx = currencyCode !== 'AFN';
-    const formatPaid = (afn: number) =>
-        showFx ? `${money(amountCurrency)} ${currencyCode} (${money(afn)} AFN)` : `${money(afn)} AFN`;
+    const formatPaid = () => formatOriginalAmount(amountCurrency, currencyCode);
     const remaining = parseFloat(receipt.remaining_due_afn || '0');
     const saleTotal = parseFloat(receipt.sale?.total_afn || '0');
+    const saleCurrency = (receipt.sale?.sale_currency_code || currencyCode || 'AFN').toUpperCase();
+    const saleAmount =
+        receipt.sale?.sale_amount_currency != null
+            ? Number(receipt.sale.sale_amount_currency)
+            : saleTotal || amount;
+    const previousDueRows = (receipt.previous_due_by_currency || []).filter(
+        (row) => Math.abs(Number(row.balance_currency ?? 0)) > 0.009,
+    );
+    const remainingDueRows = (receipt.remaining_due_by_currency || []).filter(
+        (row) => Math.abs(Number(row.balance_currency ?? 0)) > 0.009,
+    );
     const previousDue = isInvoice
         ? parseFloat(receipt.sale?.previous_due_afn || '0')
         : amount + remaining;
-    const grand = isInvoice ? previousDue + (saleTotal || amount) : previousDue;
     const paid = isInvoice ? parseFloat(receipt.sale?.paid_afn || String(amount)) : amount;
     const items = receipt.sale?.items ?? [];
+    const renderDueRows = (rows: DueCurrencyRow[], fallbackAfn: number) => {
+        if (rows.length > 0) {
+            return (
+                <div className="space-y-0.5 text-right">
+                    {rows.map((row) => (
+                        <div key={row.currency_code} className="ltr num">
+                            {formatOriginalAmount(row.balance_currency, row.currency_code)}
+                        </div>
+                    ))}
+                </div>
+            );
+        }
+        return <span className="ltr num">{formatOriginalAmount(fallbackAfn, 'AFN')}</span>;
+    };
 
     const showLogo = company.show_logo !== false && !!company.logo && !logoFailed;
     const thankYou = (company.thank_you_message || '').trim();
@@ -185,30 +223,48 @@ export default function ReceiptPrint({ receipt, company, printedAt }: Props) {
                         </table>
                     )}
                     <dl className="bill-totals">
-                        {isInvoice && previousDue > 0 && (
+                        {isInvoice && (previousDueRows.length > 0 || previousDue > 0) && (
                             <>
                                 <div>
                                     <dt>Previous due</dt>
-                                    <dd className="ltr num">{money(previousDue)} AFN</dd>
+                                    <dd>{renderDueRows(previousDueRows, previousDue)}</dd>
                                 </div>
                                 <div>
                                     <dt>This sale</dt>
-                                    <dd className="ltr num">{money(saleTotal || amount)} AFN</dd>
+                                    <dd className="ltr num">{formatOriginalAmount(saleAmount, saleCurrency)}</dd>
                                 </div>
                             </>
                         )}
                         {isInvoice && (
                             <div className="bill-grand">
                                 <dt>Grand Total</dt>
-                                <dd className="ltr num">
-                                    {money(parseFloat(receipt.sale?.grand_total_due_afn || '') || grand)}{' '}
-                                    AFN
+                                <dd>
+                                    {previousDueRows.length > 0 ? (
+                                        <div className="space-y-0.5 text-right">
+                                            {previousDueRows.map((row) => (
+                                                <div key={`g-${row.currency_code}`} className="ltr num">
+                                                    {formatOriginalAmount(row.balance_currency, row.currency_code)}
+                                                </div>
+                                            ))}
+                                            <div className="ltr num">
+                                                {formatOriginalAmount(saleAmount, saleCurrency)} (this sale)
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <span className="ltr num">
+                                            {formatOriginalAmount(
+                                                parseFloat(receipt.sale?.grand_total_due_afn || '') ||
+                                                    previousDue + (saleTotal || amount),
+                                                'AFN',
+                                            )}
+                                        </span>
+                                    )}
                                 </dd>
                             </div>
                         )}
                         <div className={isInvoice ? '' : 'bill-grand'}>
                             <dt>{isInvoice ? 'Paid' : 'Paid now'}</dt>
-                            <dd className="ltr num">{formatPaid(paid)}</dd>
+                            <dd className="ltr num">{isInvoice ? formatOriginalAmount(paid, 'AFN') : formatPaid()}</dd>
                         </div>
                         {!isInvoice && (
                             <div>
@@ -218,7 +274,7 @@ export default function ReceiptPrint({ receipt, company, printedAt }: Props) {
                         )}
                         <div className="bill-due">
                             <dt>Remaining</dt>
-                            <dd className="ltr num">{money(remaining)} AFN</dd>
+                            <dd>{renderDueRows(remainingDueRows, remaining)}</dd>
                         </div>
                     </dl>
                     <p className="bill-status">{remaining <= 0 ? 'PAID' : 'PARTIALLY PAID'}</p>

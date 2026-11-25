@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
 import AppLayout from '@/layouts/app-layout';
+import DueByCurrency, { type DueCurrencyRow } from '@/components/money/due-by-currency';
 import { softDeleteItem } from '@/lib/trash-actions';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
@@ -35,6 +36,7 @@ interface Customer {
     status: 'active' | 'inactive';
     current_due_afn: number | string;
     credit_limit_afn: number | string;
+    due_by_currency?: DueCurrencyRow[];
     last_sale_at: string | null;
     sales_count: number;
     creator: { id: number; name: string } | null;
@@ -46,6 +48,7 @@ interface Stats {
     active_customers: number;
     total_due_afn: number | string;
     debtors_count: number;
+    due_by_currency?: DueCurrencyRow[];
 }
 
 interface Props {
@@ -163,12 +166,17 @@ export default function CustomersIndex({ customers, filters, stats }: Props) {
                         </div>
                     </div>
                     <div className="rounded-lg border p-4">
-                        <div className="flex items-center justify-between">
-                            <div>
+                        <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
                                 <p className="text-muted-foreground text-sm">Total Due</p>
-                                <p className="mt-1 text-2xl font-bold">{fmtAfn(stats.total_due_afn)}</p>
+                                <DueByCurrency
+                                    rows={stats.due_by_currency}
+                                    totalAfn={stats.total_due_afn}
+                                    className="mt-1 space-y-0.5"
+                                    rowClassName="text-xl font-bold font-mono"
+                                />
                             </div>
-                            <Banknote className="text-muted-foreground h-8 w-8" />
+                            <Banknote className="text-muted-foreground h-8 w-8 shrink-0" />
                         </div>
                     </div>
                     <div className="rounded-lg border p-4">
@@ -282,7 +290,14 @@ export default function CustomersIndex({ customers, filters, stats }: Props) {
                                                 <Badge variant="secondary">{customer.sales_count}</Badge>
                                             </TableCell>
                                             <TableCell className="text-right">
-                                                <span className={`font-medium ${dueColor(due)}`}>{fmtAfn(due)}</span>
+                                                <div className={dueColor(due)}>
+                                                    <DueByCurrency
+                                                        rows={customer.due_by_currency}
+                                                        totalAfn={due}
+                                                        className="space-y-0.5 text-right"
+                                                        rowClassName="font-medium font-mono text-sm"
+                                                    />
+                                                </div>
                                                 {exceeded && (
                                                     <div className="text-destructive mt-0.5 flex items-center justify-end gap-1 text-xs">
                                                         <AlertTriangle className="h-3 w-3" />

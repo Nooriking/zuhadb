@@ -20,7 +20,7 @@ import {
     ledgerCurrencyId as resolveLedgerCurrencyId,
     type CatalogCurrency,
 } from '@/lib/currencies';
-import { calcProfits, estimateToAfn, formatEstimate as fmt } from '@/lib/product-estimate';
+import { calcProfits, estimateToAfn, formatEstimate as fmt, investorProfitExceedsGross } from '@/lib/product-estimate';
 import { getSwal } from '@/lib/swal';
 import { type BreadcrumbItem } from '@/types';
 import { Head, router } from '@inertiajs/react';
@@ -252,6 +252,37 @@ export default function ProductsCreate({
         () => variants.flatMap((v) => (v.barcodes ?? []).filter((b) => b.barcode.trim()).map((b) => b.barcode.trim())),
         [variants],
     );
+
+    const hasInvestorProfitError = useMemo(() => {
+        return purchases.some((p) => {
+            if (!isInvestorPurchase(p.investor_id)) return false;
+            const variant = variants[p.variant_index];
+            if (!variant) return false;
+            const costAfn = estimateToAfn(
+                toNum(variant.purchase_price_afn),
+                findCurrency(currencies, variant.purchase_currency_id || catalogDefaultId),
+                ledgerCur,
+                refUsdToAfn,
+                refUsdToAed,
+            );
+            const saleAfn = estimateToAfn(
+                toNum(variant.sale_price_afn),
+                findCurrency(currencies, variant.sale_currency_id || catalogDefaultId),
+                ledgerCur,
+                refUsdToAfn,
+                refUsdToAed,
+            );
+            const investorAfn = estimateToAfn(
+                toNum(p.profit_per_unit),
+                findCurrency(currencies, p.profit_currency_id || catalogDefaultId),
+                ledgerCur,
+                refUsdToAfn,
+                refUsdToAed,
+            );
+            if (costAfn === null || saleAfn === null || investorAfn === null) return false;
+            return investorProfitExceedsGross(investorAfn, saleAfn - costAfn);
+        });
+    }, [purchases, variants, currencies, catalogDefaultId, ledgerCur, refUsdToAfn, refUsdToAed]);
 
     useEffect(() => {
         if (initialErrors && Object.keys(initialErrors).length > 0) setErrors(initialErrors);
@@ -1017,21 +1048,51 @@ export default function ProductsCreate({
                                 </div>
 
                                 {/* OWNER & INVESTOR PROFIT */}
-                                <div className="bg-muted/30 rounded-lg border p-4">
-                                    <div className="mb-3 flex items-center gap-1 text-sm font-semibold">
-                                        <User className="h-4 w-4" /> Owner & Investor Profit
-                                    </div>
-                                    {purchases.filter((p) => p.variant_index === vIndex).map((p) => {
-                                        const pIndex = purchases.findIndex((row) => row._key === p._key);
-                                        const investorBuy = isInvestorPurchase(p.investor_id);
-                                        return (
-                                            <div key={p._key} className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                {purchases.filter((p) => p.variant_index === vIndex).map((p) => {
+                                    const pIndex = purchases.findIndex((row) => row._key === p._key);
+                                    const investorBuy = isInvestorPurchase(p.investor_id);
+                                    const purchaseCur = findCurrency(currencies, v.purchase_currency_id || catalogDefaultId);
+                                    const saleCur = findCurrency(currencies, v.sale_currency_id || catalogDefaultId);
+                                    const profitCur = findCurrency(currencies, p.profit_currency_id || catalogDefaultId);
+                                    const costLedger = estimateToAfn(toNum(v.purchase_price_afn), purchaseCur, ledgerCur, refUsdToAfn, refUsdToAed);
+                                    const saleLedger = estimateToAfn(toNum(v.sale_price_afn), saleCur, ledgerCur, refUsdToAfn, refUsdToAed);
+                                    const investorLedger = estimateToAfn(
+                                        investorBuy ? toNum(p.profit_per_unit) : 0,
+                                        profitCur,
+                                        ledgerCur,
+                                        refUsdToAfn,
+                                        refUsdToAed,
+                                    );
+                                    const grossLedger =
+                                        costLedger !== null && saleLedger !== null ? saleLedger - costLedger : null;
+                                    const exceedsGross = investorBuy && investorProfitExceedsGross(investorLedger, grossLedger);
+                                    const liveProfitError = exceedsGross
+                                        ? `Investor profit (${fmt(investorLedger ?? 0)} AFN) exceeds gross profit (${fmt(grossLedger ?? 0)} AFN). Reduce investor profit or raise the sale price.`
+                                        : undefined;
+                                    const profitFieldError =
+                                        liveProfitError ||
+                                        errors[`purchases.${pIndex}.profit_per_unit`] ||
+                                        errors[`purchases.${pIndex}.profit_currency_id`];
+
+                                    return (
+                                        <div
+                                            key={p._key}
+                                            className={`rounded-lg border p-4 ${
+                                                exceedsGross
+                                                    ? 'border-red-400 bg-red-50 ring-1 ring-red-300'
+                                                    : 'bg-muted/30'
+                                            }`}
+                                        >
+                                            <div className="mb-3 flex items-center gap-1 text-sm font-semibold">
+                                                <User className="h-4 w-4" /> Owner & Investor Profit
+                                            </div>
+                                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                                                 <div className="space-y-2">
                                                     <Label className="flex items-center gap-1">
                                                         <User className="h-3 w-3" /> Owner <span className="text-destructive">*</span>
                                                     </Label>
                                                     <Select value={p.investor_id || 'store'} onValueChange={(val) => updatePurchase(pIndex, 'investor_id', val)}>
-                                                        <SelectTrigger className={errors[`purchases.${pIndex}.investor_id`] ? 'border-destructive' : ''}>
+                                                        <SelectTrigger className={errors[`purchases.${pIndex}.investor_id`] || exceedsGross ? 'border-destructive' : ''}>
                                                             <SelectValue placeholder="Select owner" />
                                                         </SelectTrigger>
                                                         <SelectContent>
@@ -1054,13 +1115,22 @@ export default function ProductsCreate({
                                                         disabled={!investorBuy}
                                                         onAmountChange={(val) => { if (toNum(val) >= 0) updatePurchase(pIndex, 'profit_per_unit', val); }}
                                                         onCurrencyChange={(val) => updatePurchase(pIndex, 'profit_currency_id', val)}
-                                                        error={errors[`purchases.${pIndex}.profit_per_unit`] || errors[`purchases.${pIndex}.profit_currency_id`]}
+                                                        error={profitFieldError}
                                                     />
                                                 </div>
                                             </div>
-                                        );
-                                    })}
-                                </div>
+                                            {exceedsGross && (
+                                                <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-300 bg-red-100/80 p-3 text-xs text-red-800">
+                                                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                                    <span>
+                                                        Logical error: investor profit is higher than product profit
+                                                        ({fmt(grossLedger ?? 0)} AFN). Fix this before saving — the form will not accept it.
+                                                    </span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
                             </div>
                         ))}
                     </CardContent>
@@ -1098,9 +1168,16 @@ export default function ProductsCreate({
                             const investorLedger = estimateToAfn(isInvestor ? toNum(p.profit_per_unit) : 0, profitCur, ledgerCur, refUsdToAfn, refUsdToAed);
                             const unitPrice = costLedger ?? toNum(variant?.purchase_price_afn);
                             const profits = calcProfits(costLedger ?? 0, saleLedger ?? 0, investorLedger ?? 0, toNum(p.quantity));
+                            const canCompare = costLedger !== null && saleLedger !== null && investorLedger !== null;
+                            const exceedsGross =
+                                isInvestor && canCompare && investorProfitExceedsGross(profits.investorPerUnit, profits.totalPerUnit);
 
                             return (
-                                <div key={p._key} data-error={errors[`purchases.${pIndex}.quantity`] ? 'true' : undefined} className="rounded-lg border p-4">
+                                <div
+                                    key={p._key}
+                                    data-error={errors[`purchases.${pIndex}.quantity`] || exceedsGross ? 'true' : undefined}
+                                    className={`rounded-lg border p-4 ${exceedsGross ? 'border-red-400 bg-red-50/40 ring-1 ring-red-200' : ''}`}
+                                >
                                     <div className="mb-4 flex items-center justify-between">
                                         <h3 className="flex items-center gap-2 font-semibold"><Receipt className="h-4 w-4" /> Purchase #{pIndex + 1}</h3>
                                         {purchases.length > 1 && (
@@ -1146,7 +1223,7 @@ export default function ProductsCreate({
                                         </div>
                                     </div>
 
-                                    <div className="mb-4 rounded-lg border p-4">
+                                    <div className={`mb-4 rounded-lg border p-4 ${exceedsGross ? 'border-red-400 bg-red-50' : ''}`}>
                                         <h4 className="mb-3 flex items-center gap-1 text-sm font-semibold"><TrendingUp className="h-3 w-3" /> Totals & Profit Split (estimate)</h4>
                                         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                                             <div className="space-y-2">
@@ -1156,19 +1233,28 @@ export default function ProductsCreate({
                                                 </div>
                                             </div>
                                             <div className="space-y-2">
-                                                <Label className="text-xs text-blue-700">Investor profit (est.)</Label>
-                                                <div className="flex h-10 items-center rounded-md border border-dashed bg-blue-50 px-3 font-mono text-sm font-semibold text-blue-700">
+                                                <Label className={`text-xs ${exceedsGross ? 'text-red-700' : 'text-blue-700'}`}>Investor profit (est.)</Label>
+                                                <div className={`flex h-10 items-center rounded-md border border-dashed px-3 font-mono text-sm font-semibold ${exceedsGross ? 'border-red-300 bg-red-100 text-red-800' : 'bg-blue-50 text-blue-700'}`}>
                                                     {fmt(toNum(p.profit_per_unit))} {profitCur?.code || ''}
                                                     <span className="ml-2 text-xs font-normal">≈ {fmt(profits.investorLine)} AFN</span>
                                                 </div>
                                             </div>
                                             <div className="space-y-2">
-                                                <Label className="text-xs text-emerald-700">Store profit (AFN est.)</Label>
-                                                <div className="flex h-10 items-center rounded-md border border-dashed bg-emerald-50 px-3 font-mono text-sm font-semibold text-emerald-700">
+                                                <Label className={`text-xs ${profits.storePerUnit < 0 ? 'text-red-700' : 'text-emerald-700'}`}>Store profit (AFN est.)</Label>
+                                                <div className={`flex h-10 items-center rounded-md border border-dashed px-3 font-mono text-sm font-semibold ${profits.storePerUnit < 0 ? 'border-red-300 bg-red-100 text-red-800' : 'bg-emerald-50 text-emerald-700'}`}>
                                                     {fmt(profits.storeLine)} <span className="ml-1 text-xs">AFN</span>
                                                 </div>
                                             </div>
                                         </div>
+                                        {exceedsGross && (
+                                            <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-300 bg-red-100/80 p-3 text-xs text-red-800">
+                                                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                                <span>
+                                                    Investor profit ({fmt(profits.investorPerUnit)} AFN) exceeds gross profit ({fmt(profits.totalPerUnit)} AFN).
+                                                    Reduce investor profit or increase the sale price before saving.
+                                                </span>
+                                            </div>
+                                        )}
                                     </div>
 
                                     <div className="mb-4 rounded-lg border p-4">
@@ -1231,7 +1317,7 @@ export default function ProductsCreate({
                 </Card>
 
                 <div className="flex gap-2">
-                    <Button type="submit" disabled={loading} className="gap-2">
+                    <Button type="submit" disabled={loading || hasInvestorProfitError} className="gap-2">
                         <Save className="h-4 w-4" /> {loading ? 'Saving...' : 'Save Product'}
                     </Button>
                     <BackButton href="/products" label="Cancel" />

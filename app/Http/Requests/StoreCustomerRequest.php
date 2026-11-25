@@ -25,6 +25,10 @@ class StoreCustomerRequest extends FormRequest
             'address' => ['nullable', 'string'],
             'notes'   => ['nullable', 'string'],
             'status'  => ['required', 'in:active,inactive'],
+            'credit_limit_afn' => ['nullable', 'numeric', 'min:0'],
+            'current_due_afn' => ['nullable', 'numeric', 'min:0'],
+            'current_due_currency' => ['nullable', 'numeric', 'min:0'],
+            'due_currency_id' => ['nullable', 'integer', 'exists:currencies,id'],
         ];
     }
 
