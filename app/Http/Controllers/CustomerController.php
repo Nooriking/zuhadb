@@ -6,6 +6,7 @@ use App\Http\Requests\StoreCustomerRequest;
 use App\Http\Requests\UpdateCustomerRequest;
 use App\Models\Customer;
 use App\Models\Receipt;
+use App\Models\Sale;
 use App\Models\SalePayment;
 use App\Services\ActivityLogger;
 use App\Services\CustomerLedgerService;
@@ -125,17 +126,74 @@ class CustomerController extends Controller
             'sales' => fn ($q) => $q->notTrashed()->limit(10)->latest(),
         ]);
 
-        $transactions = $customer->transactions()
-            ->reorder()
+        // customer_transactions table was removed — rebuild a simple ledger from sales + payments.
+        $ledgerEvents = collect();
+
+        Sale::query()
+            ->where('customer_id', $customer->id)
+            ->notTrashed()
             ->orderBy('id')
             ->limit(200)
-            ->get(['id', 'type', 'amount_afn', 'balance_after', 'notes', 'created_at']);
+            ->get(['id', 'invoice_number', 'total_afn', 'new_sale_amount_afn', 'created_at'])
+            ->each(function (Sale $sale) use ($ledgerEvents) {
+                $amount = round((float) ($sale->new_sale_amount_afn ?? $sale->total_afn), 2);
+                $ledgerEvents->push([
+                    'sort_id' => (int) $sale->id,
+                    'sort_at' => optional($sale->created_at)?->timestamp ?? 0,
+                    'type' => 'sale',
+                    'amount_afn' => $amount,
+                    'notes' => $sale->invoice_number ? "Sale {$sale->invoice_number}" : 'Sale',
+                    'created_at' => $sale->created_at,
+                    'signed' => $amount,
+                ]);
+            });
 
-        $lastPaymentAt = $customer->transactions()
+        SalePayment::query()
+            ->where('customer_id', $customer->id)
+            ->orderBy('id')
+            ->limit(200)
+            ->get(['id', 'amount_afn', 'notes', 'reference_number', 'paid_at', 'created_at'])
+            ->each(function (SalePayment $payment) use ($ledgerEvents) {
+                $amount = round((float) $payment->amount_afn, 2);
+                $ledgerEvents->push([
+                    'sort_id' => (int) $payment->id,
+                    'sort_at' => optional($payment->paid_at ?? $payment->created_at)?->timestamp ?? 0,
+                    'type' => 'payment',
+                    'amount_afn' => $amount,
+                    'notes' => $payment->notes
+                        ?: ($payment->reference_number ? "Ref {$payment->reference_number}" : 'Payment'),
+                    'created_at' => $payment->paid_at ?? $payment->created_at,
+                    'signed' => -1 * $amount,
+                ]);
+            });
+
+        $running = 0.0;
+        $transactions = $ledgerEvents
+            ->sortBy([
+                ['sort_at', 'asc'],
+                ['sort_id', 'asc'],
+            ])
+            ->values()
+            ->take(200)
+            ->map(function (array $row, int $index) use (&$running) {
+                $running = round($running + (float) $row['signed'], 2);
+
+                return [
+                    'id' => $index + 1,
+                    'type' => $row['type'],
+                    'amount_afn' => number_format((float) $row['amount_afn'], 2, '.', ''),
+                    'balance_after' => number_format($running, 2, '.', ''),
+                    'notes' => $row['notes'],
+                    'created_at' => $row['created_at'],
+                ];
+            })
+            ->values();
+
+        $lastPayment = $customer->payments()
             ->reorder()
-            ->where('type', 'payment')
             ->latest('id')
-            ->value('created_at');
+            ->first(['paid_at', 'created_at']);
+        $lastPaymentAt = $lastPayment?->paid_at ?? $lastPayment?->created_at;
 
         $receipts = Receipt::query()
             ->where('customer_id', $customer->id)
